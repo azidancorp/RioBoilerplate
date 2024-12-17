@@ -1,0 +1,202 @@
+
+Layouting Quickstart
+One of the most common tasks when building an app is to arrange components on the screen. This is something you'll do in every app you build, so it's worth learning the basics. Here's a few simple rules to get you started.
+
+By default, components are allocated all available space. For example, if you were to add just a single Button to the page, it would take up the entire screen.
+
+If you want a component to be smaller than all available space, you can specify an alignment. The alignment tells Rio where to place the component within the available space. For example, if you want a Button to be on the left, pass an alignment of 0. An alignment of 0.5 would center the component, and 1 would place it on the right.
+
+The vertical alignment works the same way, with 0 aligning the component at the top, 0.5 in the center, and 1 at the bottom.
+
+To add empty space around a component, use one of the margin parameters:
+
+margin_left
+margin_top
+margin_right
+margin_bottom
+margin_x (shorthand for margin_left and margin_right)
+margin_y (shorthand for margin_top and margin_bottom)
+margin (shorthand for all four sides)
+To display multiple components at once use containers, such as rio.Row, rio.Column and rio.Grid.
+
+Many containers offer additional useful ways to add space. For example, rio.Row and rio.Column provide a spacing attribute that adds space between all contained components.
+
+Units in Rio are specified in "font heights". This means that a height of 1 is equal to the height of a single line of text. This makes it really easy for your app to scale to different screen sizes, because margins and sizes will make sense regardless of whether the user is on a tiny phone screen or a giant TV.
+
+Let's have a look at how this works in practice.
+<Interactive Playground here>
+
+
+Details
+Size
+Each Rio component has a natural size. This is the minimum size it takes to fit all of its content. For example, a rio.Text component will be as wide as the longest line of text it contains, and as tall as the number of lines.
+
+You may optionally also increase the size of a component by explicitly passing a min_width or min_height parameter, when an alignment is set. Note that regardless of these parameters, a component will never be smaller than its natural size.
+
+Finally, the actual size of a component will be determined by the container it is placed in. Containers will never assign less space to a component than it needs, but they may assign more. For example, if you only place a single component on the page, it will always take up the entire screen, even if it doesn't need that much space.
+
+Sometimes you want a component to be smaller than the available space. However, this poses a dilemma for Rio, because it doesn't know where to place the component in the free space. This is where alignment comes in.
+
+
+Alignment
+Components can be aligned by specifying an align_x or align_y parameter. These are floats between 0 and 1, where 0 means "left" or "top", 0.5 means "center", and 1 means "right" or "bottom". All values in between are also valid.
+
+Components with alignment differ in two ways from those without: First of all, they are only assigned as much space as they need (plus margin). Secondly, they are placed at the specified alignment within the parent component.
+
+
+
+Layouting Quickstart
+One of the most common tasks when building an app is to arrange components on the screen. This is something you'll do in every app you build, so it's worth learning the basics. Here's a few simple rules to get you started.
+
+By default, components are allocated all available space. For example, if you were to add just a single Button to the page, it would take up the entire screen.
+
+If you want a component to be smaller than all available space, you can specify an alignment. The alignment tells Rio where to place the component within the available space. For example, if you want a Button to be on the left, pass an alignment of 0. An alignment of 0.5 would center the component, and 1 would place it on the right.
+
+The vertical alignment works the same way, with 0 aligning the component at the top, 0.5 in the center, and 1 at the bottom.
+
+To add empty space around a component, use one of the margin parameters:
+
+margin_left
+margin_top
+margin_right
+margin_bottom
+margin_x (shorthand for margin_left and margin_right)
+margin_y (shorthand for margin_top and margin_bottom)
+margin (shorthand for all four sides)
+To display multiple components at once use containers, such as rio.Row, rio.Column and rio.Grid.
+
+Many containers offer additional useful ways to add space. For example, rio.Row and rio.Column provide a spacing attribute that adds space between all contained components.
+
+Units in Rio are specified in "font heights". This means that a height of 1 is equal to the height of a single line of text. This makes it really easy for your app to scale to different screen sizes, because margins and sizes will make sense regardless of whether the user is on a tiny phone screen or a giant TV.
+
+Let's have a look at how this works in practice.
+
+Playground
+Nothing beats hands-on experience. Play around with the controls below to see how different settings affect the layout of the component in real time.
+
+SampleComponent
+The component is using the full size of its parent because it doesn't have any alignment set.
+Margin
+Left
+0.0
+Top
+0.0
+Right
+0.0
+Bottom
+0.0
+Minimum Size
+Width
+0.0
+Height
+0.0
+Alignment
+Align X
+
+Align Y
+
+Python
+
+SampleComponent(
+    ...
+)
+The summary above should give you a good starting point for laying out your components. If you want to learn more about a specific container or layout attribute, read on. Here come the details!
+
+Details
+Size
+Each Rio component has a natural size. This is the minimum size it takes to fit all of its content. For example, a rio.Text component will be as wide as the longest line of text it contains, and as tall as the number of lines.
+
+You may optionally also increase the size of a component by explicitly passing a min_width or min_height parameter, when an alignment is set. Note that regardless of these parameters, a component will never be smaller than its natural size.
+
+Finally, the actual size of a component will be determined by the container it is placed in. Containers will never assign less space to a component than it needs, but they may assign more. For example, if you only place a single component on the page, it will always take up the entire screen, even if it doesn't need that much space.
+
+A
+By default, components take up all available space.
+Sometimes you want a component to be smaller than the available space. However, this poses a dilemma for Rio, because it doesn't know where to place the component in the free space. This is where alignment comes in.
+
+Alignment
+Components can be aligned by specifying an align_x or align_y parameter. These are floats between 0 and 1, where 0 means "left" or "top", 0.5 means "center", and 1 means "right" or "bottom". All values in between are also valid.
+
+Components with alignment differ in two ways from those without: First of all, they are only assigned as much space as they need (plus margin). Secondly, they are placed at the specified alignment within the parent component.
+
+align_x=0
+align_x=0.5
+align_x=1
+Aligned components only take up as much space as they need.
+Margin
+Another thing you'll often want to do is to add empty space around a component. This serves to create visual separation between components, and to make your app look less cluttered.
+
+In general, using space to separate components leads to cleaner looking apps than using separators such as lines. A clean layout is key to modern looking apps.
+
+You can add space around a component by using one of the margin parameters:
+
+margin_left
+margin_top
+margin_right
+margin_bottom
+margin_x (shorthand for margin_left and margin_right)
+margin_y (shorthand for margin_top and margin_bottom)
+margin (shorthand for all four sides)
+Like all sizes in Rio, margins are specified in font heights. This means that a margin of 1 is equal to the height of a single line of text.
+
+If you provide conflicting margin parameters (e.g. margin=1 and margin_left=2), the more specific parameter will take precedence. Specifically:
+
+margin_left > margin_x > margin
+margin_top > margin_y > margin
+margin_right > margin_x > margin
+margin_bottom > margin_y > margin
+
+
+Containers
+Single components don't make for very interesting apps. Whatever you're building, you'll want to display multiple components at once. This is where containers come in.
+
+Containers are components that can hold other components. They are responsible for laying out their children, and can sometimes also add additional space between them.
+
+A typical example of a container is rio.Row. It arranges its children horizontally, from left to right, splitting the available space between them.
+
+More containers are available of course. Common ones are
+
+rio.Row for horizontal layouts
+rio.Column for vertical layouts
+rio.Grid for grid layouts
+rio.Card holds a single component and wraps it in a rectangle
+rio.Stack for stacking components on top of each other
+As discussed above, containers pass on the entire space they've received to their children. This is usually what you want, but not always. Sometimes you might prefer to keep the additional space empty, or control which child receives the additional space. There's a couple ways to do this:
+
+To keep the additional space empty, simply give the container itself less space. For example, we can pass align_x=0 to a row to make it smaller and position it on the left. Here's the code:
+
+Python
+
+rio.Row(
+    ComponentA(),
+    ComponentB(),
+    ComponentC(),
+    align_x=0,
+)
+
+This works well if you want the additional space to be empty. But what if you want to pass on the additional space to a specific child? We can achieve this by assigning a grow_x of True to the target child. Here's how:
+
+Python
+
+rio.Row(
+    ComponentA(),
+    ComponentB(),
+    ComponentC(grow_x=True),
+)
+
+Finally, what if you want to want to leave the remaining space empty, but have some components at the start and some at the end? This is actually a combination of the previous two cases. We'll add an invisible component that takes up the remaining space. Since this is a common pattern, Rio provides a component called rio.Spacer for exactly this purpose. It is invisible and defaults to grow_x and grow_y of True. Let's see it in action:
+
+Python
+
+rio.Row(
+    ComponentA(),
+    ComponentB(),
+    rio.Spacer(),
+    ComponentC(),
+)
+
+
+Conclusion
+And so, a layouting maestro was born! You now know how layouting works in Rio and there's no better way to hone this skill than applying it. So go ahead and build something cool!
+
+If you still need help free to reach out on the Rio Discord server.

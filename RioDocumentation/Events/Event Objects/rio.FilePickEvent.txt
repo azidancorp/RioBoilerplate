@@ -1,0 +1,9 @@
+FilePickEvent
+Holds information regarding a file upload event.
+
+This is a simple dataclass that stores useful information for when the user picks a file using a FilePickerArea. You'll typically receive this as argument in on_pick_file events.
+
+Attributes
+file
+rio.FileInfo
+Handle to the uploaded file.

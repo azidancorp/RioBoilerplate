@@ -1,0 +1,130 @@
+Card
+A container that visually encompasses its content.
+
+Cards are used to group related components together, and to visually separate them from other components. This is very useful for structuring your app and helping users to understand relationships.
+
+Another common use for cards is as large buttons with custom content. They can be configured to elevate slightly when the mouse hovers over them, indicating to the user that they support interaction.
+
+Cards update the theme context for their children, meaning that if you e.g. assign the primary color to the card (color="primary"), all children will automatically switch to a text color that is legible on top of the primary color. This means you don't have to worry about colors of components, they should always be legible. For this to work correctly prefer to pass colors as strings instead of rio.Color objects. For example, prefer color="primary" over color=self.session.theme.primary_color. This informs Rio about the intent and makes the card automatically switch to the "primary" context.
+
+You can find more details on how theming works in Rio in the Theming Quickstart Guide.
+
+Constructor
+Card(
+    content: rio.Component, 
+    *, 
+    corner_radius: float | tuple[float, float, float, float] | None = None, 
+    on_press: rio.EventHandler[[]] = None, 
+    ripple: bool | None = None, 
+    elevate_on_hover: bool | None = None, 
+    colorize_on_hover: bool | None = None, 
+    color: rio.ColorSet = 'neutral', 
+    # Inherited from `rio.Component`
+    key: str | int | None = None, 
+    min_width: float = 0, 
+    min_height: float = 0, 
+    grow_x: bool = False, 
+    grow_y: bool = False, 
+    align_x: float | None = None, 
+    align_y: float | None = None, 
+    margin_left: float | None = None, 
+    margin_top: float | None = None, 
+    margin_right: float | None = None, 
+    margin_bottom: float | None = None, 
+    margin_x: float | None = None, 
+    margin_y: float | None = None, 
+    margin: float | None = None, 
+)
+content
+rio.Component
+The component to display inside the card.
+corner_radius
+float | tuple[float, float, float, float] | None
+The radius of the card's corners. If set to None, it is picked from the active theme.
+on_press
+rio.EventHandler[[]]
+An event handler that is called when the card is clicked. Note that attaching an even handler will also modify the appearance of the card, to signal the possible interaction to the user. See elevate_on_hover and colorize_on_hover for details.
+ripple
+bool | None
+Whether the card should display a ripple effect when clicked. If set to None the card will ripple if an on_press event handler is attached.
+elevate_on_hover
+bool | None
+Whether the card should elevate slightly when the mouse hovers over it. If set to None the card will elevate if an on_press event handler is attached.
+colorize_on_hover
+bool | None
+Whether the card should change its color when the mouse hovers over it. If set to None the card will change its color if an on_press event handler is attached.
+color
+rio.ColorSet
+The color scheme to use for the card. The card itself will use the specified color, while content will automatically use one that is legible on top of it.
+key
+str | int | None
+A unique identifier for this component. If two components with the same key are present during reconciliation they will be considered the same component and their state will be preserved. If no key is specified, reconciliation falls back to a less precise method, by comparing the location of the component in the component tree.
+min_width
+float
+The minimum amount of horizontal space this component should request during layouting. The component will never be smaller than this size.
+Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+min_height
+float
+The minimum amount of vertical space this component should request during layouting. The component will never be smaller than this size.
+Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+grow_x
+bool
+Whether this component should request all the superfluous horizontal space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_x, some containers (such as rio.Row) will give all remaining space to those components first.
+grow_y
+bool
+Whether this component should request all the superfluous vertical space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_y, some containers (such as rio.Column) will give all remaining space to those components first.
+align_x
+float | None
+How this component should be aligned horizontally, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means left-aligned, 0.5 means centered, and 1 means right-aligned.
+align_y
+float | None
+How this component should be aligned vertically, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means top-aligned, 0.5 means centered, and 1 means bottom-aligned.
+margin_left
+float | None
+The left margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_left and margin are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+margin_top
+float | None
+The top margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_top and margin are both specified, margin_top is used for the top side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+margin_right
+float | None
+The right margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_right and margin are both specified, margin_right is used for the right side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+margin_bottom
+float | None
+The bottom margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_bottom and margin are both specified, margin_bottom is used for the bottom side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+margin_x
+float | None
+The horizontal margin around this component. This is a shorthand for setting margin_left and margin_right to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_x and margin_left are both specified, margin_left is used for the left side, while the other side uses margin_x. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+margin_y
+float | None
+The vertical margin around this component. This is a shorthand for setting margin_top and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_y and margin_top are both specified, margin_top is used for the top side, while the other side uses margin_y. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+margin
+float | None
+The margin around this component. This is a shorthand for setting margin_left, margin_top, margin_right and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin and margin_left are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+Examples
+This minimal example will display a Card with the castle icon inside:
+
+Python
+rio.Card(content=rio.Icon("material/castle"))
+Cards are commonly used to display content. You can make your Card interactive by assigning a function to the on_press attribute.
+
+Python
+class MyComponent(rio.Component):
+    def build(self) -> rio.Component:
+        return rio.Card(
+            # Add some content to the card
+            content=rio.Row(
+                rio.Icon(icon="material/castle"),
+                rio.Text("Click me!"),
+                spacing=1,
+                align_x=0.5,
+            ),
+            # React to presses
+            on_press=lambda: print("Card clicked!"),
+            # Signal to the user that the card is interactive. This isn't
+            # actually necessary, as the default values is `True` if there
+            # is a on_press event handler.
+            elevate_on_hover=True,
+        )

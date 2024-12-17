@@ -1,0 +1,26 @@
+on_page_change
+Triggered whenever the session changes pages.
+
+Makes the decorated method an event handler for on_page_change events. The method will be called whenever the session navigates to a new page.
+
+If you want your code to run both when the component was first created and when the page changes, you can combine this decorator with __post_init__ or on_populate.
+
+This decorator can be used on both synchronous as well as asynchronous methods.
+
+Signature
+@rio.event.on_page_change
+Example
+Python
+
+class UrlDisplay(rio.Component):
+    current_url: rio.URL = rio.URL()
+
+    def __post_init__(self):
+        self.current_url = self.session.active_page_url
+
+    @rio.event.on_page_change
+    def on_page_change(self):
+        self.current_url = self.session.active_page_url
+
+    def build(self):
+        return rio.Text(f"You're currently on {self.current_url}")

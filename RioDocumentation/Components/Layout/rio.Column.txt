@@ -1,0 +1,145 @@
+Column
+A container that lays out its children vertically.
+
+Columns are one of the most common components in Rio. They take any number of children and lay them out vertically, with the first one at the top, the second one below that, and so on. All components in Columns occupy the full width of their parent.
+
+The Column's horizontal counterpart is the Row. A similar component, but stacking its children in the Z direction, is the Stack.
+
+Allocation of extra space
+When a Column has more vertical space available than it needs, it will evenly distribute the extra space among all child components whose grow_y attribute is True.
+
+If no child is set to grow vertically, the extra space is evenly distributed among all children. This is why components in a Column can sometimes become unexpectedly large. If you don't want that to happen, you can either tell rio which children should receive the extra space by setting their grow_y to True, or you can set the Columns align_y to something other than None, which will cause the Column to only take up as much space as necessary and position itself in the available space.
+
+For more details, see the layouting quickstart.
+
+Proportions
+Sometimes you want the heights of the children to be in some sort of relation. For example, you may want two children to have the same height. This can be achieved with the proportions parameter. Passing proportions=[1, 1] will make both children have the same height, proportions=[1, 2] would make the 2nd child twice the height of the 1st child, and so on.
+
+As a shortcut, you can also pass proportions="homogeneous" to make all children the same height.
+
+Constructor
+Column(
+    *children: rio.Component, 
+    spacing: float = 0.0, 
+    proportions: Literal['homogeneous'] | Sequence[float] | None = None, 
+    # Inherited from `rio.Component`
+    key: str | int | None = None, 
+    margin: float | None = None, 
+    margin_x: float | None = None, 
+    margin_y: float | None = None, 
+    margin_left: float | None = None, 
+    margin_top: float | None = None, 
+    margin_right: float | None = None, 
+    margin_bottom: float | None = None, 
+    min_width: float = 0, 
+    min_height: float = 0, 
+    grow_x: bool = False, 
+    grow_y: bool = False, 
+    align_x: float | None = None, 
+    align_y: float | None = None, 
+)
+
+children
+rio.Component
+The components to place in this Column.
+
+spacing
+float
+How much empty space to leave between two adjacent children. No spacing is added before the first child or after the last child.
+
+proportions
+Literal['homogeneous'] | Sequence[float] | None
+Controls the relative heights of the children. If "homogeneous", all children will have the same height. If a sequence of floats, each float specifies the relative height of the corresponding child. For example, [1, 2] would make the second child twice as high as the first child. If None, each child will be as high as it needs to be.
+
+key
+str | int | None
+A unique identifier for this component. If two components with the same key are present during reconciliation they will be considered the same component and their state will be preserved. If no key is specified, reconciliation falls back to a less precise method, by comparing the location of the component in the component tree.
+
+margin
+float | None
+The margin around this component. This is a shorthand for setting margin_left, margin_top, margin_right and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin and margin_left are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_x
+float | None
+The horizontal margin around this component. This is a shorthand for setting margin_left and margin_right to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_x and margin_left are both specified, margin_left is used for the left side, while the other side uses margin_x. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_y
+float | None
+The vertical margin around this component. This is a shorthand for setting margin_top and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_y and margin_top are both specified, margin_top is used for the top side, while the other side uses margin_y. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_left
+float | None
+The left margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_left and margin are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_top
+float | None
+The top margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_top and margin are both specified, margin_top is used for the top side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_right
+float | None
+The right margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_right and margin are both specified, margin_right is used for the right side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_bottom
+float | None
+The bottom margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_bottom and margin are both specified, margin_bottom is used for the bottom side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+min_width
+float
+The minimum amount of horizontal space this component should request during layouting. The component will never be smaller than this size.
+
+min_height
+float
+The minimum amount of vertical space this component should request during layouting. The component will never be smaller than this size.
+
+grow_x
+bool
+Whether this component should request all the superfluous horizontal space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_x, some containers (such as rio.Row) will give all remaining space to those components first.
+
+grow_y
+bool
+Whether this component should request all the superfluous vertical space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_y, some containers (such as rio.Column) will give all remaining space to those components first.
+
+align_x
+float | None
+How this component should be aligned horizontally, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means left-aligned, 0.5 means centered, and 1 means right-aligned.
+
+align_y
+float | None
+How this component should be aligned vertically, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means top-aligned, 0.5 means centered, and 1 means bottom-aligned.
+
+Functions
+Column.add
+Appends a child component.
+
+Appends a child component to the end of the column and returns the Column. This means you can chain multiple add calls:
+
+Python
+rio.Column().add(child1).add(child2)
+
+Signature
+def add(child: rio.Component) -> Self
+child
+rio.Component
+
+The child component to append.
+
+Examples
+This minimal example will display a Column with two text components:
+
+Python
+rio.Column(rio.Text("Hello"), rio.Text("World!"))
+
+Columnss are used to line up multiple components vertically. This example arranges a rio.Icon and two rio.Text components in a column and neatly wraps them in a Card.
+
+Python
+class MyComponent(rio.Component):
+    def build(self) -> rio.Component:
+        return rio.Card(
+            content=rio.Column(
+                rio.Text("Hello"),
+                rio.Icon("material/castle"),
+                rio.Text("World!"),
+                spacing=1,
+                margin=1,
+            ),
+        )

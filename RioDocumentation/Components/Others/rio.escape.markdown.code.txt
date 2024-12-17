@@ -1,0 +1,10 @@
+escape_markdown_code
+Escape text such that it appears as-is inside a markdown code block.
+
+Given any text, this function returns a string which, when rendered inside a markdown code block, will look identical to the original text.
+
+Signature
+def escape_markdown_code(text: str) -> str
+text
+str
+The text to escape.

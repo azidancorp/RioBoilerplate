@@ -1,0 +1,41 @@
+
+on_unmount
+Triggered when the component is removed from the component tree.
+
+This decorator makes the decorated method an event handler for on_unmount events. The method will be called whenever the component is removed from the component tree.
+
+This may be triggered multiple times if the component is removed and then re-added.
+
+This decorator can be used on both synchronous as well as asynchronous methods.
+
+Signature
+@rio.event.on_unmount
+Example
+Here's an example of a component being conditionally included in the component tree. The Switch controls whether the OnUnmountPrinter exists or not, so turning on the switch will mount the OnUnmountPrinter and print "Unmounted" to the console.
+
+Python
+
+class OnUnmountPrinter(rio.Component):
+    @rio.event.on_unmount
+    def on_unmount(self):
+        print("Unmounted")
+
+    def build(self):
+        return rio.Text("hello")
+
+
+class Toggler(rio.Component):
+    child: rio.Component
+    show_child: bool = False
+
+    def build(self) -> rio.Component:
+        return rio.Column(
+            # Depending on the Switch state, show either the
+            # child or a placeholder
+            self.child if self.show_child else rio.Text(""),
+            rio.Switch(is_on=self.bind().show_child),
+        )
+
+
+app = rio.App(build=lambda: Toggler(OnUnmountPrinter()))
+app.run_in_browser()

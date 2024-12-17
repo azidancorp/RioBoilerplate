@@ -1,0 +1,154 @@
+Theming Quickstart
+Welcome to the Rio theming quickstart guide! This guide will help you change the colors of your Rio app, and understand how Rio's theming system works. Let's jump right in!
+
+Changing Colors
+One of the most important things you can do when it comes to theming is changing the colors to fit your brand. You can do this by creating a new theme and overriding any colors you want to change.
+
+Rio themes store a large array of different colors, text styles and other theming related parameters. Setting them all by hand would be a challenge by itself, so let's use one of the helper functions to create a new theme. Here's how you'd go about changing the primary and secondary colors, for example:
+
+Python
+
+# First, create the theme and set any parameters you want to change.
+#
+# `rio.Theme.from_colors` is a helper function that creates a new theme based on
+# the values you provide. It derives tens more colors in the background so you
+# end up with a consistent color palette all throughout your app.
+theme = rio.Theme.from_colors(
+    primary_color=rio.Color.from_hex('fd7001'),
+    secondary_color=rio.Color.from_hex('ffd500'),
+)
+
+# Then find the part of your code that creates the `rio.App` and pass in your
+# fancy new theme
+app = rio.App(
+    ...
+    theme=theme,
+)
+The current theme is always available in your components via self.session.theme.
+
+The easiest way to design your theme is using the theme picker built right into Rio! When you're running your app in debug mode (which is the default) you'll see a sidebar on the right-hand side of the screen. Click the "Theme" tab to open the theme picker. It'll allow you to configure the most important colors and automatically generate Python code for you to copy and paste into your app.
+
+This will make all components adapt to your new colors. For example, buttons will be colored according to your new secondary color. A lot more knobs are available for you to turn. Here's all parameters you can pass to rio.Theme.from_colors:
+
+primary_color: The main color of your app. This color will be used to tint the background and by some large components to fill large spaces with color.
+
+secondary_color: A color that nicely complements the primary color. It is often used by small components such as buttons and switches.
+
+background_color: The app's background color. This should be a neutral color that doesn't distract from the content.
+
+neutral_color: Similar to the background color, it is also used for neutral areas. It should however be slightly different, allowing you to create a visual hierarchy. This is the default color of large elements such as cards.
+
+hud_color: Used for elements that pop over the content, such as tooltips.
+
+disabled_color: Used by insensitive components to indicate that they are not interactive. Typically a shade of grey.
+
+success_color: A color to give positive feedback the user. Typically a shade of green.
+
+warning_color: A color to indicate that something might be wrong, but isn't critical. Typically orange.
+
+danger_color: A color to indicate that something is wrong and needs immediate attention. Typically a shade of red.
+
+corner_radius_small: The corner radius of small components such as text inputs
+
+corner_radius_medium: The corner radius of medium-sized components, such as small cards.
+
+corner_radius_large: The corner radius of large components, such as large cards and dialogs.
+
+heading_fill: The fill to use for headings. This allows you to specify a more interesting color, or even a gradient. If set to "auto", Rio will automatically switch between the primary color and a plain text color based on legibility.
+
+This only affects headings in background and neutral contexts.
+
+text_color: The default text color to use for regular text. Please note that this only applies to text in a neutral or background context. Text that's e.g. placed on a rio.Card with color="primary" will use a different color to ensure legibility.
+
+font: The default font to use when no other is specified.
+
+monospace_font: The font to use for monospace text, such as code.
+
+light: Whether to create a light or dark theme. This affects the default values for some colors, such as the background.
+
+Light & Dark Themes
+You may have noticed the light parameter above. And indeed, setting that parameter to False will create a dark theme. However, as some people prefer light themes, while others prefer dark themes, you might want to use a different one, based on the user's preference. You can do this by passing two different themes to your app. Rio will automatically select the one that fits the user's browser settings.
+
+Python
+
+# We'll once again create themes as above, except this time two instead of just
+# one. Here too, Rio has a helper function to make this easier.
+#
+# This function will return both a light and a dark theme at once
+themes = rio.Theme.pair_from_colors(
+    primary_color=rio.Color.from_hex('fd7001'),
+    secondary_color=rio.Color.from_hex('ffd500'),
+)
+
+# We'll pass both themes to the app. Rio will automatically select the one that
+# fits the user's browser settings.
+app = rio.App(
+    ...
+    theme=themes,
+)
+When serving an app with two themes, it's easy to accidentally create situations where a component is beautifully styled in one theme, but hard to read in the other. If you are sure you want to ship both light and dark themes make sure you always test your app with both so nobody gets left in the dark!
+
+A great first step to avoid this problem is to always use colors from your current theme, rather than hardcoding them. For example, if you want to indicate an error to the user, use self.session.theme.danger_color rather hardcoding a shade of red, such as rio.Color.from_hex('ff0000').
+
+
+
+Understanding Theme Contexts
+One of the neat things about Rio's theming system is that it can automatically switch the colors of components based on the current background. For example, a Button might look fine with the default secondary color while on a neutral background, but would be almost invisible inside of a secondary colored rio.Card.
+
+Luckily, Rio switches colors automatically for us:
+
+This is a card with a "neutral" background
+
+This is a card with a "secondary" background
+
+The only difference between the two is the background color of the rio.Card. Rio has automatically changed the color of the text, icon, button, and even the little inline code block.
+
+The reason this works, is because Rio comes with a number of built-in theme contexts. Each context comes with its own background and foreground colors, amongst others. rio.Card automatically applies the correct context based on the color value we pass to it.
+
+Here's all available contexts at a glance:
+
+This is a card with a "background" background
+
+This is a card with a "neutral" background
+
+This is a card with a "hud" background
+
+This is a card with a "primary" background
+
+This is a card with a "secondary" background
+
+This is a card with a "success" background
+
+This is a card with a "warning" background
+
+This is a card with a "danger" background
+
+Every app starts out in the background context. That is, if you don't place any components that switch context, your components will be styled in the background context. This is why the background card above appears invisible. Since this site is already in a background context, a card with the same context can't be distinguished from the background.
+
+
+Switching Contexts
+Most of the time you don't have to worry about changing contexts yourself. Rio's built-in components already take care of that for you. As seen above, rio.Card switches to the context you specify. rio.Button also sets the context for its content. It automatically chooses a context that "one-ups" the current one.
+
+A note of caution: In order for Cards to understand the context they should switch to, it's important to provide the context as string, rather than just provide a rio.Color. For example, prefer color="primary" over color=self.session.theme.primary_color. This informs Rio about the intent and makes the card automatically switch to the "primary" context. Cards will do their best to keep the text legible either way, but only with color="primary" will you end up with the colors configured in your theme.
+
+This card was created with color="primary"
+
+This card was created with color=self.session.theme.primary_color. It's still readable, but the result doesn't look as intended by the theme.
+
+This happens because in the second case, the card cannot know that it should switch to the "primary" context. Instead, it creates a new context which is derived from the color you told it to. The result is readable, but just doesn't match the theme.
+
+Sometimes you may want to change context manually. Maybe you're making a custom component that should switch context, or maybe you just want part of your app to really stand out. You can do this using the rio.ThemeContextSwitcher component. Here's an example:
+
+Python
+
+rio.ThemeContextSwitcher(
+    content=rio.Markdown(
+        f'This text is in a `"secondary"` context',
+    ),
+    color="danger",
+)
+This will make the text display as though it was on a red "danger" background. Obviously this is going to look all sorts of funky since it's not actually on that background. Here's the result:
+
+This text is in a "secondary" context
+
+You made it! This guide has conveyed the basics of theming in Rio, and hopefully gave you a good starting point for your own projects. If you still have questions, or need help with something specific, feel free to reach out on the Rio Discord server.

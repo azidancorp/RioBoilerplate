@@ -1,0 +1,4 @@
+Rio - Events
+Welcome to the Events API Documentation.
+Here you can find detailed information about all the events that Rio offers.
+Rio&#39;s events system allows you to listen for and respond to events that occur in your app. This can be useful for creating interactive components, or for coordinating the behavior of multiple components.

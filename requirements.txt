@@ -1,0 +1,8 @@
+rio-ui
+qrcode[pil]
+pillow
+pyotp
+numpy
+pandas
+plotly
+matplotlib

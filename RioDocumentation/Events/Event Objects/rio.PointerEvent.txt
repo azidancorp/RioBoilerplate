@@ -1,0 +1,29 @@
+PointerEvent
+Holds information regarding a pointer event.
+
+This is a simple dataclass that stores useful information for when the user interacts with a component using a mouse, touch, or other pointer-style device. You'll receive this as argument in a variety of pointer events.
+
+Attributes
+pointer_type
+Literal['mouse', 'touch']
+What sort of pointer triggered the event. Can be either "mouse" or "touch".
+
+button
+Literal['left', 'middle', 'right'] | None
+The mouse button that was pressed, if any. For mouse events (pointer_type=="mouse"), this is either "left", "middle", or "right". For other events, this is None.
+
+window_x
+float
+The x coordinate of the pointer relative to the window. The origin is the top-left corner of the window, with larger x values meaning further to the right.
+
+window_y
+float
+The y coordinate of the pointer relative to the window. The origin is the top-left corner of the window, with larger y values meaning further down.
+
+component_x
+float
+The x coordinate of the pointer relative to the PointerEventListener component. The origin is the top-left corner of the component, with larger x values meaning further to the right.
+
+component_y
+float
+The y coordinate of the pointer relative to the PointerEventListener component. The origin is the top-left corner of the component, with larger y values meaning further down.

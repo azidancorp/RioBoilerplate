@@ -1,0 +1,30 @@
+Overlay
+Displays its content above all other components.
+
+The overlay component takes a single child component, and displays it above all other components on the page. The child will not scroll with the rest of the page and is exempt from layouting.
+
+Components inside of overlays are allocated the entire screen and are themselves responsible for positioning themselves as required. You can easily achieve this using the child's align_x and align_y properties.
+
+Constructor
+Overlay(
+    content: rio.Component, 
+    *, 
+    # Inherited from `rio.Component`
+    key: str | int | None = None, 
+)
+content
+rio.Component
+The component to display in the overlay. It will take up the entire size of the screen, so make sure to use properties such as align_x and align_y to position it as needed.
+
+key
+str | int | None
+A unique identifier for this component. If two components with the same key are present during reconciliation they will be considered the same component and their state will be preserved. If no key is specified, reconciliation falls back to a less precise method, by comparing the location of the component in the component tree.
+
+Examples
+The following code will display the text "Hello, world!" centered on the screen:
+
+Python
+
+rio.Overlay(
+    rio.Text("Hello, world!"),
+)

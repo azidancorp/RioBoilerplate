@@ -1,0 +1,38 @@
+
+PointerMoveEvent
+Holds information regarding a pointer move event.
+
+This is a simple dataclass that stores useful information for when the user moves the pointer. You'll typically receive this as argument in on_pointer_move events.
+
+Attributes
+pointer_type
+Literal['mouse', 'touch']
+What sort of pointer triggered the event. Can be either "mouse" or "touch".
+
+button
+Literal['left', 'middle', 'right'] | None
+The mouse button that was pressed, if any. For mouse events (pointer_type=="mouse"), this is either "left", "middle", or "right". For other events, this is None.
+
+window_x
+float
+The x coordinate of the pointer relative to the window. The origin is the top-left corner of the window, with larger x values meaning further to the right.
+
+window_y
+float
+The y coordinate of the pointer relative to the window. The origin is the top-left corner of the window, with larger y values meaning further down.
+
+component_x
+float
+The x coordinate of the pointer relative to the PointerEventListener component. The origin is the top-left corner of the component, with larger x values meaning further to the right.
+
+component_y
+float
+The y coordinate of the pointer relative to the PointerEventListener component. The origin is the top-left corner of the component, with larger y values meaning further down.
+
+relative_x
+float
+How far the pointer has moved horizontally since the last time the event was triggered.
+
+relative_y
+float
+How far the pointer has moved vertically since the last time the event was triggered.

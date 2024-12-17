@@ -1,0 +1,27 @@
+LinearGradientFill
+Fills a shape with a linear gradient.
+
+LinearGradientFill fills the shape with a linear gradient. The gradient can have any number of stops, each with a color and a position. The gradient will smoothly transition between the colors at the given positions. The positions are given as fractions, where 0 is the start of the gradient and 1 is the end.
+
+Constructor
+LinearGradientFill(
+    *stops: tuple[rio.Color, float], 
+    angle_degrees: float = 0.0, 
+)
+
+stops
+tuple[rio.Color, float]
+The different colors that comprise the gradient, along with where they are positioned. The stops are given as tuples. Each tuple contains a color and a position. The position is a fraction, where 0 is the start of the gradient and 1 is the end. The order of the stops has no effect. There must be at least one stop.
+
+angle_degrees
+float
+The angle of the gradient, in degrees. 0 degrees points straight to the right, and the angle increases counterclockwise. (This lines up with how angles are typically used mathematically.)
+
+Attributes
+stops
+tuple[tuple[rio.Color, float], ...]
+The different colors that comprise the gradient, along with where they are positioned. The stops are given as tuples. Each tuple contains a color and a position. The position is a fraction, where 0 is the start of the gradient and 1 is the end. The order of the stops has no effect. There must be at least one stop.
+
+angle_degrees
+float
+The angle of the gradient, in degrees. 0 degrees points straight to the right, and the angle increases counterclockwise. (This lines up with how angles are typically used mathematically.)

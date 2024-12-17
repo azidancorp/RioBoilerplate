@@ -1,0 +1,109 @@
+SimpleListItem
+A simple list item with a header and optional secondary text and children.
+
+SimpleListItems are a convenient way to create list items, which can take care of the most common tasks: Display a text, optional secondary text and even additional children (e.g. icons or buttons) to the left and right. Most children are optional so you can only add whichever parts you need.
+
+Constructor
+SimpleListItem(
+    text: str, 
+    *, 
+    secondary_text: str = '', 
+    left_child: rio.Component | None = None, 
+    right_child: rio.Component | None = None, 
+    on_press: rio.EventHandler[[]] = None, 
+    # Inherited from `rio.Component`
+    key: str | int | None = None, 
+    min_width: float = 0, 
+    min_height: float = 0, 
+    grow_x: bool = False, 
+    grow_y: bool = False, 
+)
+text
+str
+The text to display.
+
+secondary_text
+str
+Additional text to display below the primary text. This text may span multiple lines (use "\n" to add a line break).
+
+left_child
+rio.Component | None
+A component to display on the left side of the list item.
+
+right_child
+rio.Component | None
+A component to display on the right side of the list item.
+
+on_press
+rio.EventHandler[[]]
+Triggered when the list item is pressed.
+
+key
+str | int | None
+A unique identifier for this component. If two components with the same key are present during reconciliation they will be considered the same component and their state will be preserved. If no key is specified, reconciliation falls back to a less precise method, by comparing the location of the component in the component tree.
+
+min_width
+float
+The minimum amount of horizontal space this component should request during layouting. The component will never be smaller than this size.
+
+Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+
+Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+
+min_height
+float
+The minimum amount of vertical space this component should request during layouting. The component will never be smaller than this size.
+
+Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+
+Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+
+grow_x
+bool
+Whether this component should request all the superfluous horizontal space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_x, some containers (such as rio.Row) will give all remaining space to those components first.
+
+grow_y
+bool
+Whether this component should request all the superfluous vertical space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_y, some containers (such as rio.Column) will give all remaining space to those components first.
+
+Examples
+This minimal example will simply display a list item with the text "Click me!":
+
+Python
+
+rio.SimpleListItem("Click me!", key="item1")
+ListViews are commonly used to display lists of dynamic length. You can easily achieve this by first creating an empty ListView, then adding the children after the fact:
+
+Python
+
+import functools
+
+
+class MyComponent(rio.Component):
+    products: list[str] = ["Product 1", "Product 2", "Product 3"]
+
+    def on_press_simple_list_item(self, product: str) -> None:
+        print(f"Selected {product}")
+
+    def build(self) -> rio.Component:
+        # Start off empty
+        result = rio.ListView()
+
+        # Add all items
+        for product in self.products:
+            result.add(
+                rio.SimpleListItem(
+                    text=product,
+                    key=product,
+                    left_child=rio.Icon("material/castle"),
+                    # Note the use of `functools.partial` to pass the
+                    # product to the event handler.
+                    on_press=functools.partial(
+                        self.on_press_simple_list_item,
+                        product=product,
+                    ),
+                )
+            )
+
+        # Done!
+        return result

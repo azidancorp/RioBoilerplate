@@ -1,0 +1,157 @@
+Image
+Displays a raster image or SVG.
+
+Image does just what you'd expect: it displays a single image. The image can be loaded from a URL or a local file.
+
+The resolution of the image does not affect the size at which it is displayed. The Image component is flexible with its space requirements and adapts to any space allocated by its parent component.
+
+Note that unlike most components in Rio, the Image component does not have a natural size, since images can be easily be scaled to fit any space. Because of this, Image defaults to a width and height of 2. This avoids invisible images when you forget to set the size.
+
+The actual picture content can be scaled to fit the assigned shape in one of three ways:
+"fit": The image is scaled to fit entirely inside the shape, while maintaining its aspect ratio. This is the default.
+"stretch": The image is stretched to fill the shape, distorting it if necessary.
+"zoom": The image is scaled to fill the shape entirely, while maintaining its aspect ratio. This may cause the image to overflow the shape.
+
+The image data may be provided in several ways. If the image is already hosted somewhere, you can provide a rio.URL for easy access. To display a local file use a pathlib.Path object. Finally, if you already have the image data in memory you can either pass it as a bytes object or as a PIL.Image object.
+
+Constructor
+Image(
+    image: pathlib.Path | PIL.Image.Image | rio.URL | bytes, 
+    *, 
+    fill_mode: Literal['fit', 'stretch', 'zoom'] = 'fit', 
+    on_error: rio.EventHandler[[]] = None, 
+    corner_radius: float | tuple[float, float, float, float] = 0, 
+    accessibility_description: str = '', 
+    # Inherited from `rio.Component`
+    key: str | int | None = None, 
+    margin: float | None = None, 
+    margin_x: float | None = None, 
+    margin_y: float | None = None, 
+    margin_left: float | None = None, 
+    margin_top: float | None = None, 
+    margin_right: float | None = None, 
+    margin_bottom: float | None = None, 
+    min_width: float = 2, 
+    min_height: float = 2, 
+    grow_x: bool = False, 
+    grow_y: bool = False, 
+    align_x: float | None = None, 
+    align_y: float | None = None, 
+)
+
+image
+pathlib.Path | PIL.Image.Image | rio.URL | bytes
+The image to display.
+
+fill_mode
+Literal['fit', 'stretch', 'zoom']
+How the image should be scaled to fit the shape. If fit, the image is scaled to fit entirely inside the shape. If stretch, the image is stretched to fill the shape exactly, possibly distorting it in the process. If zoom, the image is scaled to fill the shape entirely, possibly overflowing.
+
+on_error
+rio.EventHandler[[]]
+A function, triggered if the image fails to load.
+
+corner_radius
+float | tuple[float, float, float, float]
+How round to make the corners of the image. If a single number is given, all four corners will be rounded equally. If a tuple of four numbers is given, they will be interpreted as the radii of the top-left, top-right, bottom-right, and bottom-left corners, in that order.
+
+accessibility_description
+str
+
+key
+str | int | None
+A unique identifier for this component. If two components with the same key are present during reconciliation they will be considered the same component and their state will be preserved. If no key is specified, reconciliation falls back to a less precise method, by comparing the location of the component in the component tree.
+
+margin
+float | None
+The margin around this component. This is a shorthand for setting margin_left, margin_top, margin_right and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin and margin_left are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_x
+float | None
+The horizontal margin around this component. This is a shorthand for setting margin_left and margin_right to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_x and margin_left are both specified, margin_left is used for the left side, while the other side uses margin_x. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_y
+float | None
+The vertical margin around this component. This is a shorthand for setting margin_top and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_y and margin_top are both specified, margin_top is used for the top side, while the other side uses margin_y. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_left
+float | None
+The left margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_left and margin are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_top
+float | None
+The top margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_top and margin are both specified, margin_top is used for the top side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_right
+float | None
+The right margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_right and margin are both specified, margin_right is used for the right side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_bottom
+float | None
+The bottom margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_bottom and margin are both specified, margin_bottom is used for the bottom side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+min_width
+float
+The minimum amount of horizontal space this component should request during layouting. The component will never be smaller than this size.
+
+Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+
+Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+
+min_height
+float
+The minimum amount of vertical space this component should request during layouting. The component will never be smaller than this size.
+
+Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+
+Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+
+grow_x
+bool
+Whether this component should request all the superfluous horizontal space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_x, some containers (such as rio.Row) will give all remaining space to those components first.
+
+grow_y
+bool
+Whether this component should request all the superfluous vertical space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_y, some containers (such as rio.Column) will give all remaining space to those components first.
+
+align_x
+float | None
+How this component should be aligned horizontally, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means left-aligned, 0.5 means centered, and 1 means right-aligned.
+
+align_y
+float | None
+How this component should be aligned vertically, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means top-aligned, 0.5 means centered, and 1 means bottom-aligned.
+
+Examples
+This minimal example will display an image hosted on the web:
+
+Python
+rio.Image(
+    rio.URL("https://example.com/image.png"),
+    min_width=20,
+    min_height=20,
+)
+
+You can also display images from a path. Note that Rio uses modern python pathlib.Path objects rather than plain strings. The image will be scaled to fit the shape, and the corners will be rounded with a radius of 2:
+
+Python
+from pathlib import Path
+
+rio.Image(
+    Path("example_image.png"),
+    fill_mode="fit",
+    min_width=20,
+    min_height=20,
+    corner_radius=2,
+)
+
+You can access the App's assets directory using the assets property. This will return a pathlib.Path object pointing to the assets directory. The image will be scaled to fit the shape, and the corners will be rounded with a radius of 2:
+
+Python
+rio.Image(
+    Path(self.session.assets / "example_image.png"),
+    fill_mode="fit",
+    min_width=20,
+    min_height=20,
+    corner_radius=2,
+)

@@ -1,0 +1,34 @@
+periodic
+Triggered at a fixed time interval.
+
+This decorator causes the decorated method to be called repeatedly at a fixed time interval. The event will be triggered for as long as the component exists, even if it is not mounted. The interval can be specified as either a number of seconds or as a timedelta.
+
+The interval only starts counting after the previous handler has finished executing, so the handler will never run twice simultaneously, even if it takes longer than the interval to execute.
+
+This decorator can be used on both synchronous as well as asynchronous methods.
+
+This function is experimental and may change in the future
+
+Experimental functions are included in Rio to gather feedback and real-world usage data. They may be removed or changed in the future. If you use this function you might have to update your code when you upgrade to a newer version of Rio.
+
+Signature
+@rio.event.periodic(interval: float | datetime.timedelta)
+interval
+float | datetime.timedelta
+
+The number of seconds, or timedelta, between each trigger.
+
+Example
+Here we use @rio.event.periodic to increment a counter every second:
+
+Python
+
+class Counter(rio.Component):
+    count: int = 0
+
+    @rio.event.periodic(1)
+    def increment_count(self):
+        self.count += 1
+
+    def build(self):
+        return rio.Text(f"{self.count} seconds have passed")

@@ -1,0 +1,59 @@
+FileInfo
+Contains information about a file.
+
+When asking the user to pick a file, this class is used to represent the chosen file. It contains metadata about the file, and can also be used to access the file's contents.
+
+Be careful when running your app as a website, since files will need to be uploaded by the user, which is a potentially very slow operation.
+
+Attributes
+name
+str
+The name of the file, including the extension.
+size_in_bytes
+int
+The size of the file, in bytes.
+media_type
+str
+The MIME type of the file, for example text/plain or image/png.
+
+Functions
+FileInfo.read_bytes
+Asynchronously reads the entire file as bytes.
+
+Reads and returns the entire file as a bytes object. If you know that the file is text, consider using read_text instead.
+
+Signature
+async def read_bytes() -> bytes
+FileInfo.read_text
+Asynchronously reads the entire file as text.
+
+Reads and returns the entire file as a str object. The file is decoded using the given encoding. If you don't know that the file is valid text, use read_bytes instead.
+
+Signature
+async def read_text(
+    *, 
+    encoding: str = 'utf-8', 
+) -> str
+encoding
+str
+The encoding to use when decoding the file.
+
+FileInfo.open
+Asynchronously opens the file, as though it were a regular file on this device.
+
+Opens and returns the file as a file-like object. If 'r' is specified, the file is opened as text. If 'rb' is specified, the file is opened as bytes.
+
+Returns a file-like object containing the file's contents.
+
+Signature
+async def open(
+    type: Literal['r', 'rb'] = 'r', 
+    *, 
+    encoding: str = 'utf-8', 
+) -> _io.StringIO | _io.BytesIO
+type
+Literal['r', 'rb']
+The mode to open the file in. 'r' for text, 'rb' for bytes.
+encoding
+str
+The encoding to use when decoding the file.

@@ -1,0 +1,211 @@
+Rectangle
+A customizable rectangle shape.
+
+Rectangles are versatile components that can be used as building blocks to create more complex elements. While not particularly interesting on their own, combining a rectangle with other components allows you to quickly create custom buttons, cards, or anything else you may need in your app.
+
+Rectangles also act as a simple source of animations. They have two styles: A default style for when the user isn't interacting with them, and a hover style for when the mouse hovers above them. This, along with their transition_time attribute allows you to make your app feel dynamic and alive.
+
+Because rectangles are meant as low-level building blocks, rather than full fledged components, they don't automatically switch the theme context for you. It's generally recommended to use rio.Card instead of rio.Rectangle unless you need the extra control that rio.Rectangle provides. You can find more details about theme contexts in the Theming Quickstart Guide.
+
+Constructor
+Rectangle(
+    *, 
+    content: rio.Component | None = None, 
+    transition_time: float = 1.0, 
+    cursor: rio.CursorStyle = <CursorStyle.DEFAULT: 1>, 
+    ripple: bool = False, 
+    fill: rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.FrostedGlassFill | rio.Color, 
+    stroke_width: float = 0.0, 
+    stroke_color: rio.Color = <Color 000000ff>, 
+    corner_radius: float | tuple[float, float, float, float] = 0.0, 
+    shadow_radius: float = 0.0, 
+    shadow_offset_x: float = 0.0, 
+    shadow_offset_y: float = 0.0, 
+    shadow_color: rio.Color | None = None, 
+    hover_fill: rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.FrostedGlassFill | rio.Color | None = None, 
+    hover_stroke_width: float | None = None, 
+    hover_stroke_color: rio.Color | None = None, 
+    hover_corner_radius: float | tuple[float, float, float, float] | None = None, 
+    hover_shadow_radius: float | None = None, 
+    hover_shadow_offset_x: float | None = None, 
+    hover_shadow_offset_y: float | None = None, 
+    hover_shadow_color: rio.Color | None = None, 
+    # Inherited from `rio.Component`
+    key: str | int | None = None, 
+    min_width: float = 0, 
+    min_height: float = 0, 
+    grow_x: bool = False, 
+    grow_y: bool = False, 
+    align_x: float | None = None, 
+    align_y: float | None = None, 
+    margin_left: float | None = None, 
+    margin_top: float | None = None, 
+    margin_right: float | None = None, 
+    margin_bottom: float | None = None, 
+    margin_x: float | None = None, 
+    margin_y: float | None = None, 
+    margin: float | None = None, 
+)
+
+content
+rio.Component | None
+The component to display inside the rectangle.
+
+transition_time
+float
+How many seconds it should take for the rectangle to transition between its regular and hover styles.
+
+cursor
+rio.CursorStyle
+The cursor to display when the mouse hovers above the rectangle.
+
+ripple
+bool
+Whether to display a Material Design ripple effect when the rectangle is hovered or clicked.
+
+fill
+rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.FrostedGlassFill | rio.Color
+The background color/image/gradient of the rectangle.
+
+stroke_width
+float
+The width of the rectangle's outline.
+
+stroke_color
+rio.Color
+The color of the rectangle's outline.
+
+corner_radius
+float | tuple[float, float, float, float]
+The rectangle's corner radius. Can be a single number or a sequence of 4 numbers.
+
+shadow_radius
+float
+The corner radius of the rectangle's shadow.
+
+shadow_offset_x
+float
+The horizontal offset of the rectangle's shadow. A negative value moves the shadow to the left side of the rectangle.
+
+shadow_offset_y
+float
+The vertical offset of the rectangle's shadow. A negative value moves the shadow above the rectangle.
+
+shadow_color
+rio.Color | None
+The color of the rectangle's shadow.
+
+hover_fill
+rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.FrostedGlassFill | rio.Color | None
+The rectangle's fill while the cursor is hovering over it.
+
+hover_stroke_width
+float | None
+The rectangle's stroke_width while the cursor is hovering over it.
+
+hover_stroke_color
+rio.Color | None
+The rectangle's stroke_color while the cursor is hovering over it.
+
+hover_corner_radius
+float | tuple[float, float, float, float] | None
+The rectangle's corner_radius while the cursor is hovering over it.
+
+hover_shadow_radius
+float | None
+The rectangle's shadow_radius while the cursor is hovering over it.
+
+hover_shadow_offset_x
+float | None
+The rectangle's shadow_offset_x while the cursor is hovering over it.
+
+hover_shadow_offset_y
+float | None
+The rectangle's shadow_offset_y while the cursor is hovering over it.
+
+hover_shadow_color
+rio.Color | None
+The rectangle's shadow_color while the cursor is hovering over it.
+
+key
+str | int | None
+A unique identifier for this component. If two components with the same key are present during reconciliation they will be considered the same component and their state will be preserved. If no key is specified, reconciliation falls back to a less precise method, by comparing the location of the component in the component tree.
+
+min_width
+float
+The minimum amount of horizontal space this component should request during layouting. The component will never be smaller than this size. Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment. Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+
+min_height
+float
+The minimum amount of vertical space this component should request during layouting. The component will never be smaller than this size. Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment. Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+
+grow_x
+bool
+Whether this component should request all the superfluous horizontal space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_x, some containers (such as rio.Row) will give all remaining space to those components first.
+
+grow_y
+bool
+Whether this component should request all the superfluous vertical space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_y, some containers (such as rio.Column) will give all remaining space to those components first.
+
+align_x
+float | None
+How this component should be aligned horizontally, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means left-aligned, 0.5 means centered, and 1 means right-aligned.
+
+align_y
+float | None
+How this component should be aligned vertically, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means top-aligned, 0.5 means centered, and 1 means bottom-aligned.
+
+margin_left
+float | None
+The left margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_left and margin are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_top
+float | None
+The top margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_top and margin are both specified, margin_top is used for the top side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_right
+float | None
+The right margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_right and margin are both specified, margin_right is used for the right side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_bottom
+float | None
+The bottom margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_bottom and margin are both specified, margin_bottom is used for the bottom side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_x
+float | None
+The horizontal margin around this component. This is a shorthand for setting margin_left and margin_right to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_x and margin_left are both specified, margin_left is used for the left side, while the other side uses margin_x. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_y
+float | None
+The vertical margin around this component. This is a shorthand for setting margin_top and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_y and margin_top are both specified, margin_top is used for the top side, while the other side uses margin_y. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin
+float | None
+The margin around this component. This is a shorthand for setting margin_left, margin_top, margin_right and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin and margin_left are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+Examples
+Here's a minimal example of a rectangle with a text and green background:
+
+Python
+
+rio.Rectangle(
+    content=rio.Text("Hello World!", justify="center"),
+    fill=rio.Color.GREEN,
+)
+
+You can also fill your Rectangle with an image instead of a color:
+
+Python
+
+from pathlib import Path
+
+PATH = Path(__file__).parent
+
+rio.Rectangle(
+    fill=rio.ImageFill(
+        PATH / "example_image.jpg",
+        fill_mode="zoom",
+    ),
+)
+
+Also, note that the content is optional. You don't have to add anything if you just want a simple rectangle.

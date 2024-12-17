@@ -1,0 +1,166 @@
+DateInput
+Allows the user to pick a date from a calendar.
+
+DateInputs are similar in appearance to TextInput and NumberInput, but allow the user to pick a date from a calendar or enter a date, rather than text or number. When pressed, a calendar will pop-up, allowing the user to select a date.
+
+This makes for a compact component, which still allows the user to visually select a date.
+
+For a larger component which permanently displays a calendar, consider using rio.Calendar.
+
+This component is experimental and may change in the future
+
+Experimental components are included in Rio to gather feedback and real-world usage data. They may be removed or changed in the future. If you use this component you might have to update your code when you upgrade to a newer version of Rio.
+
+Constructor
+DateInput(
+    value: datetime.date, 
+    *, 
+    label: str = '', 
+    accessibility_label: str = '', 
+    style: Literal['underlined', 'rounded', 'pill'] = 'underlined', 
+    on_change: rio.EventHandler[rio.DateChangeEvent] = None, 
+    on_confirm: rio.EventHandler[rio.DateConfirmEvent] = None, 
+    _is_open: bool = False, 
+    # Inherited from `rio.Component`
+    key: str | int | None = None, 
+    min_width: float = 0, 
+    min_height: float = 0, 
+    grow_x: bool = False, 
+    grow_y: bool = False, 
+    align_x: float | None = None, 
+    align_y: float | None = None, 
+    margin_left: float | None = None, 
+    margin_top: float | None = None, 
+    margin_right: float | None = None, 
+    margin_bottom: float | None = None, 
+    margin_x: float | None = None, 
+    margin_y: float | None = None, 
+    margin: float | None = None, 
+)
+value
+datetime.date
+The currently selected date.
+
+label
+str
+A short text to display next to the input field.
+
+accessibility_label
+str
+A label that will be read by screen readers.
+
+style
+Literal['underlined', 'rounded', 'pill']
+Changes the visual appearance of the date input.
+
+on_change
+rio.EventHandler[rio.DateChangeEvent]
+Triggered whenever the user selects a new date.
+
+on_confirm
+rio.EventHandler[rio.DateConfirmEvent]
+Triggered when the user explicitly confirms their input, such as by pressing the "Enter" key. You can use this to trigger followup actions, such as logging in or submitting a form.
+
+_is_open
+bool
+Internal state to track if the calendar popup is currently open.
+
+key
+str | int | None
+A unique identifier for this component. If two components with the same key are present during reconciliation they will be considered the same component and their state will be preserved. If no key is specified, reconciliation falls back to a less precise method, by comparing the location of the component in the component tree.
+
+min_width
+float
+The minimum amount of horizontal space this component should request during layouting. The component will never be smaller than this size.
+
+min_height
+float
+The minimum amount of vertical space this component should request during layouting. The component will never be smaller than this size.
+
+grow_x
+bool
+Whether this component should request all the superfluous horizontal space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_x, some containers (such as rio.Row) will give all remaining space to those components first.
+
+grow_y
+bool
+Whether this component should request all the superfluous vertical space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_y, some containers (such as rio.Column) will give all remaining space to those components first.
+
+align_x
+float | None
+How this component should be aligned horizontally, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means left-aligned, 0.5 means centered, and 1 means right-aligned.
+
+align_y
+float | None
+How this component should be aligned vertically, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means top-aligned, 0.5 means centered, and 1 means bottom-aligned.
+
+margin_left
+float | None
+The left margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_left and margin are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_top
+float | None
+The top margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_top and margin are both specified, margin_top is used for the top side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_right
+float | None
+The right margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_right and margin are both specified, margin_right is used for the right side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_bottom
+float | None
+The bottom margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_bottom and margin are both specified, margin_bottom is used for the bottom side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_x
+float | None
+The horizontal margin around this component. This is a shorthand for setting margin_left and margin_right to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_x and margin_left are both specified, margin_left is used for the left side, while the other side uses margin_x. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_y
+float | None
+The vertical margin around this component. This is a shorthand for setting margin_top and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_y and margin_top are both specified, margin_top is used for the top side, while the other side uses margin_y. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin
+float | None
+The margin around this component. This is a shorthand for setting margin_left, margin_top, margin_right and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin and margin_left are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+Examples
+Here's a simple example that allows the user to select a data and displays it back to them:
+
+Python
+
+from datetime import date
+
+class MyComponent(rio.Component):
+    value: date = date.today()
+
+    def build(self) -> rio.Component:
+        return rio.Column(
+            rio.DateInput(
+                # In order to retrieve a value from the component, we'll
+                # use an attribute binding. This way our own value will
+                # be updated whenever the user changes the value.
+                value=self.bind().value,
+                label="Pick a Date",
+            ),
+            rio.Text(f"You've selected: {self.value}"),
+        )
+Alternatively you can also attach an event handler to react to changes. This is a little more verbose, but allows you to run arbitrary code when the user picks a new date:
+
+Python
+
+from datetime import date
+
+class MyComponent(rio.Component):
+    value: date = date.today()
+
+    def on_value_change(self, event: rio.DateChangeEvent):
+        # This function will be called whenever the input's value
+        # changes. We'll display the new value in addition to updating
+        # our own attribute.
+        self.value = event.value
+        print(f"You've selected: {self.value}")
+
+    def build(self) -> rio.Component:
+        return rio.DateInput(
+            value=self.value,
+            label="Pick a Date",
+            on_change=self.on_value_change,
+        )

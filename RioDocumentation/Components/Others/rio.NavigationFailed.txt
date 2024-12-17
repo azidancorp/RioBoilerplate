@@ -1,0 +1,6 @@
+NavigationFailed
+Raised when navigation to a page fails.
+
+This exception is raised when attempting to navigate to a page, but the navigation fails for some reason. This could happen, for example, because a page guard throws an exception.
+
+Note that navigating to a nonexistent pages is not an error, as PageViews will simply display their fallback in that case. Thus this exception will not be raised in that case.

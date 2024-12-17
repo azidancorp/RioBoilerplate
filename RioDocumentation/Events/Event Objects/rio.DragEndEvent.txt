@@ -1,0 +1,20 @@
+DragEndEvent
+Holds information regarding a drag end event.
+
+This is a simple dataclass that stores useful information for when the user stops dragging the mouse. You'll typically receive this as argument in on_drag_end events.
+
+Attributes
+button
+rio.MouseButton
+
+x
+float
+The x coordinate of the mouse when the event was triggered, relative to the left side of the window.
+
+y
+float
+The y coordinate of the mouse when the event was triggered, relative to the top of the window. (So a larger y means further down.)
+
+component
+rio.Component
+The component located under the mouse cursor when the event happened.

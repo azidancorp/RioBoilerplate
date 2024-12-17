@@ -1,0 +1,154 @@
+Row
+A container that lays out its children horizontally.
+
+Rows are one of the most common components in Rio. They take any number of children and lay them out horizontally, with the first one on the left, the second one to its right, and so on. All components in Rows occupy the full height of their parent.
+
+The Row's horizontal counterpart is the Column. A similar component, but stacking its children in the Z direction, is the Stack.
+
+Allocation of extra space
+When a Row has more horizontal space available than it needs, it will evenly distribute the extra space among all child components whose grow_x attribute is True.
+
+If no child is set to grow horizontally, the extra space is evenly distributed among all children. This is why components in a Row can sometimes become unexpectedly large. If you don't want that to happen, you can either tell Rio which children should receive the extra space by setting their grow_x to True, or you can set the Rows align_x to something other than None, which will cause the Row to only take up as much space as necessary and position itself in the available space.
+
+For more details, see the layouting quickstart.
+
+Proportions
+Sometimes you want the widths of the children to be in some sort of relation. For example, you may want two children to have the same width. This can be achieved with the proportions parameter. Passing proportions=[1, 1] will make both children have the same width, proportions=[1, 2] would make the 2nd child twice the width of the 1st child, and so on.
+
+As a shortcut, you can also pass proportions="homogeneous" to make all children the same width.
+
+Constructor
+Row(
+    *children: rio.Component, 
+    spacing: float = 0.0, 
+    proportions: Literal['homogeneous'] | Sequence[float] | None = None, 
+    # Inherited from `rio.Component`
+    key: str | int | None = None, 
+    margin: float | None = None, 
+    margin_x: float | None = None, 
+    margin_y: float | None = None, 
+    margin_left: float | None = None, 
+    margin_top: float | None = None, 
+    margin_right: float | None = None, 
+    margin_bottom: float | None = None, 
+    min_width: float = 0, 
+    min_height: float = 0, 
+    grow_x: bool = False, 
+    grow_y: bool = False, 
+    align_x: float | None = None, 
+    align_y: float | None = None, 
+)
+
+children
+rio.Component
+The components to place in this Row.
+
+spacing
+float
+How much empty space to leave between two adjacent children. No spacing is added before the first child or after the last child.
+
+proportions
+Literal['homogeneous'] | Sequence[float] | None
+If set, the children will grow according to these proportions.
+homogeneous: All children will grow equally.
+A list of floats: Each child will grow according to its proportion.
+None: Extra space will be evenly distributed among children with width='grow'.
+
+key
+str | int | None
+A unique identifier for this component. If two components with the same key are present during reconciliation they will be considered the same component and their state will be preserved. If no key is specified, reconciliation falls back to a less precise method, by comparing the location of the component in the component tree.
+
+margin
+float | None
+The margin around this component. This is a shorthand for setting margin_left, margin_top, margin_right and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin and margin_left are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_x
+float | None
+The horizontal margin around this component. This is a shorthand for setting margin_left and margin_right to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_x and margin_left are both specified, margin_left is used for the left side, while the other side uses margin_x. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_y
+float | None
+The vertical margin around this component. This is a shorthand for setting margin_top and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_y and margin_top are both specified, margin_top is used for the top side, while the other side uses margin_y. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_left
+float | None
+The left margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_left and margin are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_top
+float | None
+The top margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_top and margin are both specified, margin_top is used for the top side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_right
+float | None
+The right margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_right and margin are both specified, margin_right is used for the right side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_bottom
+float | None
+The bottom margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_bottom and margin are both specified, margin_bottom is used for the bottom side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+min_width
+float
+The minimum amount of horizontal space this component should request during layouting. The component will never be smaller than this size.
+Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+
+min_height
+float
+The minimum amount of vertical space this component should request during layouting. The component will never be smaller than this size.
+Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+
+grow_x
+bool
+Whether this component should request all the superfluous horizontal space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_x, some containers (such as rio.Row) will give all remaining space to those components first.
+
+grow_y
+bool
+Whether this component should request all the superfluous vertical space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_y, some containers (such as rio.Column) will give all remaining space to those components first.
+
+align_x
+float | None
+How this component should be aligned horizontally, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means left-aligned, 0.5 means centered, and 1 means right-aligned.
+
+align_y
+float | None
+How this component should be aligned vertically, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means top-aligned, 0.5 means centered, and 1 means bottom-aligned.
+
+Functions
+Row.add
+Appends a child component.
+
+Appends a child component to the end of the row and returns the Row. This means you can chain multiple add calls:
+
+Python
+
+rio.Row().add(child1).add(child2)
+
+Signature
+def add(child: rio.Component) -> Self
+
+child
+rio.Component
+The child component to append.
+
+Examples
+This minimal example will display a Row with two text components:
+
+Python
+
+rio.Row(rio.Text("Hello"), rio.Text("World!"))
+Rows are used to line up multiple components horizontally. This example arranges a rio.Icon and two rio.Text components in a row and neatly wraps them in a Card.
+
+Python
+
+class MyComponent(rio.Component):
+    def build(self) -> rio.Component:
+        return rio.Card(
+            content=rio.Row(
+                rio.Text("Hello"),
+                rio.Icon(icon="material/star"),
+                rio.Text("World!"),
+                spacing=1,
+                margin=1,
+            ),
+        )

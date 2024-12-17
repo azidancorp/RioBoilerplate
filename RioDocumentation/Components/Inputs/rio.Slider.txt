@@ -1,0 +1,161 @@
+Slider
+A component for selecting a single number from a range.
+
+The Slider components allows the user to select a single real number value by dragging a handle along a line. The value can be any number within a range you can specify.
+
+
+Constructor
+Slider(
+    *, 
+    minimum: float = 0, 
+    maximum: float = 1, 
+    step: float = 0, 
+    value: float = 0.5, 
+    is_sensitive: bool = True, 
+    show_values: bool = False, 
+    on_change: rio.EventHandler[rio.SliderChangeEvent] = None, 
+    # Inherited from `rio.Component`
+    key: str | int | None = None, 
+    margin: float | None = None, 
+    margin_x: float | None = None, 
+    margin_y: float | None = None, 
+    margin_left: float | None = None, 
+    margin_top: float | None = None, 
+    margin_right: float | None = None, 
+    margin_bottom: float | None = None, 
+    min_width: float = 1.3, 
+    min_height: float = 1.3, 
+    grow_x: bool = False, 
+    grow_y: bool = False, 
+    align_x: float | None = None, 
+    align_y: float | None = None, 
+)
+minimum
+float
+The minimum value the slider can be set to.
+
+maximum
+float
+The maximum value the slider can be set to.
+
+step
+float
+The step size between slider values.
+
+value
+float
+The current value of the slider.
+
+is_sensitive
+bool
+Whether the slider should respond to user input.
+
+show_values
+bool
+Whether to display labels on the slider.
+
+on_change
+rio.EventHandler[rio.SliderChangeEvent]
+A callback that is called when the value of the slider changes.
+
+key
+str | int | None
+A unique identifier for this component. If two components with the same key are present during reconciliation they will be considered the same component and their state will be preserved. If no key is specified, reconciliation falls back to a less precise method, by comparing the location of the component in the component tree.
+
+margin
+float | None
+The margin around this component. This is a shorthand for setting margin_left, margin_top, margin_right and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin and margin_left are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_x
+float | None
+The horizontal margin around this component. This is a shorthand for setting margin_left and margin_right to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_x and margin_left are both specified, margin_left is used for the left side, while the other side uses margin_x. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_y
+float | None
+The vertical margin around this component. This is a shorthand for setting margin_top and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_y and margin_top are both specified, margin_top is used for the top side, while the other side uses margin_y. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_left
+float | None
+The left margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_left and margin are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_top
+float | None
+The top margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_top and margin are both specified, margin_top is used for the top side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_right
+float | None
+The right margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_right and margin are both specified, margin_right is used for the right side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+margin_bottom
+float | None
+The bottom margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_bottom and margin are both specified, margin_bottom is used for the bottom side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+
+min_width
+float
+The minimum amount of horizontal space this component should request during layouting. The component will never be smaller than this size.
+
+Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+
+Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+
+min_height
+float
+The minimum amount of vertical space this component should request during layouting. The component will never be smaller than this size.
+
+Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+
+Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+
+grow_x
+bool
+Whether this component should request all the superfluous horizontal space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_x, some containers (such as rio.Row) will give all remaining space to those components first.
+
+grow_y
+bool
+Whether this component should request all the superfluous vertical space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_y, some containers (such as rio.Column) will give all remaining space to those components first.
+
+align_x
+float | None
+How this component should be aligned horizontally, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means left-aligned, 0.5 means centered, and 1 means right-aligned.
+
+align_y
+float | None
+How this component should be aligned vertically, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means top-aligned, 0.5 means centered, and 1 means bottom-aligned.
+
+Examples
+You can easily bind attributes track changes. If you want to make your Slider more responsive, you can easily achieve this by adding a lambda function call to on_change:
+
+Python
+
+class MyComponent(rio.Component):
+    value: int = 0
+
+    def build(self) -> rio.Component:
+        return rio.Slider(
+            value=self.bind().value,  # Attribute binding
+            minimum=0,
+            maximum=100,
+            step=1,
+            show_values=True,
+            on_change=lambda event: print(f"value: {event.value}"),
+        )
+You can also use a method for updating the input value and do whatever you want. Note that methods are handy if you want to do more than just updating the input value. For example run async code or update other components based on the input text:
+
+Python
+
+class MyComponent(rio.Component):
+    value: float = 0
+
+    def on_change(self, event: rio.SliderChangeEvent):
+        self.value = event.value
+        print(f"value: {self.value}")
+
+    def build(self) -> rio.Component:
+        return rio.Slider(
+            value=self.value,
+            minimum=0,
+            maximum=100,
+            step=1,
+            show_values=True,
+            on_change=self.on_change,
+        )

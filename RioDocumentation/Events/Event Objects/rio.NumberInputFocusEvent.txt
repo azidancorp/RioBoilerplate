@@ -1,0 +1,9 @@
+NumberInputFocusEvent
+Holds information regarding a number input focus event.
+
+This is a simple dataclass that stores useful information for when a NumberInput gains or loses focus. You'll typically receive this as argument in on_gain_focus and on_lose_focus events.
+
+Attributes
+value
+float
+The value of the NumberInput.

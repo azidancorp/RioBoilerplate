@@ -1,0 +1,16 @@
+AssetError
+Raised when an error occurs related to assets.
+
+Signifies that some operation related to assets has failed. E.g. trying to access a nonexistent asset.
+
+Constructor
+AssetError(message: str)
+message
+str
+
+Attributes
+message
+read-only
+str
+
+A human-readable message describing the problem.

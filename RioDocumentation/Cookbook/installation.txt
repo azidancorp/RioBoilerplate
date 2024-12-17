@@ -1,0 +1,22 @@
+How do I install Rio?
+Rio is available on PyPI, so you can install it using pip:
+
+```bash
+pip install rio-ui
+```
+
+If you encounter issues with the above command, try one of these alternatives:
+
+```bash
+python -m pip install rio-ui
+python3 -m pip install rio-ui
+py -m pip install rio-ui
+```
+
+After installation, a `rio` command will be available in your terminal for creating and managing projects. If the command isn't available, try running Rio through Python:
+
+```bash
+python -m rio
+python3 -m rio
+py -m rio
+```

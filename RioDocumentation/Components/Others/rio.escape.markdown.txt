@@ -1,0 +1,10 @@
+escape_markdown
+Escape text such that it appears as-is when rendered as markdown.
+
+Given any text, this function returns a string which, when rendered as markdown, will look identical to the original text.
+
+Signature
+def escape_markdown(text: str) -> str
+text
+str
+The text to escape.

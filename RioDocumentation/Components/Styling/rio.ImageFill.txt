@@ -1,0 +1,29 @@
+ImageFill
+Fills a shape with an image.
+
+ImageFill fills the shape's background with an image.
+
+The image can be scaled to fit the shape in one of three ways:
+fit: The image is scaled to fit entirely inside the shape, while maintaining its aspect ratio. This is the default.
+stretch: The image is stretched to fill the shape, distorting it if necessary.
+zoom: The image is scaled to fill the shape entirely, while maintaining its aspect ratio. This may cause the image to overflow the shape.
+
+Constructor
+ImageFill(
+    image: pathlib.Path | PIL.Image.Image | rio.URL | bytes, 
+    *, 
+    fill_mode: Literal['fit', 'stretch', 'zoom', 'tile'] = 'fit', 
+    tile_size: tuple[float, float] = (10, 10), 
+)
+
+image
+pathlib.Path | PIL.Image.Image | rio.URL | bytes
+The image to fill the shape with.
+
+fill_mode
+Literal['fit', 'stretch', 'zoom', 'tile']
+How the image should be scaled to fit the shape. If fit, the image is scaled to fit entirely inside the shape. If stretch, the image is stretched to fill the shape exactly, possibly distorting it in the process. If zoom, the image is scaled to fill the shape entirely, possibly overflowing. If tile, the image is repeated to fill the shape.
+
+tile_size
+tuple[float, float]
+The width and height of the tile in font heights. This is ignored if fill_mode is not "tile".

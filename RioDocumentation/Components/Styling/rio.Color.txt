@@ -1,0 +1,334 @@
+Color
+A color, optionally with an opacity.
+
+The Color class does exactly what it says on the tin: It represents a single color. They're used throughout Rio to specify the color of text, fills, and more.
+
+Color supports a variety of color spaces:
+
+Python
+
+# Color from RGB(A)
+Color.from_rgb(1.0, 0.0, 0.0, 1.0)
+
+# Color from hex
+Color.from_hex("#ff0000")
+
+# Color from HSV(A)
+Color.from_hsv(0.0, 1.0, 1.0, 1.0)
+
+# Color from greyscale
+Color.from_grey(0.5, 1.0)
+
+# Invalid: Don't call `Color` directly
+Color(1.0, 0.0, 0.0, 1.0)  # Raises a `RuntimeError`
+Regardless of how the color was created, all of the color's components will be accessible as attributes. For example, you can access color.red, even if the color was created from HSV values.
+
+Attributes
+BLACK
+ClassVar[rio.Color]
+A pure black color.
+GREY
+ClassVar[rio.Color]
+A medium grey color.
+WHITE
+ClassVar[rio.Color]
+A pure white color.
+RED
+ClassVar[rio.Color]
+A pure red color.
+GREEN
+ClassVar[rio.Color]
+A pure green color.
+BLUE
+ClassVar[rio.Color]
+A pure blue color.
+CYAN
+ClassVar[rio.Color]
+A pure cyan color.
+MAGENTA
+ClassVar[rio.Color]
+A pure magenta color.
+YELLOW
+ClassVar[rio.Color]
+A pure yellow color.
+PINK
+ClassVar[rio.Color]
+A pure pink color.
+PURPLE
+ClassVar[rio.Color]
+A pure purple color.
+ORANGE
+ClassVar[rio.Color]
+A pure orange color.
+BROWN
+ClassVar[rio.Color]
+A pure brown color.
+TRANSPARENT
+ClassVar[rio.Color]
+A fully transparent color.
+red
+read-only
+float
+The red component of the color. This is always available, even if the color was created from HSV values.
+green
+read-only
+float
+The green component of the color. This is always available, even if the color was created from HSV values.
+blue
+read-only
+float
+The blue component of the color. This is always available, even if the color was created from HSV values.
+hue
+read-only
+float
+The hue component of the color. This is always available, even if the color was created from RGB values.
+saturation
+read-only
+float
+The saturation component of the color. This is always available, even if the color was created from RGB values.
+value
+read-only
+float
+The value component of the color. This is always available, even if the color was created from RGB values.
+grey
+read-only
+float
+The intensity of the grey color. 0.0 is black, 1.0 is white.
+opacity
+read-only
+float
+The opacity of the color. 0.0 is fully transparent, 1.0 is fully opaque.
+rgb
+read-only
+tuple[float, float, float]
+The color represented as RGB values. Each value is between 0.0 and 1.0, inclusive.
+rgba
+read-only
+tuple[float, float, float, float]
+The color represented as RGBA values. Each value is between 0.0 and 1.0, inclusive.
+hsv
+read-only
+tuple[float, float, float]
+The color represented as HSV values. Each value is between 0.0 and 1.0, inclusive.
+perceived_brightness
+read-only
+float
+Approximates how bright the color appears to humans. 0.0 is black, 1.0 is full brightness.
+hex
+read-only
+str
+The color, formatted as 8 hex digits. The first two digits are the red component, followed by the green component, blue and opacity.
+as_plotly
+read-only
+str
+Plotly expects colors to be specified as strings, and this function returns the color formatted as such.
+
+Functions
+Color.from_rgb
+classmethod
+Creates a color from RGB(A) values.
+
+Create a color using RGB(A) values. All values must be between 0.0 and 1.0, inclusive.
+
+If no opacity is given, the color will be fully opaque.
+
+Signature
+@classmethod
+def from_rgb(
+    red: float = 1.0, 
+    green: float = 1.0, 
+    blue: float = 1.0, 
+    opacity: float = 1.0, 
+) -> rio.Color
+red
+float
+
+The red component of the color. 0.0 is no red, 1.0 is full red.
+
+green
+float
+
+The green component of the color. 0.0 is no green, 1.0 is full green.
+
+blue
+float
+
+The blue component of the color. 0.0 is no blue, 1.0 is full blue.
+
+opacity
+float
+
+The opacity of the color. 0.0 is fully transparent, 1.0 is fully opaque.
+
+Color.from_hex
+classmethod
+Parses a hex string into a color.
+
+A color parsed from a hex string. A variety of formats are supported:
+
+rgb
+rgba
+rrggbb
+rrggbbaa
+All values may optionally be prefixed with a #.
+
+Signature
+@classmethod
+def from_hex(hex_color: str) -> rio.Color
+hex_color
+str
+
+Color.from_hsv
+classmethod
+Create a color from HSV(A) values.
+
+Create a color using HSV(A) values. All values must be between 0.0 and 1.0, inclusive.
+
+If no opacity is given, the color will be fully opaque.
+
+Signature
+@classmethod
+def from_hsv(
+    hue: float, 
+    saturation: float, 
+    value: float, 
+    opacity: float = 1.0, 
+) -> rio.Color
+hue
+float
+
+The hue of the color. 0.0 is red, 0.33 is green, 0.66 is blue, and 1.0 is red again.
+
+saturation
+float
+
+The saturation of the color. 0.0 is no saturation, 1.0 is full saturation.
+
+value
+float
+
+The value of the color. 0.0 is black, 1.0 is full brightness.
+
+opacity
+float
+
+The opacity of the color. 0.0 is fully transparent, 1.0 is fully opaque.
+
+Color.from_grey
+classmethod
+Creates a greyscale color.
+
+Creates a grey color with the given intensity. A grey value of 0.0 corresponds to black, and 1.0 to white.
+
+If no opacity is given, the color will be fully opaque.
+
+Signature
+@classmethod
+def from_grey(
+    grey: float, 
+    opacity: float = 1.0, 
+) -> rio.Color
+grey
+float
+
+The intensity of the grey color. 0.0 is black, 1.0 is white.
+
+opacity
+float
+
+The opacity of the color. 0.0 is fully transparent, 1.0 is fully opaque.
+
+Color.replace
+Replace the given values and return a new Color instance.
+
+Return a new Color instance with the given values replaced. Any values that are not given will be copied from this color.
+
+Signature
+def replace(
+    *, 
+    red: float | None = None, 
+    green: float | None = None, 
+    blue: float | None = None, 
+    opacity: float | None = None, 
+) -> rio.Color
+red
+float | None
+
+The red component of the new color.
+
+green
+float | None
+
+The green component of the new color.
+
+blue
+float | None
+
+The blue component of the new color.
+
+opacity
+float | None
+
+The opacity of the new color.
+
+Color.brighter
+Return a lighter version of this color.
+
+Return a new Color instance that is brighter than this one by the given amount. 0 means no change, 1 will turn the color into white. Values less than 0 will darken the color instead.
+
+How exactly the lightening/darkening happens isn't defined.
+
+Signature
+def brighter(amount: float) -> rio.Color
+amount
+float
+
+How much to lighten the color. 0 means no change, 1 will turn the color into white. Values less than 0 will darken the color instead.
+
+Color.darker
+Return a darker version of this color.
+
+Return a new Color instance that is darker than this one by the given amount. 0 means no change, 1 will turn the color into black. Values less than 0 will brighten the color instead.
+
+How exactly the lightening/darkening happens isn't defined.
+
+Signature
+def darker(amount: float) -> rio.Color
+amount
+float
+
+How much to darken the color. 0 means no change, 1 will turn the color into black. Values less than 0 will brighten the color instead.
+
+Color.desaturated
+Returns a desaturated version of this color.
+
+Return a copy of this color with the saturation reduced by the given amount. 0 means no change, 1 will turn the color into a shade of grey.
+
+Signature
+def desaturated(amount: float) -> rio.Color
+amount
+float
+
+How much to desaturate the color. 0 means no change, 1 will turn the color into a shade of grey.
+
+Color.blend
+Blend this color with another color.
+
+Return a new Color instance that is a blend of this color and the given other color. factor controls how much of the other color is used. A value of 0 will return this color, a value of 1 will return the other color.
+
+Values outside of the range 0 to 1 are allowed and will lead to the color being extrapolated.
+
+Signature
+def blend(
+    other: rio.Color, 
+    factor: float, 
+) -> rio.Color
+other
+rio.Color
+
+The other color to blend with.
+
+factor
+float
+
+How much of the other color to use. 0 will return this color, 1 will return the other color.

@@ -1,0 +1,14 @@
+SolidFill
+Fills a shape with a single color.
+
+SolidFill is the simplest of all fills. It fills the entire shape with a single, solid color.
+
+Constructor
+SolidFill(color: rio.Color)
+color
+rio.Color
+The color to fill the shape with.
+
+Attributes
+color
+rio.Color The color to fill the shape with.

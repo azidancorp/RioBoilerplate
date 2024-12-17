@@ -1,0 +1,13 @@
+MouseEnterEvent
+Holds information regarding a mouse enter event.
+
+This is a simple dataclass that stores useful information for when the user moves the mouse over a component. You'll typically receive this as argument in on_mouse_enter events.
+
+Attributes
+x
+float
+The x coordinate of the mouse when the event was triggered, relative to the left side of the window.
+
+y
+float
+The y coordinate of the mouse when the event was triggered, relative to the top of the window. (So a larger y means further down.)

@@ -1,0 +1,26 @@
+
+on_window_size_change
+Triggered when the client's window is resized.
+
+This decorator makes the decorated method an event handler for on_window_size_change events. The method will be called whenever the window changes size. You can access the window's size using self.session.window_width and self.session.window_height as usual.
+
+Some of the ways that a window can resize are non obvious. For example, rotating a mobile device will trigger this event, since width and height trade places. This event may also be triggered when the browser's dev tools are opened or closed, or when the browser's zoom level is changed, since all of those impact the available screen space.
+
+This decorator can be used on both synchronous as well as asynchronous methods.
+
+Signature
+@rio.event.on_window_size_change
+Example
+We'll make a component that displays the size of the window. The @window_size_change event is used to rebuild the component whenever the window size changes. (This doesn't happen automatically because Rio only rebuilds components when their attributes change, and this component doesn't have any attributes that change.)
+
+Python
+
+class WindowSizeDisplay(rio.Component):
+    @rio.event.on_window_size_change
+    async def on_window_size_change(self):
+        self.force_refresh()
+
+    def build(self):
+        width = self.session.window_width
+        height = self.session.window_height
+        return rio.Text(f"The window size is {width:.1f}x{height:.1f}")

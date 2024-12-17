@@ -1,0 +1,10 @@
+
+TextInputConfirmEvent
+Holds information regarding a text input confirm event.
+
+This is a simple dataclass that stores useful information for when the user confirms the text in a TextInput. You'll typically receive this as argument in on_confirm events.
+
+Attributes
+text
+str
+The new text of the TextInput.

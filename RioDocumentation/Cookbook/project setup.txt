@@ -1,0 +1,34 @@
+How do I create a new project with Rio?
+To create a new project with Rio, use the `rio new` command. This will prompt you with a few questions to set up your project structure.
+
+In your terminal, execute:
+
+```bash
+# Navigate to your desired project directory
+cd /path/to/your/projects
+
+# Initialize a new Rio project
+rio new
+
+# If the command fails, try:
+python -m rio new
+python3 -m rio new
+py -m rio new
+```
+
+After answering the setup questions, your new project directory will be created.
+
+To run your new project, use:
+
+```bash
+# Enter the project directory
+cd project-name
+
+# Start the project
+rio run
+
+# If the command fails, try:
+python -m rio run
+python3 -m rio run
+py -m rio run
+```

@@ -1,0 +1,55 @@
+Font
+A custom font face.
+
+The Font class lets you create custom fonts for use in your rio app. To instantiate a Font, you must pass it at least one font file. (As far as rio is concerned, the file format is irrelevant - all that matters is that a browser can display it.)
+
+Constructor
+Font(
+    regular: pathlib.Path | bytes, 
+    bold: pathlib.Path | bytes | None = None, 
+    italic: pathlib.Path | bytes | None = None, 
+    bold_italic: pathlib.Path | bytes | None = None, 
+)
+
+regular
+pathlib.Path | bytes
+The regular (i.e. not bold, not italic) font file.
+
+bold
+pathlib.Path | bytes | None
+The bold font file.
+
+italic
+pathlib.Path | bytes | None
+The italic font file.
+
+bold_italic
+pathlib.Path | bytes | None
+The bold and italic font file.
+
+Attributes
+regular
+pathlib.Path | bytes
+The regular (i.e. not bold, not italic) font file.
+
+bold
+pathlib.Path | bytes | None
+The bold font file.
+
+italic
+pathlib.Path | bytes | None
+The italic font file.
+
+bold_italic
+pathlib.Path | bytes | None
+The bold and italic font file.
+
+ROBOTO
+ClassVar[rio.Font]
+
+A pre-defined font: Roboto.
+
+ROBOTO_MONO
+ClassVar[rio.Font]
+
+A pre-defined font: Roboto Mono.

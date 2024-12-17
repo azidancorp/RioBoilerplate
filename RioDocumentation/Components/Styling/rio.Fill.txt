@@ -1,0 +1,11 @@
+Fill
+Base class for how shapes are filled.
+
+This is a base class for all fills. Fills determine how the inside of a shape is colored.
+
+This class is abstract and cannot be instantiated directly. Instead, use one of its subclasses:
+
+SolidFill
+ImageFill
+LinearGradientFill
+FrostedGlassFill

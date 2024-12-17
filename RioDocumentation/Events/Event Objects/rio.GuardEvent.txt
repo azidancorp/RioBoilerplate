@@ -1,0 +1,14 @@
+
+GuardEvent
+Holds information regarding a guard event.
+
+This is a simple dataclass that stores useful information for the guard event. They can prevent users from accessing pages which they are not allowed to see.
+
+Attributes
+session
+rio.Session
+The current session.
+
+active_pages
+Sequence[rio.ComponentPage | rio.Redirect]
+All pages that will be active if the navigation succeeds.

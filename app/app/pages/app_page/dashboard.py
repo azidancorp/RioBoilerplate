@@ -74,105 +74,132 @@ class Overview(rio.Component):
             spacing=3
         )
 
+class SalesDashboard(rio.Component):
 
-class WaitingList(rio.Component):
     def build(self):
-        weeks = pd.date_range(start='2023-01-01', end='2023-12-31', freq='W')
-        num_weeks = len(weeks)
 
-        np.random.seed(42)
-        public_waitlist = np.cumsum(np.random.randint(-5, 20, num_weeks)) + 300
-        private_waitlist = np.cumsum(np.random.randint(-10, 30, num_weeks)) + 500
-        expected_property_value = np.random.randint(200_000, 800_000, num_weeks)
+        # Load the pre-generated data
+        sales_data = pd.read_csv('app/data/sales_data.csv', parse_dates=['Week'])
 
-        waiting_list_data = pd.DataFrame({
+        # Extract columns
+        weeks = sales_data['Week']
+        online_sales = sales_data['Online Sales']
+        in_store_sales = sales_data['In-Store Sales']
+        total_sales = sales_data['Total Sales']
+
+        # Create a DataFrame to hold sales data
+        sales_data = pd.DataFrame({
             'Week': weeks,
-            'Public Waitlist': public_waitlist,
-            'Private Waitlist': private_waitlist,
-            'Expected Property Value': expected_property_value
+            'Online Sales': online_sales,
+            'In-Store Sales': in_store_sales,
+            'Total Sales': total_sales
         })
 
-        waitlist_chart = go.Figure()
-        waitlist_chart.add_trace(go.Scatter(
-            x=waiting_list_data['Week'],
-            y=waiting_list_data['Private Waitlist'],
+        # Create the Sales Performance Chart
+        sales_chart = go.Figure()
+
+        # Add In-Store Sales trace
+        sales_chart.add_trace(go.Scatter(
+            x=sales_data['Week'],
+            y=sales_data['In-Store Sales'],
             mode='lines',
-            name='Private Waitlist',
-            fill='tonexty'
+            name='In-Store Sales',
+            fill='tonexty',
+            line=dict(color='rgba(255, 140, 0, 0.6)')  # Orange color with transparency
         ))
 
-        waitlist_chart.add_trace(go.Scatter(
-            x=waiting_list_data['Week'],
-            y=waiting_list_data['Public Waitlist'] + waiting_list_data['Private Waitlist'],
+        # Add Online Sales trace
+        sales_chart.add_trace(go.Scatter(
+            x=sales_data['Week'],
+            y=sales_data['Total Sales'],
             mode='lines',
-            name='Public Waitlist',
-            fill='tonexty'
+            name='Online Sales',
+            fill='tonexty',
+            line=dict(color='rgba(30, 144, 255, 0.6)')  # Dodger Blue with transparency
         ))
 
-        waitlist_chart.update_layout(
-            title='Waiting List',
+        # Update layout for the sales chart
+        sales_chart.update_layout(
+            title='Sales Performance Over Time',
             xaxis_title='Week',
-            yaxis_title='Number of Customers',
+            yaxis_title='Number of Units Sold',
             yaxis=dict(rangemode='tozero'),
-            legend_title='Waitlist Type',
+            legend_title='Sales Channel',
             height=400,
             template='plotly_dark'
         )
 
+        # Generate future dates for a 10-year sales forecast
         today = pd.Timestamp.now()
         future_dates = pd.date_range(start=today, periods=365*10, freq='D')
 
-        base_value = expected_property_value[-1]
-        future_values = np.linspace(base_value, base_value * 1.5, len(future_dates))
-        future_values_lower = future_values * 0.9
-        future_values_upper = future_values * 1.1
+        # Base sales value from the last week of current data
+        base_sales = sales_data['Total Sales'].iloc[-1]
+        
+        # Create a linear forecast for future sales (e.g., 5% annual growth)
+        days = len(future_dates)
+        growth_rate = 0.05  # 5% growth over 10 years
+        future_sales = base_sales * (1 + growth_rate) ** (np.arange(days) / 365)
+        
+        # Calculate upper and lower bounds for the forecast (±10%)
+        future_sales_lower = future_sales * 0.9
+        future_sales_upper = future_sales * 1.1
 
-        property_value_chart = go.Figure()
-        property_value_chart.add_trace(go.Scatter(
+        # Create the Sales Forecast Chart
+        forecast_chart = go.Figure()
+
+        # Add Forecasted Sales trace
+        forecast_chart.add_trace(go.Scatter(
             x=future_dates,
-            y=future_values,
+            y=future_sales,
             mode='lines',
-            name='Expected Funding Amount',
-            line=dict(dash='dash')
+            name='Forecasted Sales',
+            line=dict(dash='dash', color='lime')
         ))
 
-        property_value_chart.add_trace(go.Scatter(
+        # Add Upper Bound trace
+        forecast_chart.add_trace(go.Scatter(
             x=future_dates,
-            y=future_values_upper,
+            y=future_sales_upper,
             mode='lines',
             line=dict(width=0),
             showlegend=False
         ))
 
-        property_value_chart.add_trace(go.Scatter(
+        # Add Lower Bound trace with fill between upper and lower bounds
+        forecast_chart.add_trace(go.Scatter(
             x=future_dates,
-            y=future_values_lower,
+            y=future_sales_lower,
             mode='lines',
             line=dict(width=0),
-            fillcolor='rgba(68, 68, 68, 0.3)',
             fill='tonexty',
-            name='Prediction Range'
+            fillcolor='rgba(68, 68, 68, 0.3)',  # Semi-transparent gray
+            name='Forecast Range'
         ))
 
-        property_value_chart.update_layout(
-            title='Expected Property Funding Amount (10 Year Forecast)',
+        # Update layout for the forecast chart
+        forecast_chart.update_layout(
+            title='10-Year Sales Forecast',
             xaxis_title='Date',
-            yaxis_title='Expected Funding Amount',
+            yaxis_title='Projected Sales ($)',
             yaxis=dict(rangemode='tozero'),
             height=400,
             template='plotly_dark'
         )
 
+        # Optionally, create additional charts such as Revenue vs. Expenses
+        # For brevity, we'll stick to two primary charts here
+
+        # Assemble the dashboard layout
         return rio.Column(
-            rio.Text("Waiting List", style="heading3"),
+            rio.Text("Sales Dashboard", style="heading3"),
             rio.Row(
-                rio.Plot(waitlist_chart, min_height=30),
-                rio.Plot(property_value_chart, min_height=30),
+                rio.Plot(sales_chart, min_height=30),
+                rio.Plot(forecast_chart, min_height=30),
                 spacing=2,
             ),
             spacing=2
         )
-
 
 
 class FinanceReport(rio.Component):
@@ -369,11 +396,11 @@ class Board(rio.Component):
     def build(self) -> rio.Component:
         return rio.Column(
             # Header Section
-            rio.Text("Board Mission Intelligence", style="heading2"),
+            rio.Text("Mission Intelligence", style="heading2"),
 
             # Integrated Sections
             Overview(),
-            WaitingList(),
+            SalesDashboard(),
             FinanceReport(),
 
 

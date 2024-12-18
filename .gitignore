@@ -173,9 +173,10 @@ poetry.toml
 # LSP config files
 pyrightconfig.json
 
+*.db
+
+mfa_qr_codes
 server_sync.py
 move_files.py
 remove_interactive_examples.py
 split_documentation.py
-
-*.db

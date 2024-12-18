@@ -26,6 +26,12 @@ class Settings(rio.Component):
     change_password_current_password: str = ""
     change_password_new_password: str = ""
     change_password_confirm_password: str = ""
+    change_password_2fa: str = ""
+    
+    delete_account_password: str = ""
+    delete_account_2fa: str = ""
+    delete_account_confirmation: str = ""
+    delete_account_error: str = ""
     
     @rio.event.on_populate
     async def on_populate(self):
@@ -51,7 +57,28 @@ class Settings(rio.Component):
         # # print("change password for", user_session.user_id)
         # await persistence.change_password(user_session.user_id, self.session[UserSession].password)
     
-
+    async def _on_delete_account_pressed(self) -> None:
+        """Handle the account deletion process."""
+        if self.delete_account_confirmation != "DELETE MY ACCOUNT":
+            self.delete_account_error = "Please type 'DELETE MY ACCOUNT' exactly to confirm deletion"
+            return
+        
+        user_session = self.session[UserSession]
+        persistence = Persistence()
+        
+        success = await persistence.delete_user(
+            user_id=user_session.user_id,
+            password=self.delete_account_password,
+            two_factor_code=self.delete_account_2fa if self.two_factor_enabled else None
+        )
+        
+        if success:
+            print("Account deleted successfully")
+            # Redirect to login page
+            self.session.navigate_to("/")
+        else:
+            self.delete_account_error = "Failed to delete account. Please check your password and 2FA code."
+    
     async def _on_logout_all_devices_pressed(self) -> None:
         """Handle the logout all devices button click."""
         user_session = self.session[UserSession]
@@ -73,14 +100,14 @@ class Settings(rio.Component):
             rio.Column(
                 rio.Text(
                     "Settings",
-                    style="heading3",
+                    style="heading1",
                     margin_bottom=2,
                 ),
                 
                 # Profile Section
                 rio.Text(
                     "Profile Settings",
-                    style="heading3",
+                    style="heading2",
                     margin_top=2,
                     margin_bottom=1,
                 ),
@@ -104,7 +131,7 @@ class Settings(rio.Component):
                 # Notifications Section
                 rio.Text(
                     "Notifications",
-                    style="heading3",
+                    style="heading2",
                     margin_top=2,
                     margin_bottom=1,
                 ),
@@ -131,14 +158,17 @@ class Settings(rio.Component):
                 # Security Section
                 rio.Text(
                     "Security Settings",
-                    style="heading3",
+                    style="heading2",
                     margin_top=2,
                     margin_bottom=1,
                 ),
                 rio.Card(
                     rio.Column(
+                        rio.Text(
+                            "Change Password",
+                            style="heading3",
+                        ),
                         rio.Row(
-                            rio.Text("Change Password"),
                             rio.TextInput(
                                 label="Current Password",
                                 text=self.bind().change_password_current_password,  
@@ -153,6 +183,10 @@ class Settings(rio.Component):
                                 label="Confirm Password",
                                 text=self.bind().change_password_confirm_password,
                                 is_secret=True,
+                            ),
+                            rio.TextInput(
+                                label="2FA Code",
+                                text=self.bind().change_password_2fa,
                             ),
                             rio.Button(
                                 "Confirm Password Change",
@@ -174,6 +208,42 @@ class Settings(rio.Component):
                             "Logout from All Devices",
                             on_press=self._on_logout_all_devices_pressed,
                             shape="rounded",
+                        ),
+                        
+                        rio.Text(
+                            "Delete Account",
+                            style="heading3",
+                            margin_top=2,
+                            margin_bottom=1,
+                        ),
+                        
+                        rio.Row(
+                            rio.TextInput(
+                                label="Password",
+                                text=self.bind().delete_account_password,
+                                is_secret=True,
+                            ),
+                            rio.TextInput(
+                                label="2FA Code",
+                                text=self.bind().delete_account_2fa,
+                            ),
+                            rio.TextInput(
+                                label='Type "DELETE MY ACCOUNT" to confirm',
+                                text=self.bind().delete_account_confirmation,
+                            ),
+                            rio.Button(
+                                "Delete Account",
+                                on_press=self._on_delete_account_pressed,
+                                shape="rounded",
+                            ),
+                            spacing=1,
+                        ),
+                        
+                        rio.Banner(
+                            text=self.delete_account_error,
+                            style="danger",
+                            margin_top=1,
+                            # visible=bool(self.delete_account_error),
                         ),
                         
                         spacing=2,

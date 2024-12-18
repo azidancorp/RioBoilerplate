@@ -344,14 +344,60 @@ class Persistence:
         `user_id`: The UUID of the user whose sessions to invalidate.
         """
         cursor = self.conn.cursor()
-        current_time = datetime.now(tz=timezone.utc).timestamp()
+        now = datetime.now(timezone.utc).timestamp()
 
         cursor.execute(
-            """
-            UPDATE user_sessions
-            SET valid_until = ?
-            WHERE user_id = ?
-            """,
-            (current_time, str(user_id)),
+            "UPDATE user_sessions SET valid_until = ? WHERE user_id = ?",
+            (now, str(user_id)),
         )
         self.conn.commit()
+
+    async def delete_user(self, user_id: uuid.UUID, password: str, two_factor_code: str | None = None) -> bool:
+        """
+        Delete a user and all their associated sessions from the database.
+        
+        ## Parameters
+        
+        `user_id`: The UUID of the user to delete
+        `password`: The user's password for verification
+        `two_factor_code`: Optional 2FA code, required if 2FA is enabled for the user
+        
+        ## Returns
+        
+        `bool`: True if deletion was successful, False if authentication failed
+        
+        ## Raises
+        
+        `KeyError`: If the user does not exist
+        """
+        cursor = self.conn.cursor()
+        
+        # First verify the user exists and get their data
+        try:
+            user = await self.get_user_by_id(user_id)
+        except KeyError:
+            return False
+            
+        # Verify password
+        if not user.verify_password(password):
+            return False
+            
+        # Check if 2FA is required
+        if user.two_factor_secret:
+            if not two_factor_code or not self.verify_2fa(user_id, two_factor_code):
+                return False
+        
+        # First delete all sessions first (due to foreign key constraint)
+        cursor.execute(
+            "DELETE FROM user_sessions WHERE user_id = ?",
+            (str(user_id),)
+        )
+        
+        # Delete the user
+        cursor.execute(
+            "DELETE FROM users WHERE id = ?",
+            (str(user_id),)
+        )
+        
+        self.conn.commit()
+        return True

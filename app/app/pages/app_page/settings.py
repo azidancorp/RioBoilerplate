@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import KW_ONLY, field
 import typing as t
 
+from paramiko import ssh_exception
 import rio
 from app.persistence import Persistence
 from app.data_models import AppUser, UserSession
+from app.components.center_component import CenterComponent
 
 
 @rio.page(
@@ -18,6 +20,7 @@ class Settings(rio.Component):
     """
     
     email_notifications_enabled: bool = True
+    sms_notifications_enabled: bool = False
     two_factor_enabled: bool = False
     
     change_password_current_password: str = ""
@@ -36,6 +39,10 @@ class Settings(rio.Component):
     def _on_email_notifications_switch_pressed(self, event: rio.SwitchChangeEvent):
         self.email_notifications_enabled = event.is_on
         # print(f"Email notifications are now {'enabled' if self.email_notifications_enabled else 'disabled'}")
+        
+    def _on_sms_notifications_switch_pressed(self, event: rio.SwitchChangeEvent):
+        self.sms_notifications_enabled = event.is_on
+        # print(f"SMS notifications are now {'enabled' if self.sms_notifications_enabled else 'disabled'}")
     
     
     async def _on_confirm_password_change_pressed(self) -> None:
@@ -62,21 +69,22 @@ class Settings(rio.Component):
 
     def build(self) -> rio.Component:
         
-        return rio.Column(
-            rio.Text(
-                "Settings",
-                style=rio.TextStyle(font_size=2.0, font_weight="bold"),
-                margin_bottom=2,
-            ),
-            
-            # Profile Section
-            rio.Text(
-                "Profile Settings",
-                style=rio.TextStyle(font_size=1.5, font_weight="bold"),
-                margin_top=2,
-                margin_bottom=1,
-            ),
-            rio.Card(
+        return CenterComponent(
+            rio.Column(
+                rio.Text(
+                    "Settings",
+                    style="heading3",
+                    margin_bottom=2,
+                ),
+                
+                # Profile Section
+                rio.Text(
+                    "Profile Settings",
+                    style="heading3",
+                    margin_top=2,
+                    margin_bottom=1,
+                ),
+                
                 rio.Column(
                     rio.TextInput(
                         label="Display Name",
@@ -92,17 +100,15 @@ class Settings(rio.Component):
                     ),
                     spacing=1,
                 ),
-                margin=2,
-            ),
-            
-            # Notifications Section
-            rio.Text(
-                "Notifications",
-                style=rio.TextStyle(font_size=1.5, font_weight="bold"),
-                margin_top=2,
-                margin_bottom=1,
-            ),
-            rio.Card(
+                
+                # Notifications Section
+                rio.Text(
+                    "Notifications",
+                    style="heading3",
+                    margin_top=2,
+                    margin_bottom=1,
+                ),
+                
                 rio.Column(
                     rio.Row(
                         rio.Text("Email Notifications"),
@@ -110,63 +116,72 @@ class Settings(rio.Component):
                             is_on=self.email_notifications_enabled,
                             on_change=self._on_email_notifications_switch_pressed,
                         ),
+                        spacing=1,
                     ),
-                    spacing=1,
-                ),
-                margin=2,
-            ),
-            
-            # Security Section
-            rio.Text(
-                "Security Settings",
-                style=rio.TextStyle(font_size=1.5, font_weight="bold"),
-                margin_top=2,
-                margin_bottom=1,
-            ),
-            rio.Card(
-                rio.Column(
                     rio.Row(
-                        rio.Text("Change Password"),
-                        rio.TextInput(
-                            label="Current Password",
-                            text=self.bind().change_password_current_password,  
-                            is_secret=True,
-                        ),
-                        rio.TextInput(
-                            label="New Password",
-                            text=self.bind().change_password_new_password,
-                            is_secret=True,
-                        ),
-                        rio.TextInput(
-                            label="Confirm Password",
-                            text=self.bind().change_password_confirm_password,
-                            is_secret=True,
-                        ),
-                        rio.Button(
-                            "Confirm Password Change",
-                            on_press=self._on_confirm_password_change_pressed,
+                        rio.Text("SMS Notifications"),
+                        rio.Switch(
+                            is_on=self.sms_notifications_enabled,
+                            on_change=self._on_sms_notifications_switch_pressed,
                         ),
                         spacing=1,
                     ),
-                    
-                    rio.Link(
-                        rio.Button(
-                            "Disable Two-Factor Authentication" if self.two_factor_enabled else "Enable Two-Factor Authentication",
-                        ),
-                        target_url="/app/disable-mfa" if self.two_factor_enabled else "/app/enable-mfa",
-                    ),
-                    
-                    rio.Button(
-                        "Logout from All Devices",
-                        on_press=self._on_logout_all_devices_pressed,
-                        shape="rounded",
-                    ),
-                    
-                    spacing=2,
                 ),
                 
+                # Security Section
+                rio.Text(
+                    "Security Settings",
+                    style="heading3",
+                    margin_top=2,
+                    margin_bottom=1,
+                ),
+                rio.Card(
+                    rio.Column(
+                        rio.Row(
+                            rio.Text("Change Password"),
+                            rio.TextInput(
+                                label="Current Password",
+                                text=self.bind().change_password_current_password,  
+                                is_secret=True,
+                            ),
+                            rio.TextInput(
+                                label="New Password",
+                                text=self.bind().change_password_new_password,
+                                is_secret=True,
+                            ),
+                            rio.TextInput(
+                                label="Confirm Password",
+                                text=self.bind().change_password_confirm_password,
+                                is_secret=True,
+                            ),
+                            rio.Button(
+                                "Confirm Password Change",
+                                on_press=self._on_confirm_password_change_pressed,
+                                shape="rounded",
+                            ),
+                            spacing=1,
+                        ),
+                        
+                        rio.Link(
+                            rio.Button(
+                                "Disable Two-Factor Authentication" if self.two_factor_enabled else "Enable Two-Factor Authentication",
+                                shape="rounded",
+                            ),
+                            target_url="/app/disable-mfa" if self.two_factor_enabled else "/app/enable-mfa",
+                        ),
+                        
+                        rio.Button(
+                            "Logout from All Devices",
+                            on_press=self._on_logout_all_devices_pressed,
+                            shape="rounded",
+                        ),
+                        
+                        spacing=2,
+                    ),
+                    
+                ),
+                spacing=1,
                 margin=2,
             ),
-            spacing=1,
-            margin=2,
+            width_percent=70
         )

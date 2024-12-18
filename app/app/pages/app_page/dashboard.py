@@ -202,82 +202,83 @@ class SalesDashboard(rio.Component):
         )
 
 
-class FinanceReport(rio.Component):
+class ProductionReport(rio.Component):
     def build(self):
-        # Create a DataFrame for funding sources and amounts
-        funding_sources = {
-            'Funding_Source': ['Equity Raise', 'Rental Income', 'Arrangement Fees'],
-            'Amount_GBP': [500_000, 200_000, 100_000]
-        }
-        funding_df = pd.DataFrame(funding_sources)
 
-        # Pie chart for income/funding breakdown
-        income_funds_chart = px.pie(
-            funding_df,
-            names='Funding_Source',
-            values='Amount_GBP',
-            title='Income/Funds Raised Breakdown',
+        # Create a DataFrame for crop harvest sources and amounts
+        harvest_sources = {
+            'Crop_Type': ['Apples', 'Pears', 'Cherries'],
+            'Harvest_kg': [5_000, 2_000, 1_000]
+        }
+        harvest_df = pd.DataFrame(harvest_sources)
+
+        # Pie chart for harvest breakdown
+        harvest_chart = px.pie(
+            harvest_df,
+            names='Crop_Type',
+            values='Harvest_kg',
+            title='Harvest Breakdown',
             hole=0,
-            labels={'Funding_Source': 'Source', 'Amount_GBP': 'Amount (£)'}
+            labels={'Crop_Type': 'Crop', 'Harvest_kg': 'Kilograms'}
         )
-        income_funds_chart.update_traces(textposition='inside', textinfo='percent+label')
-        income_funds_chart.update_layout(
+        harvest_chart.update_traces(textposition='inside', textinfo='percent+label')
+        harvest_chart.update_layout(
             showlegend=True,
             uniformtext_minsize=12,
             uniformtext_mode='hide',
             template='plotly_dark'
         )
 
-        # Generate financial data for income and burn rate
+        # Generate dummy monthly data for harvest and costs
         num_months = 12
         months = pd.date_range(start='2023-01-01', periods=num_months, freq='ME').strftime('%b %Y')
 
         np.random.seed(42)
-        monthly_income = np.random.randint(40_000, 100_000, num_months)
-        monthly_burn_rate = np.random.randint(30_000, 80_000, num_months)
+        monthly_harvest = np.random.randint(4_000, 10_000, num_months)
+        monthly_costs = np.random.randint(3_000, 8_000, num_months)
 
-        financial_data = pd.DataFrame({
+        performance_data = pd.DataFrame({
             'Month': months,
-            'Income_GBP': monthly_income,
-            'Burn_Rate_GBP': monthly_burn_rate,
-            'Net_Balance_GBP': monthly_income - monthly_burn_rate
+            'Harvest_kg': monthly_harvest,
+            'Costs_GBP': monthly_costs,
+            'Net_Yield_kg': monthly_harvest - monthly_costs
         })
 
-        # Bar and line chart for income, burn rate, and net balance
-        income_expenditure_chart = go.Figure()
-        income_expenditure_chart.add_trace(go.Bar(
-            x=financial_data['Month'],
-            y=financial_data['Income_GBP'],
-            name='Income',
+        # Bar and line chart for monthly harvest and costs
+        production_chart = go.Figure()
+        production_chart.add_trace(go.Bar(
+            x=performance_data['Month'],
+            y=performance_data['Harvest_kg'],
+            name='Harvest',
             marker_color='rgb(39, 174, 96)',
             offsetgroup=0
         ))
 
-        income_expenditure_chart.add_trace(go.Bar(
-            x=financial_data['Month'],
-            y=-financial_data['Burn_Rate_GBP'],
-            name='Burn Rate',
+        production_chart.add_trace(go.Bar(
+            x=performance_data['Month'],
+            y=-performance_data['Costs_GBP'],
+            name='Costs',
             marker_color='rgb(231, 76, 60)',
             offsetgroup=0
         ))
 
-        income_expenditure_chart.add_trace(go.Scatter(
-            x=financial_data['Month'],
-            y=financial_data['Net_Balance_GBP'],
-            name='Net Balance',
+        production_chart.add_trace(go.Scatter(
+            x=performance_data['Month'],
+            y=performance_data['Net_Yield_kg'],
+            name='Net Yield',
             line=dict(color='rgb(52, 152, 219)', width=2)
         ))
 
-        income_expenditure_chart.update_layout(
-            title='Monthly Income and Burn Rate (2023)',
+        production_chart.update_layout(
+            title='Monthly Harvest and Costs (2023)',
             xaxis_title='Month',
-            yaxis_title='Amount (£)',
+            yaxis_title='Amount',
             barmode='relative',
             height=600,
             template='plotly_dark'
         )
 
-        income_expenditure_chart.add_shape(
+        production_chart.add_shape(
             type='line',
             x0=0,
             y0=0,
@@ -288,100 +289,99 @@ class FinanceReport(rio.Component):
             line=dict(color='black', width=2)
         )
 
-        income_expenditure_chart.update_yaxes(
-            tickprefix="£",
+        production_chart.update_yaxes(
             title_font=dict(size=14),
             title_standoff=25
         )
-        income_expenditure_chart.update_xaxes(tickangle=-45)
+        production_chart.update_xaxes(tickangle=-45)
 
-        # Finance Report Text
-        finance_report = """
-FINANCIAL PERFORMANCE REPORT - 2023
+        # Production Report Text
+        production_report = """
+HARVEST PERFORMANCE REPORT - 2023
 
 **HEADLINE FIGURES**
-- **Total Annual Income:** ~£750,000
-- **Average Monthly Income:** £62,500
-- **Peak Revenue Month:** May 2023 (£85,000)
-- **Lowest Revenue Month:** March 2023 (£40,000)
+- **Total Annual Harvest:** ~8,000 kg
+- **Average Monthly Harvest:** ~6,500 kg
+- **Peak Harvest Month:** May 2023 (9,500 kg)
+- **Lowest Harvest Month:** March 2023 (4,100 kg)
 
-**FUNDING STRUCTURE**
-- **Equity Raise:** 62.5% (Primary funding source)
-- **Rental Income:** 25.0%
-- **Arrangement Fees:** 12.5%
+**CROP MIX**
+- **Apples:** 62.5% (Primary crop)
+- **Pears:** 25.0%
+- **Cherries:** 12.5%
 
 **KEY HIGHLIGHTS**
-- Positive net balance maintained for 8 out of 12 months
-- Strong performance in Q2 (Apr-Jun) with consistent income above £70,000
-- Burn rate stabilized in H2, averaging £45,000 monthly
-- Year ended with positive trajectory in December
+- Positive net yield maintained for 8 out of 12 months
+- Strong performance in Q2 (Apr-Jun) with consistent harvest above 7,000 kg
+- Costs stabilized in H2, averaging £5,000 monthly
+- Year ended with increasing yields in December
 
 **[Detailed Monthly Analysis]**
-- Q1 showed volatility with declining revenues
-- Q2 demonstrated strongest performance with peak in May
-- Q3 maintained steady performance despite increased burn rate
-- Q4 showed resilient income despite market conditions
+- Q1 showed variability with lower harvest volumes
+- Q2 demonstrated strongest output with a peak in May
+- Q3 remained steady despite rising costs
+- Q4 indicated resilience and stable yields despite challenging conditions
 
 **[Risk Analysis]**
-- High dependency on equity funding (62.5%)
-- Burn rate occasionally exceeding monthly income
-- Seasonal revenue patterns suggest need for cash reserve management
-- Diversification needed to reduce reliance on equity funding
+- High dependency on a single crop type (Apples)
+- Occasional costs surpassing harvest value
+- Seasonal fluctuations suggest need for improved storage and planning
+- Diversification needed to reduce reliance on one primary crop
         """
 
         return rio.Column(
-            rio.Text("Finance Report", style="heading3"),
+            rio.Text("Production Report", style="heading3"),
             # First Row with DeltaCards
             rio.Row(
                 DeltaCard(
-                    title="Total Funding",
-                    value="£5,000,000",
+                    title="Total Harvest",
+                    value="8,000 kg",
                     color=rio.Color.from_hex('#2980B9'),
-                    delta_a=50_000,
-                    delta_b=20_000,
+                    delta_a=500,
+                    delta_b=200,
                 ),
                 DeltaCard(
-                    title="Financing",
-                    value="£2,000,000",
+                    title="Storage Capacity",
+                    value="20,000 kg",
                     color=rio.Color.from_hex('#8E44AD'),
-                    delta_a=15_000,
-                    delta_b=5_000,
+                    delta_a=1_000,
+                    delta_b=300,
                 ),
                 DeltaCard(
-                    title="Income",
-                    value="£1,200,000",
+                    title="Sales",
+                    value="£120,000",
                     color=rio.Color.from_hex('#27AE60'),
-                    delta_a=12_000,
-                    delta_b=3_000,
+                    delta_a=2_000,
+                    delta_b=500,
                 ),
                 DeltaCard(
-                    title="Burn Rate",
-                    value="£50,000/month",
+                    title="Costs",
+                    value="£50,000",
                     color=rio.Color.from_hex('#E67E22'),
-                    delta_a=5_000,
-                    delta_b=1_000,
+                    delta_a=1_000,
+                    delta_b=250,
                 ),
                 DeltaCard(
-                    title="Outgoings",
-                    value="£1,000,000",
+                    title="Profit",
+                    value="£70,000",
                     color=rio.Color.from_hex('#C0392B'),
-                    delta_a=8_000,
-                    delta_b=2_000,
+                    delta_a=1_500,
+                    delta_b=400,
                 ),
                 spacing=2,
             ),
             # Second Row with Plots
             rio.Row(
-                rio.Plot(income_expenditure_chart, min_height=30),
-                rio.Plot(income_funds_chart, min_height=30),
+                rio.Plot(production_chart, min_height=30),
+                rio.Plot(harvest_chart, min_height=30),
                 proportions=[2, 1],
                 spacing=2
             ),
             rio.Row(
                 rio.Revealer(
-                    header="Finance Report - Click to reveal",
+                    header="Production Report - Click to reveal",
                     header_style="heading3",
-                    content=rio.Text(finance_report, overflow="wrap"),
+                    content=rio.Text(production_report, overflow="wrap"),
                 ),
             ),
             spacing=2
@@ -401,9 +401,7 @@ class Board(rio.Component):
             # Integrated Sections
             Overview(),
             SalesDashboard(),
-            FinanceReport(),
-
-
+            ProductionReport(),
             # General Styling
             spacing=4,
             margin=2,

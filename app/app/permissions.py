@@ -1,12 +1,35 @@
-PAGE_ROLE_MAPPING = {
-    "/app/dashboard": ["admin", "user"],
-    "/app/news": ["admin"],
-    "/app/test": ["admin", "user"],
-    "/app/settings": ["admin", "user"],
-    "/app/enable-mfa": ["admin", "user"],
-    "/app/disable-mfa": ["admin", "user"],
-    "/app/admin": ["admin", "user"],
+# Role hierarchy from highest to lowest
+ROLE_HIERARCHY = {
+    "user": 3,
+    "admin": 2,
+    "root": 1
 }
+
+PAGE_ROLE_MAPPING = {
+    "/app/dashboard": ["root", "admin", "user"],
+    "/app/news": ["root", "admin"],
+    "/app/test": ["root", "admin", "user"],
+    "/app/settings": ["root", "admin", "user"],
+    "/app/enable-mfa": ["root", "admin", "user"],
+    "/app/disable-mfa": ["root", "admin", "user"],
+    "/app/admin": ["root", "admin", "user"],
+}
+
+def get_role_level(role: str) -> int:
+    """Get the hierarchy level of a role"""
+    level = ROLE_HIERARCHY.get(role)
+    if level is None:
+        raise ValueError(f"Unknown role: {role}")
+    return level
+
+def can_manage_role(manager_role: str, target_role: str) -> bool:
+    """Check if a user with manager_role can manage users with target_role"""
+    return get_role_level(manager_role) < get_role_level(target_role)
+
+def get_manageable_roles(user_role: str) -> list[str]:
+    """Get list of roles that can be managed by the given user role"""
+    user_level = get_role_level(user_role)
+    return [role for role, level in ROLE_HIERARCHY.items() if level > user_level]
 
 def check_access(current_page: str, user_role: str) -> bool:
     """

@@ -352,7 +352,7 @@ class Persistence:
         )
         self.conn.commit()
 
-    async def delete_user(self, user_id: uuid.UUID, password: str, two_factor_code: str | None = None) -> bool:
+    def delete_user(self, user_id: uuid.UUID, password: str, two_factor_code: str | None = None) -> bool:
         """
         Delete a user and all their associated sessions from the database.
         
@@ -374,7 +374,7 @@ class Persistence:
         
         # First verify the user exists and get their data
         try:
-            user = await self.get_user_by_id(user_id)
+            user = self.get_user_by_id(user_id)
         except KeyError:
             return False
             

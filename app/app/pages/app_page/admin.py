@@ -28,8 +28,19 @@ class AdminPage(rio.Component):
     current_user: AppUser | None = None
     df: pd.DataFrame | None = None
     
+    # User change role fields
+    change_role_username: str = ""
+    change_role_new_role: str = "user"
+    change_role_error: str = ""
+    
+    
+    # User deletion fields
+    delete_user_username: str = ""
+    delete_user_confirmation: str = ""
+    delete_user_error: str = ""
+    
     @rio.event.on_populate
-    async def on_populate(self):
+    def on_populate(self):
         """Load all users when the page is populated"""
         persistence = self.session[Persistence]
         cursor = persistence.conn.cursor()
@@ -89,40 +100,112 @@ class AdminPage(rio.Component):
         # Create DataFrame
         self.df = pd.DataFrame(data)
     
-    async def on_role_changed(self, user_id: str, event: rio.SelectChangeEvent):
-        """Handle role change for a user"""
+
+    def _on_change_role_pressed(self) -> None:
+        if not self.change_role_username or self.change_role_username == "":
+            self.change_role_error = "Please enter a username"
+            return
+            
+        if not self.change_role_new_role or self.change_role_new_role == "":
+            self.change_role_error = "Please enter a new role"
+            return
+            
+        self._update_role(self.change_role_username, self.change_role_new_role)
+        self.change_role_username = ""
+        self.change_role_new_role = ""
+        
+        self.force_refresh()
+
+    def _update_role(self, username: str, new_role: str) -> None:
+        """Update a user's role"""
         if not self.current_user:
-            return
-            
-        # Get the target user
-        target_user = next((u for u in self.users if str(u.id) == user_id), None)
-        if not target_user:
-            return
-            
-        # Check if current user can manage the target user's role
-        if not can_manage_role(self.current_user.role, target_user.role):
+            self.change_role_error = "You must be logged in to perform this action"
             return
             
         persistence = self.session[Persistence]
         cursor = persistence.conn.cursor()
         
-        # Update the role in the database
-        cursor.execute(
-            "UPDATE users SET role = ? WHERE id = ?",
-            (event.value, user_id)
-        )
-        persistence.conn.commit()
+        # Get the target user's current role
+        cursor.execute("SELECT role FROM users WHERE username = ?", (username,))
+        result = cursor.fetchone()
+        if not result:
+            self.change_role_error = f"User {username} not found"
+            return
+            
+        current_role = result[0]
         
-        # Update the selected role in our state
-        self.selected_role[user_id] = event.value
+        # Check if the current user can manage both the user's current and new roles
+        if not (can_manage_role(self.current_user.role, current_role) and 
+                can_manage_role(self.current_user.role, new_role)):
+            self.change_role_error = f"You do not have permission to change role from {current_role} to {new_role} because your role is {self.current_user.role}"
+            return
+            
+        try:
+            cursor.execute(
+                "UPDATE users SET role = ? WHERE username = ?",
+                (new_role, username)
+            )
+            persistence.conn.commit()
+            
+            # Clear error on success
+            self.change_role_error = ""
+            
+            # Refresh the page to show updated roles
+            self.on_populate()
+        except Exception as e:
+            self.change_role_error = f"Error updating role: {str(e)}"
         
-        # Update DataFrame
-        if self.df is not None:
-            self.df.loc[self.df['ID'] == user_id, 'Role'] = event.value
+    def _on_delete_user_pressed(self) -> None:
+        """Handle the user deletion process from admin panel."""
+        if not self.current_user:
+            self.delete_user_error = "You must be logged in to perform this action"
+            return
+            
+        if not self.delete_user_username or self.delete_user_username == "":
+            self.delete_user_error = "Please enter a username to delete"
+            return
+            
+        if self.delete_user_confirmation != f"DELETE USER {self.delete_user_username}":
+            self.delete_user_error = f'Please type "DELETE USER {self.delete_user_username}" exactly to confirm deletion'
+            return
+            
+        persistence = self.session[Persistence]
+        cursor = persistence.conn.cursor()
         
-        # Force a refresh to update the UI
-        self.force_refresh()
-
+        # Get the target user's information
+        cursor.execute("SELECT id, role FROM users WHERE username = ?", (self.delete_user_username,))
+        result = cursor.fetchone()
+        if not result:
+            self.delete_user_error = f"User {self.delete_user_username} not found"
+            return
+            
+        target_user_id = uuid.UUID(result[0])
+        target_role = result[1]
+        
+        # Check if current user has permission to delete this user
+        if not can_manage_role(self.current_user.role, target_role):
+            self.delete_user_error = f"You do not have permission to delete users with role: {target_role} because your role is {self.current_user.role}"
+            return
+            
+        # Delete the user
+        try:
+            success = persistence.delete_user(
+                user_id=target_user_id,
+                password="",  # No password needed for admin deletion
+                two_factor_code=None  # No 2FA needed for admin deletion
+            )
+            if success:
+                # Clear the fields
+                self.delete_user_username = ""
+                self.delete_user_confirmation = ""
+                self.delete_user_error = ""
+                # Refresh the page to show updated user list
+                self.on_populate()
+            else:
+                self.delete_user_error = "Failed to delete user"
+        except Exception as e:
+            self.delete_user_error = f"Error deleting user: {str(e)}"
+    
     def build(self) -> rio.Component:
         if not self.current_user or self.df is None:
             return rio.Text("Error: Could not load user information")
@@ -151,6 +234,100 @@ class AdminPage(rio.Component):
                     margin=2,
                 ),
                 margin=2,
+            ),
+            
+
+            # rio.Table(
+            #     columns=[
+            #         rio.Column("username", "Username"),
+            #         rio.Column("role", "Role"),
+            #         rio.Column("created_at", "Created At"),
+            #         rio.Column("is_verified", "Verified"),
+            #     ],
+            #     rows=self.users,
+            #     on_row_click=self._on_row_click,
+            # ),
+            
+            rio.Text(
+                "User Management",
+                style="heading2",
+                margin_top=2,
+                margin_bottom=1,
+            ),
+            
+            rio.Text(
+                "Change Role",
+                style="heading3",
+                margin_top=2,
+                margin_bottom=1,
+            ),
+
+
+            rio.Row(
+                rio.TextInput(
+                    label="Username to Change Role",
+                    text=self.bind().change_role_username,
+                ),
+                rio.Dropdown(
+                    label="New Role",
+                    # options=get_manageable_roles(self.current_user.role),
+                    options={
+                        "admin": "admin",
+                        "user": "user",
+                        "root": "root"
+                    },
+                    selected_value=self.bind().change_role_new_role,
+                ),
+                rio.Button(
+                    "Change Role",
+                    on_press=self._on_change_role_pressed,
+                    shape="rounded",
+                ),
+                spacing=1,
+                proportions=[1, 1, 1],
+            ),
+
+            rio.Text(
+                f"about to change {self.change_role_username}'s role to {self.change_role_new_role}",
+                margin_top=1,
+            ),
+            
+            rio.Banner(
+                text=self.change_role_error,
+                style="danger",
+                margin_top=1,
+            ),
+
+            
+            rio.Text(
+                "Delete User",
+                style="heading3",
+                margin_top=2,
+                margin_bottom=1,
+            ),
+            
+            rio.Row(
+                rio.TextInput(
+                    label="Username to Delete",
+                    text=self.bind().delete_user_username,
+                ),
+                rio.TextInput(
+                    label='Type "DELETE USER username" to confirm',
+                    text=self.bind().delete_user_confirmation,
+                ),
+                rio.Button(
+                    "Delete User",
+                    on_press=self._on_delete_user_pressed,
+                    shape="rounded",
+                ),
+                spacing=1,
+                proportions=[1, 1, 1],
+            ),
+            
+            rio.Banner(
+                text=self.delete_user_error,
+                style="danger",
+                margin_top=1,
             ),
             
             align_x=0.5,

@@ -381,7 +381,8 @@ HARVEST PERFORMANCE REPORT - 2023
                 rio.Revealer(
                     header="Production Report - Click to reveal",
                     header_style="heading3",
-                    content=rio.Text(production_report, overflow="wrap"),
+                    # content=rio.Text(production_report, overflow="wrap"),
+                    content=rio.Markdown(production_report),
                 ),
             ),
             spacing=2

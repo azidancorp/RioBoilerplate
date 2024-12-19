@@ -87,6 +87,14 @@ class Persistence:
         `user`: The user object containing user details.
         """
         cursor = self.conn.cursor()
+        
+        # Check if this is the first user
+        cursor.execute("SELECT COUNT(*) FROM users")
+        user_count = cursor.fetchone()[0]
+        
+        # If this is the first user, set their role to root
+        if user_count == 0:
+            user.role = "root"
 
         cursor.execute(
             """

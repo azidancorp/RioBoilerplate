@@ -6,8 +6,6 @@ from typing import *  # type: ignore
 
 import rio
 import app.theme as theme
-from app.persistence import Persistence
-from app.data_models import AppUser, UserSession
 
 
 class SideBarLink(rio.Component):
@@ -117,31 +115,16 @@ class Sidebar(rio.Component):
         column's `align_x` and `align_y` properties are set to 0, and its
         `grow_x` and `grow_y` properties are set to False.
         """
-        
-        try:
-            self.session[AppUser]
-            user_is_logged_in = True
-        except KeyError:
-            user_is_logged_in = False
 
-
-        # if not logged in, different sidebar
-        if not user_is_logged_in:
-            return rio.Column(
-                margin_left=1.5,
-                margin_top=2,
-                margin_right=2,
-                min_width=0,  # Shrink the sidebar when no links are shown
-            )
             
-        # On home page, no sidebar
-        if len(self.session.active_page_instances) <= 1:
-            return rio.Column(
-                margin_left=1.5,
-                margin_top=2,
-                margin_right=2,
-                min_width=0,  # Shrink the sidebar when no links are shown
-            )
+        # On non-app pages, no sidebar
+        # if len(self.session.active_page_instances) <= 1:
+        #     return rio.Column(
+        #         margin_left=1.5,
+        #         margin_top=2,
+        #         margin_right=2,
+        #         min_width=0,  # Shrink the sidebar when no links are shown
+        #     )
             
         return rio.Column(
             

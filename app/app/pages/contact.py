@@ -83,7 +83,6 @@ class ContactPage(rio.Component):
                     spacing=1,
                     margin=2,
                 ),
-                margin=2,
             ),
             align_x=0.5,
             min_width=60,

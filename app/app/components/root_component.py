@@ -10,6 +10,7 @@ import rio
 from app.components.navbar import Navbar
 from app.components.sidebar import Sidebar
 from app.components.footer import Footer
+from app.data_models import AppUser
 
 class RootComponent(rio.Component):
     """
@@ -26,15 +27,24 @@ class RootComponent(rio.Component):
     """
 
     def build(self) -> rio.Component:
+        
+        
+        try:
+            self.session[AppUser]
+            user_is_logged_in = True
+        except KeyError:
+            user_is_logged_in = False
+        
+        
         return rio.Column(
 
             Navbar(),
             rio.Separator(),
-            # Add some empty space so the navbar doesn't cover the content.
-            # The page view will display the content of the current page.
+            
             rio.Row(
                 
-                Sidebar(),
+                # only shown if logged in
+                Sidebar() if user_is_logged_in else rio.Column(),
                 
                 rio.Column(
                     rio.PageView(
@@ -51,6 +61,5 @@ class RootComponent(rio.Component):
                 grow_y=True,
             ),
 
-            # The footer is also common to all pages, so place it here.
             Footer(),
         )

@@ -10,6 +10,7 @@ from app.persistence import Persistence
 from app.data_models import UserSettings
 import app.theme as theme
 from app.components.root_component import RootComponent
+from app.api.test import router as test_router
 
 
 async def on_app_start(app: rio.App) -> None:
@@ -93,3 +94,5 @@ app = rio.App(
 )
 
 fastapi_app = app.as_fastapi()
+
+fastapi_app.include_router(test_router)

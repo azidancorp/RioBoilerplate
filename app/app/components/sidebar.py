@@ -24,7 +24,7 @@ class SideBarLink(rio.Component):
         # print("active page url segment", self.session.active_page_instances[1].url_segment)
         try:
             active_page_url_segment = self.session.active_page_instances[1].url_segment
-            print("active page url segment", active_page_url_segment)
+            # print("active page url segment", active_page_url_segment)
         except IndexError:
             active_page_url_segment = None
 

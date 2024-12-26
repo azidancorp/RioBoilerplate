@@ -583,5 +583,7 @@ class LoginPage(rio.Component):
                 ),
                 align_x=0.5,
                 align_y=0,
-            )
+            ),
+            width_percent=40,
+            height_percent=40,
         )

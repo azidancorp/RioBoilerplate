@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import KW_ONLY, field
 import typing as t
 
-from paramiko import ssh_exception
 import rio
 from app.persistence import Persistence
 from app.data_models import AppUser, UserSession

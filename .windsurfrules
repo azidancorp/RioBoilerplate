@@ -1,3 +1,4 @@
 Always refer closely to the documentation in the tagged pages for rio components, paying specific attention to the arguments in the constructor.
-Any terminal commands should be written for PowerShell in Windows 11, unless otherwise specified.
+Any terminal commands should be written for PowerShell terminal in Windows 11, unless otherwise specified.
+Example: "git commit -am "message"; git push" should be output format of instructions to make a commit and push command in the terminal
 All plotly charts should have `update_layout(template='plotly_dark')` applied.

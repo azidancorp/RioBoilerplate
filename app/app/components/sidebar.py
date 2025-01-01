@@ -6,7 +6,7 @@ from typing import *  # type: ignore
 
 import rio
 import app.theme as theme
-
+from app.data_models import AppUser
 
 class SideBarLink(rio.Component):
     title: str
@@ -115,6 +115,12 @@ class Sidebar(rio.Component):
         column's `align_x` and `align_y` properties are set to 0, and its
         `grow_x` and `grow_y` properties are set to False.
         """
+        
+        try:
+            self.session[AppUser]
+            user_is_logged_in = True
+        except KeyError:
+            user_is_logged_in = False
 
             
         # On non-app pages, no sidebar
@@ -125,18 +131,24 @@ class Sidebar(rio.Component):
         #         margin_right=2,
         #         min_width=0,  # Shrink the sidebar when no links are shown
         #     )
-            
-        return rio.Column(
-            
-            SideBarLink("Dashboard", "/app/dashboard", "dashboard"),
-            SideBarLink("Admin", "/app/admin", "admin-panel-settings"), 
-            SideBarLink("Test", "/app/test", "science"),
-            SideBarLink("News", "/app/news", "newspaper"),
-            
-            align_x=0,
-            align_y=0,
-            grow_y=False,
-            margin_left=1.5,
-            margin_top=2,
-            margin_right=2,
-        )
+        
+        if not user_is_logged_in:
+            return rio.Column(
+                min_width=0,  # Shrink the sidebar when no links are shown
+            )
+        
+        if user_is_logged_in:
+            return rio.Column(
+                
+                SideBarLink("Dashboard", "/app/dashboard", "dashboard"),
+                SideBarLink("Admin", "/app/admin", "admin-panel-settings"), 
+                SideBarLink("Test", "/app/test", "science"),
+                SideBarLink("News", "/app/news", "newspaper"),
+                
+                align_x=0,
+                align_y=0,
+                grow_y=False,
+                margin_left=1.5,
+                margin_top=2,
+                margin_right=2,
+            )

@@ -44,7 +44,7 @@ class RootComponent(rio.Component):
             rio.Row(
                 
                 # only shown if logged in
-                Sidebar() if user_is_logged_in else rio.Column(),
+                Sidebar(),
                 
                 rio.Column(
                     rio.PageView(

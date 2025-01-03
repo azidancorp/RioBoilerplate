@@ -71,23 +71,11 @@ async def on_session_start(rio_session: rio.Session) -> None:
 
 
 
-# Create the Rio app
 app = rio.App(
     name='app',
     default_attachments=[UserSettings(auth_token='')],
-    # This function will be called once the app is ready.
-    #
-    # `rio run` will also call it again each time the app is reloaded.
     on_app_start=on_app_start,
-# This function will be called each time a user connects
     on_session_start=on_session_start,
-    # You can optionally provide a root component for the app. By default,
-    # Rio's default navigation is used. By providing your own component, you
-    # can create components which stay put while the user navigates between
-    # pages, such as a navigation bar or footer.
-    #
-    # When you do this, make sure your component contains a `rio.PageView`
-    # so the currently active page is still visible.
     build=RootComponent,
     theme=theme.THEME,
     assets_dir=Path(__file__).parent / "assets",

@@ -413,20 +413,23 @@ class SignUpForm(rio.Component):
                     text=self.email,
                     label="Email",
                     on_change=self.update_email,
-                    is_sensitive=True
+                    is_sensitive=True,
+                    on_confirm=self.on_sign_up_pressed
                 ),
                 rio.TextInput(
                     text=self.password,
                     label="Password",
                     on_change=self.update_password,
-                    is_secret=True
+                    is_secret=True,
+                    on_confirm=self.on_sign_up_pressed
                 ),
                 rio.TextInput(
                     text=self.confirm_password,
                     label="Confirm Password",
                     on_change=self.update_confirm_password,
                     is_sensitive=True,
-                    is_secret=True
+                    is_secret=True,
+                    on_confirm=self.on_sign_up_pressed
                 ),
                 rio.Text(
                     f'Email is valid: {self.is_email_valid}',
@@ -517,6 +520,7 @@ class ResetPasswordForm(rio.Component):
                 rio.TextInput(
                     text=self.bind().username_or_email,
                     label="Username / Email",
+                    on_confirm=self.on_reset_password_pressed,
                 ),
                 rio.Row(
                     rio.Button(

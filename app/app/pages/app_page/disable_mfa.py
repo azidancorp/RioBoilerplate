@@ -34,7 +34,7 @@ class DisableMFA(rio.Component):
         totp = pyotp.TOTP(self.two_factor_secret)
         return totp.verify(self.verification_code)
 
-    def _on_totp_entered(self):
+    def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         is_code_matching = self.verify_totp()
         if is_code_matching:
             self.disable_2fa()

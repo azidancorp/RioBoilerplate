@@ -85,7 +85,7 @@ class EnableMFA(rio.Component):
         totp = pyotp.TOTP(self.temporary_two_factor_secret)
         return totp.verify(self.verification_code)
 
-    def _on_totp_entered(self):
+    def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
         Called when user presses "Verify" button.
         """

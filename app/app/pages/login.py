@@ -303,7 +303,7 @@ class SignUpForm(rio.Component):
     # We'll expose an event so that the parent page can toggle forms
     on_toggle_form: t.Callable[[str], None] | None = None
 
-    async def on_sign_up_pressed(self) -> None:
+    async def on_sign_up_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
         Handles the sign-up process when the user submits the sign-up form.
 
@@ -482,7 +482,7 @@ class ResetPasswordForm(rio.Component):
     # We'll expose an event so that the parent page can toggle forms
     on_toggle_form: t.Callable[[str], None] | None = None
 
-    async def on_reset_password_pressed(self) -> None:
+    async def on_reset_password_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
         Handles sending a password reset request to the user’s email.
         You’d typically generate a token, email the user, etc.

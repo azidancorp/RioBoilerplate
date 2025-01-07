@@ -5,10 +5,8 @@ import os
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, timedelta
 import rio
-import pyotp
 
 
 @dataclass
@@ -34,17 +32,9 @@ class UserSession:
     # This ID uniquely identifies the session. It also serves as the
     # authentication token for the user.
     id: str
-
-    # The user this session belongs to
     user_id: uuid.UUID
-
-    # When this session was initially created
     created_at: datetime
-
-    # Until when this session is valid
     valid_until: datetime
-
-    # The role of the user in this session
     role: str
 
 
@@ -53,14 +43,8 @@ class AppUser:
     """
     Model for a user of the application.
     """
-
-    # A unique identifier for this user
     id: uuid.UUID
-
-    # The user's chosen username
     username: str
-
-    # When the user account was created
     created_at: datetime
 
     # The hash and salt of the user's password. By storing these values we can
@@ -69,11 +53,7 @@ class AppUser:
     # curious.
     password_hash: bytes
     password_salt: bytes
-
-    # The role of the user (e.g., 'admin', 'user')
     role: str = 'user'
-
-    # Whether the user's account has been verified
     is_verified: bool = False
 
     # The secret key for two-factor authentication, None if not enabled
@@ -124,3 +104,34 @@ class AppUser:
             self.password_hash,
             self.get_password_hash(password, self.password_salt),
         )
+
+
+@dataclass
+class PasswordResetCode:
+    """
+    Model for password reset codes. These are temporary codes that allow users
+    to reset their password.
+    """
+
+    code: str
+    user_id: uuid.UUID
+    created_at: datetime
+    valid_until: datetime
+
+    @classmethod
+    def create_new_reset_code(cls, user_id: uuid.UUID) -> PasswordResetCode:
+        """
+        Create a new reset code for a user that is valid for 24 hours.
+        """
+        now = datetime.now(timezone.utc)
+        return cls(
+            code=secrets.token_urlsafe(32),  # 32 bytes = 43 characters
+            user_id=user_id,
+            created_at=now,
+            valid_until=now + timedelta(hours=24)
+        )
+
+    @property
+    def is_valid(self) -> bool:
+        """Whether this reset code is still valid."""
+        return datetime.now(timezone.utc) < self.valid_until

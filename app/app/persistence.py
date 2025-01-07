@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.data_models import AppUser, UserSession
+from app.data_models import AppUser, UserSession, PasswordResetCode
 import pyotp
 
 
@@ -31,6 +31,7 @@ class Persistence:
         self.conn = sqlite3.connect(db_path)
         self._create_user_table()  # Ensure the users table exists
         self._create_session_table()  # Ensure the sessions table exists
+        self._create_reset_codes_table()  # Ensure the reset codes table exists
 
     def _create_user_table(self) -> None:
         """
@@ -72,6 +73,26 @@ class Persistence:
                 created_at REAL NOT NULL,
                 valid_until REAL NOT NULL,
                 role TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """
+        )
+        self.conn.commit()
+
+    def _create_reset_codes_table(self) -> None:
+        """
+        Create the 'password_reset_codes' table in the database if it does not exist.
+        The table stores reset codes that allow users to reset their passwords.
+        """
+        cursor = self.conn.cursor()
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_reset_codes (
+                code TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                valid_until REAL NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         """
@@ -360,6 +381,141 @@ class Persistence:
         )
         self.conn.commit()
 
+    async def update_password(
+        self,
+        user_id: uuid.UUID,
+        new_password: str,
+    ) -> None:
+        """
+        Update a user's password hash and salt.
+        
+        ## Parameters
+        
+        `user_id`: The UUID of the user whose password to update
+        `new_password`: The new password to set
+        
+        ## Raises
+        
+        `KeyError`: If the user does not exist
+        """
+        cursor = self.conn.cursor()
+        
+        # First verify the user exists
+        await self.get_user_by_id(user_id)  # Will raise KeyError if user doesn't exist
+        
+        # Generate new password hash and salt using AppUser's method
+        password_salt = secrets.token_bytes(64)
+        password_hash = AppUser.get_password_hash(new_password, password_salt)
+        
+        # Update the password in database
+        cursor.execute(
+            """
+            UPDATE users 
+            SET password_hash = ?, password_salt = ?
+            WHERE id = ?
+            """,
+            (password_hash, password_salt, str(user_id))
+        )
+        self.conn.commit()
+        
+        # Invalidate all existing sessions for security
+        await self.invalidate_all_sessions(user_id)
+
+    async def create_reset_code(self, user_id: uuid.UUID) -> PasswordResetCode:
+        """
+        Create a new password reset code for a user.
+        
+        ## Parameters
+        
+        `user_id`: The UUID of the user to create a reset code for
+        
+        ## Returns
+        
+        The newly created reset code
+        
+        ## Raises
+        
+        `KeyError`: If the user does not exist
+        """
+        # First verify the user exists
+        await self.get_user_by_id(user_id)
+        
+        # Create a new reset code
+        reset_code = PasswordResetCode.create_new_reset_code(user_id)
+        
+        # Store it in the database
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO password_reset_codes (code, user_id, created_at, valid_until)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                reset_code.code,
+                str(reset_code.user_id),
+                reset_code.created_at.timestamp(),
+                reset_code.valid_until.timestamp(),
+            ),
+        )
+        self.conn.commit()
+        
+        return reset_code
+
+    async def get_user_by_reset_code(self, code: str) -> AppUser:
+        """
+        Find a user by their reset code. The code must be valid (not expired).
+        
+        ## Parameters
+        
+        `code`: The reset code to look up
+        
+        ## Returns
+        
+        The user associated with this reset code
+        
+        ## Raises
+        
+        `KeyError`: If the code is invalid, expired, or the associated user doesn't exist
+        """
+        cursor = self.conn.cursor()
+        
+        # Get the reset code entry
+        cursor.execute(
+            """
+            SELECT user_id, valid_until 
+            FROM password_reset_codes 
+            WHERE code = ?
+            """,
+            (code,)
+        )
+        
+        row = cursor.fetchone()
+        if not row:
+            raise KeyError(f"Invalid reset code: {code}")
+            
+        # Check if the code is expired
+        valid_until = datetime.fromtimestamp(row[1], tz=timezone.utc)
+        if datetime.now(timezone.utc) >= valid_until:
+            raise KeyError(f"Reset code has expired: {code}")
+            
+        # Get and return the associated user
+        return await self.get_user_by_id(uuid.UUID(row[0]))
+
+    async def clear_reset_code(self, user_id: uuid.UUID) -> None:
+        """
+        Delete all reset codes for a user.
+        
+        ## Parameters
+        
+        `user_id`: The UUID of the user whose reset codes to clear
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM password_reset_codes WHERE user_id = ?",
+            (str(user_id),)
+        )
+        self.conn.commit()
+
     def delete_user(self, user_id: uuid.UUID, password: str, two_factor_code: str | None = None) -> bool:
         """
         Delete a user and all their associated sessions from the database.
@@ -398,6 +554,12 @@ class Persistence:
         # First delete all sessions first (due to foreign key constraint)
         cursor.execute(
             "DELETE FROM user_sessions WHERE user_id = ?",
+            (str(user_id),)
+        )
+        
+        # Delete all reset codes
+        cursor.execute(
+            "DELETE FROM password_reset_codes WHERE user_id = ?",
             (str(user_id),)
         )
         

@@ -245,7 +245,6 @@ class Settings(rio.Component):
                             text=self.error_message,
                             style="danger",
                             margin_top=1,
-                            visible=bool(self.error_message),
                         ),
                         rio.Row(
                             rio.TextInput(

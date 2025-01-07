@@ -5,6 +5,9 @@ def get_password_strength(password: str) -> int:
     """
     Calculate the strength of a given password based on various criteria
     and return a score between 0 and 100.
+    
+    Based on https://www.uic.edu/apps/strong-password/
+    
     """
     length = len(password)
     score = 0

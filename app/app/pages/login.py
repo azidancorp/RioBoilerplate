@@ -120,7 +120,11 @@ class LoginForm(rio.Component):
         return rio.Card(
             rio.Column(
                 rio.Text("Login", style="heading1", justify="center"),
-                rio.Banner(text=self.error_message, style="danger", margin_top=1),
+                rio.Banner(
+                    text=self.error_message,
+                    style="danger",
+                    margin_top=1,
+                ),
                 rio.TextInput(
                     text=self.bind().username,
                     label="Email/Username",
@@ -175,6 +179,7 @@ class SignUpForm(rio.Component):
     password: str = ""
     confirm_password: str = ""
     error_message: str = ""
+    banner_style: str = "danger"
     is_email_valid: bool = False
     passwords_valid: bool = False
     password_strength: int = 0
@@ -222,6 +227,8 @@ class SignUpForm(rio.Component):
             return
         except KeyError:
             # Good news, we can create the user
+            self.banner_style = "success"
+            self.error_message = "Congratulations! You have successfully signed up. Please log in."
             pass
 
         # Create a new user
@@ -232,9 +239,6 @@ class SignUpForm(rio.Component):
 
         # Store the user in the database
         await pers.create_user(user_info)
-
-        # Once created, navigate them away if you want
-        self.session.navigate_to("/app/home")
 
     def on_cancel(self) -> None:
         """
@@ -248,6 +252,13 @@ class SignUpForm(rio.Component):
         self.error_message = ""
 
         # Return to the login form
+        if self.on_toggle_form:
+            self.on_toggle_form("login")
+
+    def on_back_to_login_pressed(self):
+        """
+        Goes back to the login form.
+        """
         if self.on_toggle_form:
             self.on_toggle_form("login")
 
@@ -284,11 +295,9 @@ class SignUpForm(rio.Component):
                 # Display an error, if any
                 rio.Banner(
                     text=self.error_message,
-                    style="danger",
+                    style=self.banner_style,
                     margin_top=1,
                 ),
-                
-                
                 rio.TextInput(
                     text=self.email,
                     label="Email",
@@ -338,11 +347,11 @@ class SignUpForm(rio.Component):
                         shape='rounded'
                     ),
                     rio.Button(
-                        "Cancel",
-                        on_press=self.on_cancel,
+                        "Back to Login",
+                        on_press=self.on_back_to_login_pressed,
                         shape='rounded'
                     ),
-                    spacing=2,
+                    spacing=2
                 ),
                 spacing=1,
                 margin=2,
@@ -399,7 +408,11 @@ class ResetPasswordForm(rio.Component):
         return rio.Card(
             rio.Column(
                 rio.Text("Reset Password", style="heading1", justify="center"),
-                rio.Banner(text=self.error_message, style=self.banner_style, margin_top=1),
+                rio.Banner(
+                    text=self.error_message,
+                    style=self.banner_style,
+                    margin_top=1,
+                ),
                 rio.TextInput(
                     text=self.bind().username_or_email,
                     label="Username / Email",

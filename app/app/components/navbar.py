@@ -117,6 +117,9 @@ class Navbar(rio.Component):
             NavBarLink('About', '/about')
         )
         navbar_content.add(
+            NavBarLink('Pricing', '/pricing')
+        )
+        navbar_content.add(
             NavBarLink('Contact', '/contact')
         )
 

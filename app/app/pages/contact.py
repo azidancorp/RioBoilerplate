@@ -29,7 +29,7 @@ class ContactPage(rio.Component):
         return rio.Column(
             rio.Text(
                 "Contact Us",
-                style=rio.TextStyle(font_size=2.0, font_weight="bold"),
+                style="heading1",
                 margin_bottom=2,
             ),
             
@@ -38,7 +38,7 @@ class ContactPage(rio.Component):
                 rio.Column(
                     rio.Text(
                         "Get in Touch",
-                        style=rio.TextStyle(font_size=1.5, font_weight="bold"),
+                        style="heading2",
                         margin_bottom=1,
                     ),
                     rio.Text(
@@ -72,7 +72,7 @@ class ContactPage(rio.Component):
                     # Company Information
                     rio.Text(
                         "Other Ways to Reach Us",
-                        style=rio.TextStyle(font_size=1.2, font_weight="bold"),
+                        style="heading3",
                         margin_top=3,
                         margin_bottom=1,
                     ),

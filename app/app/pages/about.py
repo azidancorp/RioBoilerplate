@@ -23,7 +23,6 @@ class AboutPage(rio.Component):
 Welcome to Buzzwordz Inc.! Unleashing Synergistic Paradigms for Unprecedented Excellence since the day after yesterday.
 
 ## About Our Company
-## About Our Company
 
 At Buzzwordz, we are all talk and no action. Our mission is to be the vanguards
 of industry-leading solutions, leveraging bleeding-edge technologies to catapult

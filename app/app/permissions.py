@@ -13,6 +13,7 @@ PAGE_ROLE_MAPPING = {
     "/app/enable-mfa": ["root", "admin", "user"],
     "/app/disable-mfa": ["root", "admin", "user"],
     "/app/admin": ["root", "admin", "user"],
+    "/app/notifications": ["root", "admin", "user"],
 }
 
 def get_role_level(role: str) -> int:

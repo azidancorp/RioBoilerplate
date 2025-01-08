@@ -144,6 +144,8 @@ class Sidebar(rio.Component):
                 SideBarLink("Admin", "/app/admin", "admin-panel-settings"), 
                 SideBarLink("Test", "/app/test", "science"),
                 SideBarLink("News", "/app/news", "newspaper"),
+                SideBarLink("Notifications", "/app/notifications", "notifications"),
+                SideBarLink("Settings", "/app/settings", "settings"),
                 
                 align_x=0,
                 align_y=0,

@@ -20,7 +20,7 @@ class AboutPage(rio.Component):
             """
 # About Us
 
-Welcome to Buzzwordz Inc.! Unleashing Synergistic Paradigms for Unprecedented Excellence since the day after yesterday.
+Welcome to Buzzwordz Inc! Unleashing Synergistic Paradigms for Unprecedented Excellence since the day after yesterday.
 
 ## About Our Company
 
@@ -52,7 +52,8 @@ delay, give us your money today.
 Phone: (123) 456-7890
 
 Email: info@yourwebsite.com
-Address: 123 Main Street, City, Country
+
+Address: 123 Fake Street, Moon
             """,
             min_width=60,
             margin_bottom=4,

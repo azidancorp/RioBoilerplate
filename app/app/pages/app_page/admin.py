@@ -213,7 +213,7 @@ class AdminPage(rio.Component):
         return rio.Column(
             rio.Text(
                 "User Management",
-                style=rio.TextStyle(font_size=2.0, font_weight="bold"),
+                style="heading1",
                 margin_bottom=2,
             ),
             
@@ -222,7 +222,7 @@ class AdminPage(rio.Component):
                 rio.Column(
                     rio.Text(
                         "All Users",
-                        style=rio.TextStyle(font_size=1.5, font_weight="bold"),
+                        style="heading2",
                         margin_bottom=1,
                     ),
                     
@@ -233,21 +233,9 @@ class AdminPage(rio.Component):
                     
                     margin=2,
                 ),
-                margin=2,
             ),
             
-
-            # rio.Table(
-            #     columns=[
-            #         rio.Column("username", "Username"),
-            #         rio.Column("role", "Role"),
-            #         rio.Column("created_at", "Created At"),
-            #         rio.Column("is_verified", "Verified"),
-            #     ],
-            #     rows=self.users,
-            #     on_row_click=self._on_row_click,
-            # ),
-            
+            # User Management
             rio.Text(
                 "User Management",
                 style="heading2",

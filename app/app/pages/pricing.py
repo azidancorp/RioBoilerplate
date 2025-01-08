@@ -29,19 +29,19 @@ class PricingPage(rio.Component):
         """
         # Define the prices depending on the current billing cycle:
         sidekick_price = (
-            "$290 / year (2 months free)"
+            "290 Buzzcoins / year (2 months free)"
             if self.is_yearly_billing
-            else "$29 / month"
+            else "29 Buzzcoins / month"
         )
-        avenger_price = (
-            "$990 / year (2 months free)"
+        hero_price = (
+            "990 Buzzcoins / year (2 months free)"
             if self.is_yearly_billing
-            else "$99 / month"
+            else "99 Buzzcoins / month"
         )
         supernova_price = (
-            "$4,990 / year (2 months free)"
+            "4,990 Buzzcoins / year (2 months free)"
             if self.is_yearly_billing
-            else "$499 / month"
+            else "499 Buzzcoins / month"
         )
 
         return CenterComponent(
@@ -93,14 +93,14 @@ class PricingPage(rio.Component):
                             margin=2,
                         ),
                         margin=1,
-                        min_width=20,
+                        min_width=22,
                     ),
 
-                    # Tier 2 - Avenger
+                    # Tier 2 - Hero
                     rio.Card(
                         rio.Column(
                             rio.Text(
-                                "Avenger Plan",
+                                "Hero Plan",
                                 style="heading2",
                                 margin_bottom=1,
                             ),
@@ -111,7 +111,7 @@ class PricingPage(rio.Component):
                                 margin_bottom=1,
                                 overflow="wrap",
                             ),
-                            rio.Text(avenger_price, margin_bottom=2),
+                            rio.Text(hero_price, margin_bottom=2),
                             rio.Button(
                                 "Battle with Innovation",
                                 shape="rounded",
@@ -120,7 +120,7 @@ class PricingPage(rio.Component):
                             margin=2,
                         ),
                         margin=1,
-                        min_width=20,
+                        min_width=22,
                     ),
 
                     # Tier 3 - Supernova
@@ -147,7 +147,7 @@ class PricingPage(rio.Component):
                             margin=2,
                         ),
                         margin=1,
-                        min_width=20,
+                        min_width=22,
                     ),
 
                     spacing=2,

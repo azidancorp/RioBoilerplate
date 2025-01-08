@@ -1,8 +1,8 @@
 # Role hierarchy from highest to lowest
 ROLE_HIERARCHY = {
-    "user": 3,
+    "root": 1,
     "admin": 2,
-    "root": 1
+    "user": 3
 }
 
 PAGE_ROLE_MAPPING = {
@@ -12,7 +12,7 @@ PAGE_ROLE_MAPPING = {
     "/app/settings": ["root", "admin", "user"],
     "/app/enable-mfa": ["root", "admin", "user"],
     "/app/disable-mfa": ["root", "admin", "user"],
-    "/app/admin": ["root", "admin", "user"],
+    "/app/admin": ["root", "admin"],
     "/app/notifications": ["root", "admin", "user"],
 }
 

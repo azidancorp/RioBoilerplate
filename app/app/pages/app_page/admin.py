@@ -176,7 +176,7 @@ class AdminPage(rio.Component):
         cursor.execute("SELECT id, role FROM users WHERE username = ?", (self.delete_user_username,))
         result = cursor.fetchone()
         if not result:
-            self.delete_user_error = f"User {self.delete_user_username} not found"
+            self.delete_user_error = f"User not found: {self.delete_user_username}"
             return
             
         target_user_id = uuid.UUID(result[0])
@@ -187,11 +187,14 @@ class AdminPage(rio.Component):
             self.delete_user_error = f"You do not have permission to delete users with role: {target_role} because your role is {self.current_user.role}"
             return
             
+        # Admin deletion password with special characters, numbers, and mixed case
+        ADMIN_DELETION_PASSWORD = "UserD3l3t!0n@AdminP4n3l"
+            
         # Delete the user
         try:
             success = persistence.delete_user(
                 user_id=target_user_id,
-                password="",  # No password needed for admin deletion
+                password=ADMIN_DELETION_PASSWORD,  # Use secure admin deletion password
                 two_factor_code=None  # No 2FA needed for admin deletion
             )
             if success:

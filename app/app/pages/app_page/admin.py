@@ -155,7 +155,7 @@ class AdminPage(rio.Component):
         except Exception as e:
             self.change_role_error = f"Error updating role: {str(e)}"
         
-    def _on_delete_user_pressed(self) -> None:
+    def _on_delete_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """Handle the user deletion process from admin panel."""
         if not self.current_user:
             self.delete_user_error = "You must be logged in to perform this action"
@@ -301,10 +301,12 @@ class AdminPage(rio.Component):
                 rio.TextInput(
                     label="Username to Delete",
                     text=self.bind().delete_user_username,
+                    on_confirm=self._on_delete_user_pressed
                 ),
                 rio.TextInput(
                     label='Type "DELETE USER username" to confirm',
                     text=self.bind().delete_user_confirmation,
+                    on_confirm=self._on_delete_user_pressed
                 ),
                 rio.Button(
                     "Delete User",

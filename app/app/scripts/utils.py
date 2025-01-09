@@ -126,3 +126,15 @@ def get_password_strength_status(score: int) -> str:
         return 'strong'
     else:
         return 'very strong'
+
+def sanitize_input(input_str: str) -> str:
+    """
+    Sanitize input by removing any non-alphanumeric characters.
+    
+    Args:
+        input_str: The string to sanitize
+    
+    Returns:
+        str: The sanitized string containing only letters and numbers
+    """
+    return re.sub(r'[^a-zA-Z0-9]', '', input_str)

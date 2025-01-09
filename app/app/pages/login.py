@@ -15,6 +15,7 @@ from app.scripts.utils import (
     get_password_strength,
     get_password_strength_color,
     get_password_strength_status,
+    sanitize_input,
 )
 
 

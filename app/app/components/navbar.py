@@ -149,7 +149,7 @@ class Navbar(rio.Component):
         else:
             # Display the login button if the user is not logged in
             navbar_content.add(
-                NavBarLink('Login', '/login')
+                NavBarLink('Login/Signup', '/login')
             )
 
         # The navbar should appear above all other components. This is easily

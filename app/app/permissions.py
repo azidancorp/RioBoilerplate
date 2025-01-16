@@ -43,6 +43,10 @@ def check_access(current_page: str, user_role: str) -> bool:
     Returns:
         bool: True if the user has access, False otherwise
     """
+    # Root users have access to all pages
+    if user_role == "root":
+        return True
+    
     if current_page in PAGE_ROLE_MAPPING:
         allowed_roles = PAGE_ROLE_MAPPING[current_page]
         return user_role in allowed_roles

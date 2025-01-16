@@ -1,4 +1,3 @@
-from re import T
 import rio
 
 PRIMARY_COLOR = rio.Color.from_hsv(0.75, 0.5, 1)

@@ -7,6 +7,7 @@ from typing import *  # type: ignore
 import rio
 import app.theme as theme
 from app.data_models import AppUser
+from app.permissions import PAGE_ROLE_MAPPING
 
 class SideBarLink(rio.Component):
     title: str
@@ -35,7 +36,6 @@ class SideBarLink(rio.Component):
 
         # Apply styles for the active menu item.
         if self.url == f'/app/{active_page_url_segment}':
-            print("self.url", self.url)
             bg_color = theme.shade_color(theme.PRIMARY_COLOR, 0.9)
             icon_bg_color = theme.shade_color(theme.SECONDARY_COLOR, 0.9)
             text_color = theme.shade_color(theme.SECONDARY_COLOR, 0.3)
@@ -102,10 +102,9 @@ class Sidebar(rio.Component):
         """
         Build the sidebar component.
 
-        If the user is logged in, the sidebar will contain links to the home page,
-        test page, news page, about page, and contact page. If the user is not
-        logged in, the sidebar will be empty and have a width of 0, effectively
-        hiding it.
+        If the user is logged in, the sidebar will contain links based on the user's role.
+        Only links that the user has permission to access will be shown.
+        The sidebar will be empty and have a width of 0 if the user is not logged in.
 
         The height of the sidebar is fixed at 100% of the parent component's
         height. The width is fixed at 200px. The left, top, and right margins are
@@ -117,40 +116,41 @@ class Sidebar(rio.Component):
         """
         
         try:
-            self.session[AppUser]
+            user = self.session[AppUser]
             user_is_logged_in = True
+            user_role = user.role
         except KeyError:
             user_is_logged_in = False
-
+            user_role = None
             
-        # On non-app pages, no sidebar
-        # if len(self.session.active_page_instances) <= 1:
-        #     return rio.Column(
-        #         margin_left=1.5,
-        #         margin_top=2,
-        #         margin_right=2,
-        #         min_width=0,  # Shrink the sidebar when no links are shown
-        #     )
-        
         if not user_is_logged_in:
             return rio.Column(
                 min_width=0,  # Shrink the sidebar when no links are shown
             )
         
-        if user_is_logged_in:
-            return rio.Column(
-                
-                SideBarLink("Dashboard", "/app/dashboard", "dashboard"),
-                SideBarLink("Admin", "/app/admin", "admin-panel-settings"), 
-                SideBarLink("Test", "/app/test", "science"),
-                SideBarLink("News", "/app/news", "newspaper"),
-                SideBarLink("Notifications", "/app/notifications", "notifications"),
-                SideBarLink("Settings", "/app/settings", "settings"),
-                
-                align_x=0,
-                align_y=0,
-                grow_y=False,
-                margin_left=1.5,
-                margin_top=2,
-                margin_right=2,
-            )
+        # Define all possible sidebar links with their paths and icons
+        all_links = [
+            ("Dashboard", "/app/dashboard", "dashboard"),
+            ("Admin", "/app/admin", "admin-panel-settings"),
+            ("Test", "/app/test", "science"),
+            ("News", "/app/news", "newspaper"),
+            ("Notifications", "/app/notifications", "notifications"),
+            ("Settings", "/app/settings", "settings"),
+        ]
+        
+        # Filter links based on user's role
+        visible_links = [
+            SideBarLink(title, url, icon)
+            for title, url, icon in all_links
+            if url in PAGE_ROLE_MAPPING and user_role in PAGE_ROLE_MAPPING[url]
+        ]
+        
+        return rio.Column(
+            *visible_links,
+            align_x=0,
+            align_y=0,
+            grow_y=False,
+            margin_left=1.5,
+            margin_top=2,
+            margin_right=2,
+        )

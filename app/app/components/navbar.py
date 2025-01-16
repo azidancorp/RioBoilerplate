@@ -128,10 +128,6 @@ class Navbar(rio.Component):
 
         # Based on the user's status, display the appropriate buttons
         if user_is_logged_in:
-            # By placing buttons inside a `rio.Link`, we can easily
-            # make the buttons navigate to other pages without
-            # having to write an event handler. Notice how there is
-            # no Python function called when the button is clicked.
 
             navbar_content.add(
                 NavBarLink('Settings', '/app/settings')

@@ -138,8 +138,11 @@ class Sidebar(rio.Component):
             ("Settings", "/app/settings", "settings"),
         ]
         
-        # Filter links based on user's role
+        # Show all links if user is root, otherwise filter based on role
         visible_links = [
+            SideBarLink(title, url, icon)
+            for title, url, icon in all_links
+        ] if user_role == "root" else [
             SideBarLink(title, url, icon)
             for title, url, icon in all_links
             if url in PAGE_ROLE_MAPPING and user_role in PAGE_ROLE_MAPPING[url]

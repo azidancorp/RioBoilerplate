@@ -138,6 +138,19 @@ class Sidebar(rio.Component):
             ("Settings", "/app/settings", "settings"),
         ]
         
+        # Check if all sidebar URLs are defined in PAGE_ROLE_MAPPING
+        sidebar_urls = {url for _, url, _ in all_links}
+        for _, url, _ in all_links:
+            if url not in PAGE_ROLE_MAPPING:
+                import warnings
+                warnings.warn(f"Sidebar URL '{url}' is not defined in PAGE_ROLE_MAPPING", RuntimeWarning)
+        
+        # Check if all app URLs in PAGE_ROLE_MAPPING are defined in sidebar
+        for url in PAGE_ROLE_MAPPING:
+            if url.startswith("/app/") and url not in sidebar_urls and url not in {"/app/enable-mfa", "/app/disable-mfa"}:
+                import warnings
+                warnings.warn(f"PAGE_ROLE_MAPPING URL '{url}' is not defined in sidebar links", RuntimeWarning)
+        
         # Show all links if user is root, otherwise filter based on role
         visible_links = [
             SideBarLink(title, url, icon)

@@ -3,3 +3,4 @@ Any terminal commands should be written for PowerShell terminal in Windows 11, u
 Example: "git commit -am "message"; git push" should be output format of instructions to make a commit and push command in the terminal
 All plotly charts should have `update_layout(template='plotly_dark')` applied.
 Only change exactly what is required for the request, nothing more, nothing less.
+Do not use "children" as an argument in any rio component, place components directly.

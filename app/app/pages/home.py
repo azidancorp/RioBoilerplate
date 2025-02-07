@@ -19,11 +19,12 @@ class HomePage(rio.Component):
 
         return CenterComponent(
             component=rio.Column(
-                rio.Text("Welcome to the Home Page!"),
+                rio.Text("Some Amazing Description", style=rio.TextStyle(font_size=6)),
+                rio.Text("Of the Home Page", style=rio.TextStyle(font_size=6)),
                 rio.Text(
                     "Your dashboard and content will appear here.",
                 ),
             ),
-            width_percent=50,
+            width_percent=80,
             height_percent=50,
         )

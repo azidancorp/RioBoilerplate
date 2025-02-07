@@ -13,9 +13,8 @@ class CenterComponent(rio.Component):
     # y_proportions: List[int]
     
     def __post_init__(self):
-        self.width = 'grow'
-        self.height = 'grow'
-    
+        self.grow_x = True
+        self.grow_y = True
     
     def wrap_horizontally(self, component: rio.Component):
         

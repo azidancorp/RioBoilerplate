@@ -39,19 +39,29 @@ class DeltaCard(rio.Component):
         if self.delta_a is not None or self.delta_b is not None:
             delta_row = rio.Row(
                 rio.Column(
-                    rio.Text(self.delta_a_title, align_x=0),
+                    rio.Text(
+                        self.delta_a_title,
+                        align_x=0,
+                        overflow='wrap'
+                    ),
                     rio.Text(
                         format_delta(self.delta_a),
-                        style=rio.TextStyle(fill=delta_a_color)
+                        style=rio.TextStyle(fill=delta_a_color),
+                        overflow='wrap'
                     ),
                     align_y=0
                 ) if self.delta_a is not None else rio.Spacer(),
                 rio.Spacer(),
                 rio.Column(
-                    rio.Text(self.delta_b_title, align_x=1),
+                    rio.Text(
+                        self.delta_b_title,
+                        align_x=1,
+                        overflow='wrap'
+                    ),
                     rio.Text(
                         format_delta(self.delta_b),
-                        style=rio.TextStyle(fill=delta_b_color)
+                        style=rio.TextStyle(fill=delta_b_color),
+                        overflow='wrap'
                     ),
                     align_y=0
                 ) if self.delta_b is not None else rio.Spacer(),

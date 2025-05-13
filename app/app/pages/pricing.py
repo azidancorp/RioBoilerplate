@@ -6,11 +6,10 @@ from dataclasses import KW_ONLY, field
 import rio
 from app.components.center_component import CenterComponent
 
-@rio.page(
-    name="Pricing",
-    url_segment="pricing",
-)
-class PricingPage(rio.Component):
+
+
+
+class PricingPlans(rio.Component):
     """
     Pricing page showcasing a whimsical array of plans for potential customers,
     now offering both Monthly and Yearly payment cycles (with a discount).
@@ -154,6 +153,27 @@ class PricingPage(rio.Component):
                     align_x=0.5,
                 ),
             ),
+            width_percent=100,
+            margin_top=5,
+        )
+
+
+@rio.page(
+    name="Pricing",
+    url_segment="pricing",
+)
+class PricingPage(rio.Component):
+    """
+    Pricing page showcasing a whimsical array of plans for potential customers,
+    now offering both Monthly and Yearly payment cycles (with a discount).
+    """
+
+    def build(self) -> rio.Component:
+        """
+        Build the PricingPage UI with toggling between monthly and yearly pricing.
+        """
+        return CenterComponent(
+            PricingPlans(),
             width_percent=80,
             margin_top=5,
         )

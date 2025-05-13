@@ -3,13 +3,10 @@ from __future__ import annotations
 import rio
 from app.components.center_component import CenterComponent
 
-@rio.page(
-    name="FAQ",
-    url_segment="faq",
-)
-class FAQPage(rio.Component):
+
+class FAQSection(rio.Component):
     """
-    Frequently Asked Questions page with whimsical answers about our SaaS product.
+    Section for frequently asked questions with expandable answers.
     """
     
     def build(self) -> rio.Component:
@@ -91,5 +88,23 @@ class FAQPage(rio.Component):
                 spacing=2,
             ),
             # max_width=800,
+            width_percent=100,
+        )
+
+
+
+@rio.page(
+    name="FAQ",
+    url_segment="faq",
+)
+class FAQPage(rio.Component):
+    """
+    Frequently Asked Questions page with whimsical answers about our SaaS product.
+    """
+    
+    def build(self) -> rio.Component:
+        
+        return CenterComponent(
+            FAQSection(),
             width_percent=80,
         )

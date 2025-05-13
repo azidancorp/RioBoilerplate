@@ -6,9 +6,7 @@ from dataclasses import KW_ONLY
 import qrcode
 import pyotp
 import rio
-from pathlib import Path
 from rio.component_meta import C
-from datetime import datetime, timedelta
 
 from app.data_models import UserSession
 from app.persistence import Persistence
@@ -24,35 +22,14 @@ class EnableMFA(rio.Component):
 
     temporary_two_factor_secret: str = ""
     verification_code: str = ""
-    qr_code_path: Path | None = None
+    qr_code_image_bytes: bytes | None = None
     secret: str | None = None
     error_message: str = ""
 
-    def cleanup_old_qr_codes(self):
-        """Remove QR code files that are older than one hour."""
-        qr_codes_dir = Path("app/assets/mfa_qr_codes")
-        if not qr_codes_dir.exists():
-            return
-
-        one_hour_ago = datetime.now() - timedelta(hours=1)
-
-        for file_path in qr_codes_dir.glob("*.png"):
-            try:
-                # Get file creation time from the filename (YYYY-MM-DDThh-mm-ssZ format)
-                timestamp_str = file_path.stem.split("_")[0]  # Get timestamp part before underscore
-                file_time = datetime.strptime(timestamp_str, "%Y-%m-%dT%H-%M-%SZ")
-
-                if file_time < one_hour_ago:
-                    file_path.unlink()
-                    print(f"Removed old QR code: {file_path}")
-            except (ValueError, OSError) as e:
-                print(f"Error processing {file_path}: {e}")
+    # Cleanup method removed as QR codes are now generated in memory
 
     @rio.event.on_populate
     async def on_populate(self):
-        # Clean up old QR codes first
-        self.cleanup_old_qr_codes()
-
         user_session = self.session[UserSession]
         persistence = Persistence()
         user = await persistence.get_user_by_id(user_session.user_id)
@@ -60,7 +37,6 @@ class EnableMFA(rio.Component):
         # If the user already has a 2FA secret, redirect them
         if user.two_factor_secret:
             self.session.navigate_to("/app/settings")
-
         
         # create a new 2FA secret
         self.temporary_two_factor_secret = pyotp.random_base32()
@@ -71,15 +47,11 @@ class EnableMFA(rio.Component):
             issuer_name="RioBase"
         )
 
+        # Generate QR in memory
         img = qrcode.make(totp_uri)
-
-        # Generate filename with timestamp
-        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%SZ")  # Current timestamp
-        filename = f"{timestamp}_{self.temporary_two_factor_secret}.png"
-        filepath = f"app/assets/mfa_qr_codes/{filename}"  # Relative path from app root
-
-        img.save(filepath)
-        self.qr_code_path = Path(self.session.assets / "mfa_qr_codes" / filename)
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        self.qr_code_image_bytes = buffer.getvalue()
 
     def verify_totp(self) -> bool:
         totp = pyotp.TOTP(self.temporary_two_factor_secret)
@@ -98,20 +70,13 @@ class EnableMFA(rio.Component):
 
     def set_totp_secret_in_db(self, _=None):
         """
-        Persists the user's TOTP secret and cleans up the QR code.
+        Persists the user's TOTP secret.
         """
         secret = self.temporary_two_factor_secret
         user_session = self.session[UserSession]
         persistence = Persistence()
         persistence.set_2fa_secret(user_session.user_id, secret)
-
-        # Clean up the QR code image if it exists
-        if self.qr_code_path and self.qr_code_path.exists():
-            try:
-                self.qr_code_path.unlink()  # Delete the file
-            except Exception as e:
-                print(f"Failed to delete QR code image: {e}")
-
+        
         self.session.navigate_to("/app/settings")
 
     def build(self) -> rio.Component:
@@ -123,12 +88,12 @@ class EnableMFA(rio.Component):
                     rio.Text("To enable 2FA, please scan the QR code below."),
                     *(
                         [rio.Image(
-                            self.qr_code_path,
+                            self.qr_code_image_bytes,
                             fill_mode="fit",
                             min_width=20,
                             min_height=20,
                             corner_radius=2,
-                        )] if self.qr_code_path else [rio.Text("Generating QR code...")]
+                        )] if self.qr_code_image_bytes else [rio.Text("Generating QR code...")]
                     ),
                     rio.Text("Or enter the 2FA secret manually:"),
                     rio.Text(self.temporary_two_factor_secret),

@@ -3,6 +3,8 @@ import rio
 PRIMARY_COLOR = rio.Color.from_hsv(0.75, 0.5, 1)
 SECONDARY_COLOR = rio.Color.from_hsv(0.75, 1, 1)
 BACKGROUND_COLOR = rio.Color.from_hsv(0.75, 0.9, 0.15)
+BACKGROUND_COLOR_DARK = rio.Color.from_hsv(0.75, 0.9, 0.15)
+BACKGROUND_COLOR_LIGHT = rio.Color.from_hsv(0.75, 0, 1)
 
 # PRIMARY_COLOR = rio.Color.from_hsv(0.75, 0, 1)
 # SECONDARY_COLOR = rio.Color.from_hsv(0.75, 0, 1)
@@ -43,16 +45,22 @@ def shade_color(base_color: rio.Color, factor: float) -> rio.Color:
     return rio.Color.from_rgb(r, g, b, opacity)
 
 
-
-# Construct the Rio theme using our chosen colors. 
-# We trust Rio to apply them consistently throughout our app.
-THEME = rio.Theme.from_colors(
+DARK_THEME = rio.Theme.from_colors(
     primary_color=PRIMARY_COLOR,
     secondary_color=SECONDARY_COLOR,
-    background_color=BACKGROUND_COLOR,
-    neutral_color=shade_color(BACKGROUND_COLOR, 1.05),
-    hud_color=shade_color(BACKGROUND_COLOR, 1.1),
-    
-    # text_color=SECONDARY_COLOR,
+    background_color=BACKGROUND_COLOR_DARK,
+    neutral_color=shade_color(BACKGROUND_COLOR_DARK, 1.05),
+    hud_color=shade_color(BACKGROUND_COLOR_DARK, 1.1),
     mode="dark",
 )
+
+LIGHT_THEME = rio.Theme.from_colors(
+    primary_color=PRIMARY_COLOR,
+    secondary_color=SECONDARY_COLOR,
+    background_color=BACKGROUND_COLOR_LIGHT,
+    neutral_color=shade_color(BACKGROUND_COLOR_LIGHT, 1.05),
+    hud_color=shade_color(BACKGROUND_COLOR_LIGHT, 1.1),
+    mode="light",
+)
+
+# DARK_THEME = LIGHT_THEME

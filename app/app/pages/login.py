@@ -179,6 +179,7 @@ class SignUpForm(rio.Component):
     email: str = ""
     password: str = ""
     confirm_password: str = ""
+    referral_code: str = ""
     error_message: str = ""
     banner_style: str = "danger"
     is_email_valid: bool = False
@@ -236,6 +237,7 @@ class SignUpForm(rio.Component):
         user_info = AppUser.create_new_user_with_default_settings(
             username=self.email,
             password=self.password,
+            referral_code=self.referral_code,
         )
 
         # Store the user in the database
@@ -250,6 +252,7 @@ class SignUpForm(rio.Component):
         self.email = ""
         self.password = ""
         self.confirm_password = ""
+        self.referral_code = ""
         self.error_message = ""
 
         # Return to the login form
@@ -281,6 +284,10 @@ class SignUpForm(rio.Component):
     async def update_confirm_password(self, event: rio.TextInputChangeEvent):
         self.confirm_password = event.text
         self.do_passwords_match = self.password == self.confirm_password
+        self.force_refresh()
+
+    async def update_referral_code(self, event: rio.TextInputChangeEvent):
+        self.referral_code = event.text
         self.force_refresh()
 
     def password_strength_progress(self) -> rio.Component:
@@ -319,6 +326,12 @@ class SignUpForm(rio.Component):
                     on_change=self.update_confirm_password,
                     is_sensitive=True,
                     is_secret=True,
+                    on_confirm=self.on_sign_up_pressed
+                ),
+                rio.TextInput(
+                    text=self.referral_code,
+                    label="Referral Code (Optional)",
+                    on_change=self.update_referral_code,
                     on_confirm=self.on_sign_up_pressed
                 ),
                 rio.Text(

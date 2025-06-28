@@ -51,7 +51,8 @@ class Persistence:
                 password_salt BLOB NOT NULL,
                 role TEXT NOT NULL DEFAULT 'user',
                 is_verified BOOLEAN NOT NULL DEFAULT 0,
-                two_factor_secret TEXT
+                two_factor_secret TEXT,
+                referral_code TEXT DEFAULT ''
             )
         """
         )
@@ -119,8 +120,8 @@ class Persistence:
 
         cursor.execute(
             """
-            INSERT INTO users (id, username, created_at, password_hash, password_salt, role, is_verified, two_factor_secret)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO users (id, username, created_at, password_hash, password_salt, role, is_verified, two_factor_secret, referral_code)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(user.id),
@@ -131,6 +132,7 @@ class Persistence:
                 user.role,
                 user.is_verified,
                 user.two_factor_secret,
+                user.referral_code,
             ),
         )
         self.conn.commit()
@@ -170,6 +172,7 @@ class Persistence:
                 role=row[5],
                 is_verified=bool(row[6]),
                 two_factor_secret=row[7],
+                referral_code=row[8],
             )
 
         raise KeyError(username)
@@ -210,6 +213,7 @@ class Persistence:
                 role=row[5],
                 is_verified=bool(row[6]),
                 two_factor_secret=row[7],
+                referral_code=row[8],
             )
 
         raise KeyError(id)

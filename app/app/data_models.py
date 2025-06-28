@@ -55,6 +55,9 @@ class AppUser:
     password_salt: bytes
     role: str = 'user'
     is_verified: bool = False
+    
+    # The referral code used during sign-up (if any)
+    referral_code: str = ""
 
     # The secret key for two-factor authentication, None if not enabled
     two_factor_secret: str | None = None
@@ -65,10 +68,15 @@ class AppUser:
         return self.two_factor_secret is not None
 
     @classmethod
-    def create_new_user_with_default_settings(cls, username, password) -> AppUser:
+    def create_new_user_with_default_settings(cls, username, password, referral_code="") -> AppUser:
         """
         Create a new user with the given username and password, filling in
         reasonable defaults for the other fields.
+        
+        Parameters:
+            username: The username for the new user
+            password: The password for the new user
+            referral_code: Optional referral code used during sign-up
         """
 
         password_salt = os.urandom(64)
@@ -81,6 +89,7 @@ class AppUser:
             password_salt=password_salt,
             role='user',
             is_verified=False,
+            referral_code=referral_code,
         )
 
     @classmethod

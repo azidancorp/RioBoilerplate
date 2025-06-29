@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, status
 from typing import Dict, List, Optional
 import sqlite3
-from app.data.profiles_db import ProfileDatabase, init_sample_data
+from app.persistence import Persistence
 from app.validation import (
     ProfileCreateRequest,
     ProfileUpdateRequest,
@@ -12,12 +12,11 @@ from app.validation import (
 router = APIRouter()
 
 # Database dependency
-async def get_profile_db():
-    db = ProfileDatabase()
-    return db
+async def get_persistence():
+    return Persistence()
 
 @router.get("/api/profile", response_model=List[ProfileResponse])
-async def get_profiles(db: ProfileDatabase = Depends(get_profile_db)) -> List[Dict]:
+async def get_profiles(db: Persistence = Depends(get_persistence)) -> List[Dict]:
     """
     Get all user profiles
     
@@ -27,7 +26,7 @@ async def get_profiles(db: ProfileDatabase = Depends(get_profile_db)) -> List[Di
     return await db.get_profiles()
 
 @router.get("/api/profile/{user_id}", response_model=ProfileResponse)
-async def get_profile(user_id: str, db: ProfileDatabase = Depends(get_profile_db)) -> Dict:
+async def get_profile(user_id: str, db: Persistence = Depends(get_persistence)) -> Dict:
     """
     Get a user's profile by user ID with input validation
     
@@ -69,7 +68,7 @@ async def get_profile(user_id: str, db: ProfileDatabase = Depends(get_profile_db
 @router.post("/api/profile", status_code=status.HTTP_201_CREATED, response_model=ProfileResponse)
 async def create_profile(
     profile_data: ProfileCreateRequest,
-    db: ProfileDatabase = Depends(get_profile_db)
+    db: Persistence = Depends(get_persistence)
 ) -> Dict:
     """
     Create a new user profile with input validation and sanitization
@@ -118,7 +117,7 @@ async def create_profile(
 async def update_profile(
     user_id: str,
     profile_data: ProfileUpdateRequest,
-    db: ProfileDatabase = Depends(get_profile_db)
+    db: Persistence = Depends(get_persistence)
 ) -> Dict:
     """
     Update a user's profile with input validation and sanitization
@@ -188,7 +187,7 @@ async def update_profile(
 @router.delete("/api/profile/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_profile(
     user_id: str,
-    db: ProfileDatabase = Depends(get_profile_db)
+    db: Persistence = Depends(get_persistence)
 ) -> None:
     """
     Delete a user's profile with input validation
@@ -222,8 +221,3 @@ async def delete_profile(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Profile for user {sanitized_user_id} not found"
         )
-
-# Initialize sample data on startup
-@router.on_event("startup")
-async def startup_event():
-    await init_sample_data()

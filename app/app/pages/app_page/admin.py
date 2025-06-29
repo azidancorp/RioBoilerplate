@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import KW_ONLY, field
+import os
 import typing as t
 from datetime import datetime, timezone
 import uuid
@@ -37,7 +38,9 @@ class AdminPage(rio.Component):
     # User deletion fields
     delete_user_username: str = ""
     delete_user_confirmation: str = ""
+    delete_user_password: str = ""
     delete_user_error: str = ""
+    delete_user_success: str = ""
     
     @rio.event.on_populate
     def on_populate(self):
@@ -187,27 +190,48 @@ class AdminPage(rio.Component):
             self.delete_user_error = f"You do not have permission to delete users with role: {target_role} because your role is {self.current_user.role}"
             return
             
-        # Admin deletion password with special characters, numbers, and mixed case
-        ADMIN_DELETION_PASSWORD = "UserD3l3t!0n@AdminP4n3l"
+        # Validate admin deletion password
+        if not self.delete_user_password or self.delete_user_password == "":
+            self.delete_user_error = "Please enter the admin deletion password"
+            return
             
+        # Check admin deletion password against environment variable
+        ADMIN_DELETION_PASSWORD = os.getenv('ADMIN_DELETION_PASSWORD')
+        if ADMIN_DELETION_PASSWORD is None:
+            self.delete_user_error = "ADMIN_DELETION_PASSWORD environment variable is not set. Please configure your environment variables."
+            return
+            
+        if self.delete_user_password != ADMIN_DELETION_PASSWORD:
+            self.delete_user_error = "Incorrect admin deletion password"
+            self.delete_user_success = ""
+            return
+            
+        # Store username for success message
+        username_to_delete = self.delete_user_username
+        
         # Delete the user
         try:
             success = persistence.delete_user(
                 user_id=target_user_id,
-                password=ADMIN_DELETION_PASSWORD,  # Use secure admin deletion password
+                password=self.delete_user_password,  # Use entered admin deletion password
                 two_factor_code=None  # No 2FA needed for admin deletion
             )
             if success:
+                # Set success message
+                self.delete_user_success = f"User '{username_to_delete}' has been successfully deleted"
                 # Clear the fields
                 self.delete_user_username = ""
                 self.delete_user_confirmation = ""
+                self.delete_user_password = ""
                 self.delete_user_error = ""
                 # Refresh the page to show updated user list
                 self.on_populate()
             else:
                 self.delete_user_error = "Failed to delete user"
+                self.delete_user_success = ""
         except Exception as e:
             self.delete_user_error = f"Error deleting user: {str(e)}"
+            self.delete_user_success = ""
     
     def build(self) -> rio.Component:
         if not self.current_user or self.df is None:
@@ -308,20 +332,32 @@ class AdminPage(rio.Component):
                     text=self.bind().delete_user_confirmation,
                     on_confirm=self._on_delete_user_pressed
                 ),
+                rio.TextInput(
+                    label="Admin Deletion Password",
+                    text=self.bind().delete_user_password,
+                    is_secret=True,
+                    on_confirm=self._on_delete_user_pressed
+                ),
                 rio.Button(
                     "Delete User",
                     on_press=self._on_delete_user_pressed,
                     shape="rounded",
                 ),
                 spacing=1,
-                proportions=[1, 1, 1],
+                proportions=[1, 1, 1, 1],
             ),
+            
+            rio.Banner(
+                text=self.delete_user_success,
+                style="success",
+                margin_top=1,
+            ) if self.delete_user_success else rio.Spacer(),
             
             rio.Banner(
                 text=self.delete_user_error,
                 style="danger",
                 margin_top=1,
-            ),
+            ) if self.delete_user_error else rio.Spacer(),
             
             align_x=0.5,
             min_width=80,

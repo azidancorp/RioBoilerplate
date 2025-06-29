@@ -193,6 +193,8 @@ source venv/bin/activate
 cd app
 
 # Test application locally
+# Note: --release flag enables production optimizations (faster performance, 
+# lower memory usage, and additional safety checks)
 rio run --port 8000 --release
 
 # Verify it's working (from another terminal or check logs)
@@ -247,6 +249,7 @@ After=network.target
 
 [Service]
 WorkingDirectory=/root/[APP_NAME]/app
+# --release flag provides production optimizations and safety checks
 ExecStart=/root/[APP_NAME]/venv/bin/rio run --port 8000 --release
 Restart=always
 
@@ -292,7 +295,12 @@ Created symlink '/etc/systemd/system/multi-user.target.wants/[APP_NAME].service'
 
 ## Step 6: Configure Nginx Reverse Proxy
 
-Create Nginx configuration for your domain:
+Create Nginx configuration for your domain. This reverse proxy setup provides security benefits by:
+- Keeping the Rio application private (only accessible locally)
+- Handling SSL termination and HTTPS traffic
+- Providing additional security headers and request filtering
+- Enabling load balancing and caching if needed
+
 
 ```bash
 # Create Nginx site configuration

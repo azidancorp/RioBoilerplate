@@ -3,6 +3,10 @@ from __future__ import annotations
 import typing as t
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 import rio
 
@@ -86,3 +90,4 @@ fastapi_app = app.as_fastapi()
 
 fastapi_app.include_router(example_router)
 fastapi_app.include_router(profile_router)
+

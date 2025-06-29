@@ -1,3 +1,4 @@
+import os
 import secrets
 import sqlite3
 import uuid
@@ -28,10 +29,52 @@ class Persistence:
         """
         Initialize the Persistence instance and ensure necessary tables exist.
         """
-        self.conn = sqlite3.connect(db_path)
+        self.db_path = db_path
+        self.conn = None
+        self._ensure_connection()
         self._create_user_table()  # Ensure the users table exists
         self._create_session_table()  # Ensure the sessions table exists
         self._create_reset_codes_table()  # Ensure the reset codes table exists
+
+    def _ensure_connection(self) -> None:
+        """
+        Ensure database connection is active. Reconnect if needed.
+        """
+        if self.conn is None:
+            self.conn = sqlite3.connect(self.db_path)
+            
+    def _get_cursor(self):
+        """
+        Get a database cursor, ensuring connection is active.
+        """
+        self._ensure_connection()
+        return self.conn.cursor()
+        
+    def close(self) -> None:
+        """
+        Close the database connection.
+        """
+        if self.conn:
+            self.conn.close()
+            self.conn = None
+            
+    def __del__(self) -> None:
+        """
+        Cleanup method to ensure connection is closed when object is destroyed.
+        """
+        self.close()
+        
+    def __enter__(self):
+        """
+        Context manager entry.
+        """
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Context manager exit - close connection.
+        """
+        self.close()
 
     def _create_user_table(self) -> None:
         """
@@ -39,7 +82,7 @@ class Persistence:
         stores user information including id, username, timestamps, and password
         data.
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
 
         cursor.execute(
             """
@@ -64,7 +107,7 @@ class Persistence:
         The table stores session information including session id, user id, and
         timestamps.
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
 
         cursor.execute(
             """
@@ -85,7 +128,7 @@ class Persistence:
         Create the 'password_reset_codes' table in the database if it does not exist.
         The table stores reset codes that allow users to reset their passwords.
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
 
         cursor.execute(
             """
@@ -108,7 +151,7 @@ class Persistence:
 
         `user`: The user object containing user details.
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         
         # Check if this is the first user
         cursor.execute("SELECT COUNT(*) FROM users")
@@ -154,7 +197,7 @@ class Persistence:
 
         `KeyError`: If there is no user with the specified username.
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         cursor.execute(
             "SELECT * FROM users WHERE username = ? LIMIT 1",
             (username,),
@@ -194,7 +237,7 @@ class Persistence:
 
         `KeyError`: If there is no user with the specified ID.
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
 
         cursor.execute(
             "SELECT * FROM users WHERE id = ? LIMIT 1",
@@ -241,7 +284,7 @@ class Persistence:
             role=user.role
         )
 
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         cursor.execute(
             """
             INSERT INTO user_sessions (id, user_id, created_at, valid_until, role)
@@ -277,7 +320,7 @@ class Persistence:
         """
         session.valid_until = new_valid_until
 
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
 
         cursor.execute(
             """
@@ -309,7 +352,7 @@ class Persistence:
         `KeyError`: If there is no session with the specified authentication
         token.
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
 
         cursor.execute(
             "SELECT id, user_id, created_at, valid_until, role FROM user_sessions WHERE id = ? ORDER BY created_at LIMIT 1",
@@ -332,7 +375,7 @@ class Persistence:
 
     def verify_2fa(self, user_id: uuid.UUID, token: str) -> bool:
         """Verify a 2FA token for a user."""
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         cursor.execute(
             "SELECT two_factor_secret FROM users WHERE id = ? AND two_factor_secret IS NOT NULL",
             (str(user_id),)
@@ -348,7 +391,7 @@ class Persistence:
 
     def is_2fa_enabled(self, user_id: uuid.UUID) -> bool:
         """Check if 2FA is enabled for a user."""
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         cursor.execute("SELECT two_factor_secret FROM users WHERE id = ?", (str(user_id),))
         result = cursor.fetchone()
         return bool(result and result[0])
@@ -357,7 +400,7 @@ class Persistence:
         """Enable or Disable 2FA for a user.
         Set to str if enabling, or to None if disabling
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         cursor.execute(
             "UPDATE users SET two_factor_secret = ? WHERE id = ?",
             (secret, str(user_id)),
@@ -376,7 +419,7 @@ class Persistence:
 
         `user_id`: The UUID of the user whose sessions to invalidate.
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         now = datetime.now(timezone.utc).timestamp()
 
         cursor.execute(
@@ -402,7 +445,7 @@ class Persistence:
         
         `KeyError`: If the user does not exist
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         
         # First verify the user exists
         await self.get_user_by_id(user_id)  # Will raise KeyError if user doesn't exist
@@ -448,7 +491,7 @@ class Persistence:
         reset_code = PasswordResetCode.create_new_reset_code(user_id)
         
         # Store it in the database
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         cursor.execute(
             """
             INSERT INTO password_reset_codes (code, user_id, created_at, valid_until)
@@ -481,7 +524,7 @@ class Persistence:
         
         `KeyError`: If the code is invalid, expired, or the associated user doesn't exist
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         
         # Get the reset code entry
         cursor.execute(
@@ -513,7 +556,7 @@ class Persistence:
         
         `user_id`: The UUID of the user whose reset codes to clear
         """
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         cursor.execute(
             "DELETE FROM password_reset_codes WHERE user_id = ?",
             (str(user_id),)
@@ -544,14 +587,16 @@ class Persistence:
         except KeyError:
             return False
             
-        # Admin deletion password with special characters, numbers, and mixed case
-        ADMIN_DELETION_PASSWORD = "UserD3l3t!0n@AdminP4n3l"
+        # Admin deletion password from environment variable
+        ADMIN_DELETION_PASSWORD = os.getenv('ADMIN_DELETION_PASSWORD')
+        if ADMIN_DELETION_PASSWORD is None:
+            raise ValueError("ADMIN_DELETION_PASSWORD environment variable is not set. Please set it in your .env file or environment.")
         
         # For admin deletion, verify the admin deletion password
         if password != ADMIN_DELETION_PASSWORD:
             return False
             
-        cursor = self.conn.cursor()
+        cursor = self._get_cursor()
         
         # First delete all sessions first (due to foreign key constraint)
         cursor.execute(

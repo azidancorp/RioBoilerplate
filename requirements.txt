@@ -1,8 +1,10 @@
-rio-ui
+rio-ui==0.10.9
 qrcode[pil]
 pillow
 pyotp
+python-dotenv
 numpy
 pandas
 plotly
+pydantic[email]
 matplotlib

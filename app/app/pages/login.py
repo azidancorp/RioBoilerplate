@@ -155,7 +155,7 @@ class LoginForm(rio.Component):
                         shape='rounded',
                     ),
                     rio.Button(
-                        "Forgot Password?",
+                        "Reset Password",
                         on_press=self.on_reset_password_button_pressed,
                         shape='rounded',
                     ),
@@ -406,7 +406,7 @@ class ResetPasswordForm(rio.Component):
                 "A password reset link has been sent to your email (simulated)."
             )
         except KeyError:
-            banner_style = "danger"
+            self.banner_style = "danger"
             self.error_message = (
                 "No account found with that username or email. Please try again."
             )

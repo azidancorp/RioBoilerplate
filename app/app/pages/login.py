@@ -15,8 +15,8 @@ from app.scripts.utils import (
     get_password_strength,
     get_password_strength_color,
     get_password_strength_status,
-    sanitize_input,
 )
+from app.validation import SecuritySanitizer
 
 
 def guard(event: rio.GuardEvent) -> str | None:
@@ -267,8 +267,14 @@ class SignUpForm(rio.Component):
             self.on_toggle_form("login")
 
     def validate_email(self, email: str):
-        email_regex = r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)"
-        self.is_email_valid = bool(email and re.match(email_regex, email))
+        try:
+            if email:
+                SecuritySanitizer.validate_email_format(email)
+                self.is_email_valid = True
+            else:
+                self.is_email_valid = False
+        except Exception:
+            self.is_email_valid = False
 
     async def update_email(self, event: rio.TextInputChangeEvent):
         self.email = event.text

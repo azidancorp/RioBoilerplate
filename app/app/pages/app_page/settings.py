@@ -12,6 +12,7 @@ from app.scripts.utils import (
     get_password_strength_color,
     get_password_strength_status,
 )
+from app.validation import SecuritySanitizer
 
 
 @rio.page(
@@ -103,11 +104,22 @@ class Settings(rio.Component):
                 self.error_message = "Current password is incorrect"
                 return
                 
-            # Check 2FA if enabled
+            # Validate and sanitize 2FA code if provided
             if user.two_factor_enabled:
                 if not self.change_password_2fa:
                     self.error_message = "2FA code is required"
                     return
+                
+                try:
+                    sanitized_2fa = SecuritySanitizer.sanitize_string(self.change_password_2fa, 6)
+                    if not sanitized_2fa:
+                        self.error_message = "Invalid 2FA code format"
+                        return
+                    self.change_password_2fa = sanitized_2fa
+                except Exception:
+                    self.error_message = "Invalid 2FA code format"
+                    return
+                    
                 if not persistence.verify_2fa(user_session.user_id, self.change_password_2fa):
                     self.error_message = "Invalid 2FA code"
                     return
@@ -132,9 +144,27 @@ class Settings(rio.Component):
 
     async def _on_delete_account_pressed(self) -> None:
         """Handle the account deletion process."""
-        if self.delete_account_confirmation != "DELETE MY ACCOUNT":
-            self.delete_account_error = "Please type 'DELETE MY ACCOUNT' exactly to confirm deletion"
+        # Validate confirmation text
+        try:
+            sanitized_confirmation = SecuritySanitizer.sanitize_string(self.delete_account_confirmation, 50)
+            if sanitized_confirmation != "DELETE MY ACCOUNT":
+                self.delete_account_error = "Please type 'DELETE MY ACCOUNT' exactly to confirm deletion"
+                return
+        except Exception:
+            self.delete_account_error = "Invalid confirmation text"
             return
+
+        # Validate 2FA code if provided
+        if self.two_factor_enabled and self.delete_account_2fa:
+            try:
+                sanitized_2fa = SecuritySanitizer.sanitize_string(self.delete_account_2fa, 6)
+                if not sanitized_2fa:
+                    self.delete_account_error = "Invalid 2FA code format"
+                    return
+                self.delete_account_2fa = sanitized_2fa
+            except Exception:
+                self.delete_account_error = "Invalid 2FA code format"
+                return
 
         user_session = self.session[UserSession]
         persistence = Persistence()

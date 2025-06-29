@@ -12,6 +12,7 @@ from app.scripts.utils import (
     get_password_strength_color,
     get_password_strength_status,
 )
+from app.validation import SecuritySanitizer
 
 @rio.page(
     name="Reset Password",
@@ -40,6 +41,20 @@ class ResetPasswordPage(rio.Component):
         """
         if not self.reset_code or not self.new_password or not self.confirm_password:
             self.error_message = "Please fill out all fields."
+            return
+
+        # Validate and sanitize reset code
+        try:
+            sanitized_reset_code = SecuritySanitizer.sanitize_string(self.reset_code, 100)
+            if not sanitized_reset_code:
+                self.error_message = "Invalid reset code format."
+                return
+            
+            # Update the reset code with sanitized value
+            self.reset_code = sanitized_reset_code
+            
+        except Exception:
+            self.error_message = "Invalid reset code format."
             return
 
         # Check if the passwords match

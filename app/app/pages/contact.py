@@ -6,6 +6,7 @@ import re
 
 import rio
 from app.components.center_component import CenterComponent
+from app.validation import SecuritySanitizer
 
 @rio.page(
     name="ContactPage",
@@ -23,22 +24,42 @@ class ContactPage(rio.Component):
     banner_style: str = "danger"
 
     def on_submit_pressed(self):
-        # Validate the name, email, and message
-        if not self.name or not self.email or not self.message:
-            self.error_message = "Please fill in all fields."
-            self.banner_style = "danger"
-            return
+        # Validate and sanitize inputs
+        try:
+            # Sanitize name
+            sanitized_name = SecuritySanitizer.sanitize_string(self.name, 100)
+            if not sanitized_name:
+                self.error_message = "Please enter a valid name."
+                self.banner_style = "danger"
+                return
 
-        # Validate the email format
-        pattern = r"[^@]+@[^@]+\.[^@]+"
-        if not re.match(pattern, self.email):
-            self.error_message = "Invalid email format."
-            self.banner_style = "danger"
-            return
+            # Validate email format
+            if not self.email:
+                self.error_message = "Please enter an email address."
+                self.banner_style = "danger"
+                return
+            
+            sanitized_email = SecuritySanitizer.validate_email_format(self.email)
 
-        # If everything is correct, rejoice!
-        self.banner_style = "success"
-        self.error_message = "Your message has been sent successfully!"
+            # Sanitize message
+            sanitized_message = SecuritySanitizer.sanitize_string(self.message, 10000)
+            if not sanitized_message:
+                self.error_message = "Please enter a valid message."
+                self.banner_style = "danger"
+                return
+
+            # Update form fields with sanitized values
+            self.name = sanitized_name
+            self.email = sanitized_email
+            self.message = sanitized_message
+
+            # If everything is correct, rejoice!
+            self.banner_style = "success"
+            self.error_message = "Your message has been sent successfully!"
+
+        except Exception as e:
+            self.error_message = "Invalid input. Please check your entries and try again."
+            self.banner_style = "danger"
 
     def build(self) -> rio.Component:
         return rio.Column(

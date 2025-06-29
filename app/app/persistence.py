@@ -26,7 +26,7 @@ class Persistence:
     `db_path`: Path to the SQLite database file
     """
 
-    def __init__(self, db_path: Path = Path("app", "data", "users.db")) -> None:
+    def __init__(self, db_path: Path = Path("app", "data", "app.db")) -> None:
         """
         Initialize the Persistence instance and ensure necessary tables exist.
         """

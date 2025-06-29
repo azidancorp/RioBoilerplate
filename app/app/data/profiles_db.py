@@ -18,9 +18,51 @@ class ProfileDatabase:
         """
         Initialize the ProfilesDatabase instance and ensure necessary tables exist.
         """
-        self.conn = sqlite3.connect(db_path)
+        self.db_path = db_path
+        self.conn = None
+        self._ensure_connection()
         self._create_profiles_table()
         
+    def _ensure_connection(self) -> None:
+        """
+        Ensure database connection is active. Reconnect if needed.
+        """
+        if self.conn is None:
+            self.conn = sqlite3.connect(self.db_path)
+            
+    def _get_cursor(self):
+        """
+        Get a database cursor, ensuring connection is active.
+        """
+        self._ensure_connection()
+        return self.conn.cursor()
+        
+    def close(self) -> None:
+        """
+        Close the database connection.
+        """
+        if self.conn:
+            self.conn.close()
+            self.conn = None
+            
+    def __del__(self) -> None:
+        """
+        Cleanup method to ensure connection is closed when object is destroyed.
+        """
+        self.close()
+        
+    def __enter__(self):
+        """
+        Context manager entry.
+        """
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Context manager exit - close connection.
+        """
+        self.close()
+
     def _create_profiles_table(self) -> None:
         """
         Create the 'profiles' table in the database if it does not exist.
@@ -294,7 +336,7 @@ async def init_sample_data():
     
     # Add some sample profiles if the table is empty
     cursor = db.conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM profile")
+    cursor.execute("SELECT COUNT(*) FROM profiles")
     count = cursor.fetchone()[0]
     
     if count == 0:

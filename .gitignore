@@ -180,3 +180,6 @@ server_sync.py
 move_files.py
 remove_interactive_examples.py
 split_documentation.py
+
+.claude
+scraped rio docs.zip

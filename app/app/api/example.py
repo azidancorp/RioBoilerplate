@@ -1,6 +1,11 @@
-from fastapi import APIRouter, HTTPException, Depends, Body
+from fastapi import APIRouter, HTTPException, Depends, status
 from typing import Dict, List, Optional
 from app.data.items_db import ItemsDatabase, init_sample_data
+from app.validation import (
+    ItemCreateRequest, 
+    ItemUpdateRequest, 
+    ItemResponse
+)
 
 router = APIRouter()
 
@@ -13,7 +18,7 @@ async def get_items_db():
 def test_route():
     return {"message": "Hello, World!"}
 
-@router.get("/api/items/{item_id}")
+@router.get("/api/items/{item_id}", response_model=ItemResponse)
 async def get_item(item_id: int, db: ItemsDatabase = Depends(get_items_db)) -> Dict:
     """
     Get item details by ID
@@ -30,11 +35,14 @@ async def get_item(item_id: int, db: ItemsDatabase = Depends(get_items_db)) -> D
     item = await db.get_item(item_id)
     
     if item is None:
-        raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Item {item_id} not found"
+        )
         
     return item
 
-@router.get("/api/items")
+@router.get("/api/items", response_model=List[ItemResponse])
 async def get_items(db: ItemsDatabase = Depends(get_items_db)) -> List[Dict]:
     """
     Get all items
@@ -44,66 +52,84 @@ async def get_items(db: ItemsDatabase = Depends(get_items_db)) -> List[Dict]:
     """
     return await db.get_all_items()
 
-@router.post("/api/items")
+@router.post("/api/items", status_code=status.HTTP_201_CREATED, response_model=ItemResponse)
 async def create_item(
-    name: str = Body(...), 
-    description: Optional[str] = Body(None), 
-    price: Optional[float] = Body(None),
+    item_data: ItemCreateRequest,
     db: ItemsDatabase = Depends(get_items_db)
 ) -> Dict:
     """
-    Create a new item
+    Create a new item with input validation and sanitization
     
     Args:
-        name (str): Name of the item
-        description (str, optional): Description of the item
-        price (float, optional): Price of the item
+        item_data: Validated item data from request body
         
     Returns:
         Dict: Created item details
+        
+    Raises:
+        HTTPException: If validation fails or item creation fails
     """
-    return await db.create_item(name, description, price)
+    try:
+        return await db.create_item(
+            item_data.name, 
+            item_data.description, 
+            item_data.price
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create item: {str(e)}"
+        )
 
-@router.put("/api/items/{item_id}")
+@router.put("/api/items/{item_id}", response_model=ItemResponse)
 async def update_item(
     item_id: int,
-    name: Optional[str] = Body(None),
-    description: Optional[str] = Body(None),
-    price: Optional[float] = Body(None),
+    item_data: ItemUpdateRequest,
     db: ItemsDatabase = Depends(get_items_db)
 ) -> Dict:
     """
-    Update an existing item
+    Update an existing item with input validation and sanitization
     
     Args:
-        item_id (int): ID of the item to update
-        name (str, optional): New name for the item
-        description (str, optional): New description for the item
-        price (float, optional): New price for the item
+        item_id: ID of the item to update
+        item_data: Validated item update data from request body
         
     Returns:
         Dict: Updated item details
         
     Raises:
-        HTTPException: If the item is not found
+        HTTPException: If the item is not found or validation fails
     """
-    updated_item = await db.update_item(item_id, name, description, price)
-    
-    if updated_item is None:
-        raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+    try:
+        updated_item = await db.update_item(
+            item_id, 
+            item_data.name, 
+            item_data.description, 
+            item_data.price
+        )
         
-    return updated_item
+        if updated_item is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail=f"Item {item_id} not found"
+            )
+            
+        return updated_item
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update item: {str(e)}"
+        )
 
-@router.delete("/api/items/{item_id}")
-async def delete_item(item_id: int, db: ItemsDatabase = Depends(get_items_db)) -> Dict:
+@router.delete("/api/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_item(item_id: int, db: ItemsDatabase = Depends(get_items_db)) -> None:
     """
     Delete an item
     
     Args:
-        item_id (int): ID of the item to delete
-        
-    Returns:
-        Dict: Success message
+        item_id: ID of the item to delete
         
     Raises:
         HTTPException: If the item is not found
@@ -111,9 +137,10 @@ async def delete_item(item_id: int, db: ItemsDatabase = Depends(get_items_db)) -
     success = await db.delete_item(item_id)
     
     if not success:
-        raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
-        
-    return {"message": f"Item {item_id} deleted successfully"}
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Item {item_id} not found"
+        )
 
 # Initialize sample data
 @router.on_event("startup")

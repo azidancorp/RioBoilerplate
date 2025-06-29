@@ -5,8 +5,10 @@ from dataclasses import KW_ONLY, field
 
 from app.components.center_component import CenterComponent
 from app.components.testimonial import Testimonial
+from app.scripts.utils import load_from_html
 from app.pages.pricing import PricingPlans
 from app.pages.faq import FAQSection
+
 import rio
 
 
@@ -275,6 +277,17 @@ class CallToActionSection(rio.Component):
         )
 
 
+class ExampleJSPage(rio.Component):
+    def build(self) -> rio.Component:
+        return rio.Column(
+            rio.Text("Example JS Page"),
+            rio.Webview(
+                content=load_from_html("JSPages/test.html")
+            ),
+            spacing=2,
+        )
+
+
 @rio.page(
     name="Home",
     url_segment="",
@@ -291,6 +304,7 @@ class HomePage(rio.Component):
                 NewWaySection(),
                 SocialProofSection(),
                 CallToActionSection(),
+                ExampleJSPage(),
                 spacing=8,
             ),
             width_percent=80,

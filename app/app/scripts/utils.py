@@ -127,3 +127,41 @@ def get_password_strength_status(score: int) -> str:
     else:
         return 'very strong'
 
+def load_from_html(html_path):
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+    
+    # Find and load CSS files
+    import re
+    import os
+    
+    # Get the directory of the HTML file
+    dir_path = os.path.dirname(html_path)
+    
+    # Find CSS references
+    css_refs = re.findall(r'<link.*?href=["\'](.*?\.css)["\']', html_content)
+    for css_ref in css_refs:
+        css_path = os.path.join(dir_path, css_ref)
+        if os.path.exists(css_path):
+            with open(css_path, "r", encoding="utf-8") as css_file:
+                css_content = css_file.read()
+                # Replace link with inline style
+                html_content = html_content.replace(
+                    f'<link rel="stylesheet" href="{css_ref}">', 
+                    f'<style>\n{css_content}\n</style>'
+                )
+    
+    # Find JS references
+    js_refs = re.findall(r'<script.*?src=["\'](.*?\.js)["\'].*?</script>', html_content)
+    for js_ref in js_refs:
+        js_path = os.path.join(dir_path, js_ref)
+        if os.path.exists(js_path):
+            with open(js_path, "r", encoding="utf-8") as js_file:
+                js_content = js_file.read()
+                # Replace script src with inline script
+                html_content = html_content.replace(
+                    f'<script src="{js_ref}"></script>', 
+                    f'<script>\n{js_content}\n</script>'
+                )
+    
+    return html_content

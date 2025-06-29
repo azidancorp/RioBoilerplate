@@ -20,8 +20,6 @@ MAX_PHONE_LENGTH = 20
 MAX_ADDRESS_LENGTH = 500
 MAX_BIO_LENGTH = 2000
 MAX_URL_LENGTH = 2048
-MIN_PRICE = 0.0
-MAX_PRICE = 999999.99
 
 
 class SecuritySanitizer:
@@ -199,49 +197,6 @@ class SecuritySanitizer:
 
 # Pydantic Models for Request Validation
 
-class ItemCreateRequest(BaseModel):
-    """Request model for creating a new item."""
-    
-    name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH, description="Name of the item")
-    description: Optional[str] = Field(None, max_length=MAX_STRING_LENGTH, description="Description of the item")
-    price: Optional[float] = Field(None, ge=MIN_PRICE, le=MAX_PRICE, description="Price of the item")
-    
-    @validator('name')
-    def validate_name(cls, v):
-        return SecuritySanitizer.sanitize_string(v, MAX_NAME_LENGTH)
-    
-    @validator('description')
-    def validate_description(cls, v):
-        return SecuritySanitizer.sanitize_string(v, MAX_STRING_LENGTH)
-    
-    @validator('price')
-    def validate_price(cls, v):
-        if v is not None and (v < MIN_PRICE or v > MAX_PRICE):
-            raise ValueError(f'Price must be between {MIN_PRICE} and {MAX_PRICE}')
-        return v
-
-
-class ItemUpdateRequest(BaseModel):
-    """Request model for updating an existing item."""
-    
-    name: Optional[str] = Field(None, min_length=1, max_length=MAX_NAME_LENGTH, description="New name for the item")
-    description: Optional[str] = Field(None, max_length=MAX_STRING_LENGTH, description="New description for the item")
-    price: Optional[float] = Field(None, ge=MIN_PRICE, le=MAX_PRICE, description="New price for the item")
-    
-    @validator('name')
-    def validate_name(cls, v):
-        return SecuritySanitizer.sanitize_string(v, MAX_NAME_LENGTH) if v is not None else None
-    
-    @validator('description')
-    def validate_description(cls, v):
-        return SecuritySanitizer.sanitize_string(v, MAX_STRING_LENGTH) if v is not None else None
-    
-    @validator('price')
-    def validate_price(cls, v):
-        if v is not None and (v < MIN_PRICE or v > MAX_PRICE):
-            raise ValueError(f'Price must be between {MIN_PRICE} and {MAX_PRICE}')
-        return v
-
 
 class ProfileCreateRequest(BaseModel):
     """Request model for creating a new user profile."""
@@ -322,15 +277,6 @@ class ProfileUpdateRequest(BaseModel):
 
 
 # Response Models for API documentation
-
-class ItemResponse(BaseModel):
-    """Response model for item data."""
-    
-    id: int
-    name: str
-    description: Optional[str]
-    price: Optional[float]
-
 
 class ProfileResponse(BaseModel):
     """Response model for profile data."""

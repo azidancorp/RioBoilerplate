@@ -93,7 +93,15 @@ class SecuritySanitizer:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Email too long. Maximum length is {MAX_EMAIL_LENGTH} characters."
             )
-        
+            
+        # Basic email format validation using regex
+        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_regex, email):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid email format. Must be a valid email address."
+            )
+            
         # Check for suspicious patterns
         suspicious_patterns = [
             r'javascript:', r'data:', r'vbscript:', r'onload=', r'onerror='

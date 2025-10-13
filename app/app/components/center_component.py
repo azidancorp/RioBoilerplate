@@ -5,6 +5,39 @@ import typing as t
 import rio
 
 
+# ● The issue with center_component.py is a variable scoping problem:
+
+#   Problem:
+
+#   The wrap_horizontally() and wrap_vertically() methods (lines 25 and 35) reference self.x_proportions and self.y_proportions, but     
+#   these attributes are only created in the build() method (lines 40-41).
+
+#   Issue Details:
+
+#   def wrap_horizontally(self, component: rio.Component):
+#       return rio.Row(
+#           rio.Spacer(),
+#           component,
+#           rio.Spacer(),
+#           proportions=self.x_proportions,  # ❌ AttributeError: 'CenterComponent' object has no attribute 'x_proportions'
+#           grow_x=True,
+#       )
+
+#   The variables self.x_proportions and self.y_proportions don't exist when wrap_horizontally() or wrap_vertically() are called,        
+#   since they're only defined inside the build() method.
+
+#   Why This Causes Runtime Errors:
+
+#   1. If wrap_horizontally() or wrap_vertically() are called before build(), it will raise an AttributeError
+#   2. Even if called after build(), it's poor design since the methods depend on internal state created elsewhere
+
+#   The Fix:
+
+#   The proportions calculation should be moved to the methods themselves or made into proper instance attributes. The methods should    
+#    compute the proportions they need rather than depending on externally set attributes.
+
+#   This is definitely a bug that would cause runtime failures if these wrapper methods are called independently.
+
 class CenterComponent(rio.Component):
     component: rio.Component
     width_percent: int = 100

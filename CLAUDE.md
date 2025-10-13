@@ -12,7 +12,7 @@ This is a Rio-based web application boilerplate built on the authentication temp
 - `Persistence` class (`app/persistence.py`) - Handles all database operations including profiles
 - `UserSession` and `AppUser` models (`app/data_models.py`) - Core data structures
 - Session validation in `on_session_start()` (`app/__init__.py`) - Auto-login via stored tokens
-- MFA support with TOTP using `pyotp` library (codes stored in memory)
+- MFA support with TOTP using `pyotp` library (secrets stored in database)
 - Role-based access control with hierarchical permissions (root > admin > user)
 - Referral code support for user onboarding
 
@@ -88,7 +88,7 @@ The application uses SQLite with these main tables in `app.db`:
 - `users` - User accounts with password hashes, MFA secrets, roles, referral codes
 - `user_sessions` - Authentication sessions with expiration and role information
 - `password_reset_codes` - Temporary password reset tokens
-- `profiles` - User profile information (full_name, email, phone, address, bio, avatar_url)
+- `profiles` - User profile information (id, user_id, full_name, email, phone, address, bio, avatar_url, created_at, updated_at)
 
 Profile Management:
 - One-to-one mapping between users and profiles
@@ -103,6 +103,9 @@ Core dependencies include:
 - `qrcode[pil]`, `pillow` - QR code generation for MFA
 - `pyotp` - TOTP implementation for 2FA
 - `numpy`, `pandas`, `plotly`, `matplotlib` - Data visualization
+- `fastapi` - API framework for REST endpoints
+- `pydantic` - Data validation and settings management
+- `python-dotenv` - Environment variable management
 
 ## Security Features
 
@@ -118,7 +121,7 @@ Core dependencies include:
 
 **Authentication Security**:
 - Session management with automatic expiration
-- 2FA integration with in-memory code storage
+- 2FA integration with database-stored secrets
 - Password strength validation and automatic session invalidation on changes
 - Secure password reset flow with time-limited codes
 
@@ -131,6 +134,45 @@ Core dependencies include:
 
 Required environment variables (see `.env.example`):
 - `ADMIN_DELETION_PASSWORD` - Secure password for administrative user deletion operations
+
+## API Documentation
+
+**Profile Management API** (`app/api/profiles.py`):
+- `GET /api/profile` - Get all user profiles
+- `GET /api/profile/{user_id}` - Get specific user profile
+- `POST /api/profile` - Create new user profile
+- `PUT /api/profile/{user_id}` - Update user profile
+- `DELETE /api/profile/{user_id}` - Delete user profile
+
+**Request/Response Models** (`app/validation.py`):
+- `ProfileCreateRequest` - Validation for profile creation
+- `ProfileUpdateRequest` - Validation for profile updates
+- `ProfileResponse` - Standardized profile response format
+
+**API Security Features**:
+- Input validation and sanitization using Pydantic models
+- SQL injection protection with parameterized queries
+- XSS prevention through HTML escaping
+- Length validation and control character filtering
+- Comprehensive error handling with appropriate HTTP status codes
+- Database integrity constraint handling
+
+## Security Implementation Details
+
+**Input Validation & Sanitization** (`app/validation.py`):
+- `SecuritySanitizer` class with comprehensive validation methods
+- Length limits: Names (100), Email (254), Phone (20), Address (500), Bio (2000), URL (2048)
+- Pattern matching for SQL injection prevention
+- HTML entity escaping for XSS protection
+- Control character removal (null bytes, etc.)
+- Email format validation with suspicious pattern detection
+- Phone number validation (digits, spaces, dashes, parentheses, plus only)
+- URL validation with protocol security checks
+
+**Database Context Management**:
+- `Persistence` class implements context manager pattern (`__enter__`/`__exit__`)
+- Automatic connection management and cleanup
+- Proper cursor handling with connection verification
 
 ## File Structure Notes
 

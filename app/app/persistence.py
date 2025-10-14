@@ -24,16 +24,24 @@ class Persistence:
     ## Attributes
 
     `db_path`: Path to the SQLite database file
+    `allow_username_login`: Feature flag for username-based login fallbacks. Defaults to False.
     """
 
-    def __init__(self, db_path: Path = Path("app", "data", "app.db")) -> None:
+    def __init__(
+        self,
+        db_path: Path = Path("app", "data", "app.db"),
+        *,
+        allow_username_login: bool = False,
+    ) -> None:
         """
         Initialize the Persistence instance and ensure necessary tables exist.
         """
         self.db_path = db_path
+        self.allow_username_login = allow_username_login
         self.conn = None
         self._ensure_connection()
         self._create_user_table()  # Ensure the users table exists
+        self._create_user_indexes()  # Ensure supporting indexes exist
         self._create_session_table()  # Ensure the sessions table exists
         self._create_reset_codes_table()  # Ensure the reset codes table exists
         self._create_profiles_table()  # Ensure the profiles table exists
@@ -80,9 +88,13 @@ class Persistence:
 
     def _create_user_table(self) -> None:
         """
-        Create the 'users' table in the database if it does not exist. The table
-        stores user information including id, username, timestamps, and password
-        data.
+        Create the 'users' table in the database if it does not exist.
+
+        The table stores user information including the primary email identifier,
+        optional username, authentication metadata, and password storage where
+        applicable. Columns are intentionally flexible so future identity
+        providers (Google, Microsoft, anonymous handles) can be supported
+        without schema rewrites.
         """
         cursor = self._get_cursor()
 
@@ -90,16 +102,33 @@ class Persistence:
             """
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
+                email TEXT NOT NULL,
+                username TEXT,
                 created_at REAL NOT NULL,
-                password_hash BLOB NOT NULL,
-                password_salt BLOB NOT NULL,
+                password_hash BLOB,
+                password_salt BLOB,
+                auth_provider TEXT NOT NULL DEFAULT 'password',
+                auth_provider_id TEXT,
                 role TEXT NOT NULL DEFAULT 'user',
                 is_verified BOOLEAN NOT NULL DEFAULT 0,
                 two_factor_secret TEXT,
                 referral_code TEXT DEFAULT ''
             )
         """
+        )
+        self.conn.commit()
+
+    def _create_user_indexes(self) -> None:
+        """Ensure supporting indexes exist for common lookups."""
+        cursor = self._get_cursor()
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider ON users(auth_provider, auth_provider_id) WHERE auth_provider_id IS NOT NULL"
         )
         self.conn.commit()
 
@@ -191,15 +220,31 @@ class Persistence:
 
         cursor.execute(
             """
-            INSERT INTO users (id, username, created_at, password_hash, password_salt, role, is_verified, two_factor_secret, referral_code)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO users (
+                id,
+                email,
+                username,
+                created_at,
+                password_hash,
+                password_salt,
+                auth_provider,
+                auth_provider_id,
+                role,
+                is_verified,
+                two_factor_secret,
+                referral_code
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(user.id),
+                user.email,
                 user.username,
                 user.created_at.timestamp(),
                 user.password_hash,
                 user.password_salt,
+                user.auth_provider,
+                user.auth_provider_id,
                 user.role,
                 user.is_verified,
                 user.two_factor_secret,
@@ -215,10 +260,59 @@ class Persistence:
             (user_id, full_name, email, phone, address, bio, avatar_url, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (str(user.id), user.username, "", None, None, None, None, now, now)
+            (
+                str(user.id),
+                user.username or "",
+                user.email,
+                None,
+                None,
+                None,
+                None,
+                now,
+                now,
+            )
         )
-        
+
         self.conn.commit()
+
+    def _row_to_app_user(self, row: tuple) -> AppUser:
+        """Convert a database row into an AppUser instance."""
+        return AppUser(
+            id=uuid.UUID(row[0]),
+            email=row[1],
+            username=row[2],
+            created_at=datetime.fromtimestamp(row[3], tz=timezone.utc),
+            password_hash=row[4],
+            password_salt=row[5],
+            auth_provider=row[6],
+            auth_provider_id=row[7],
+            role=row[8],
+            is_verified=bool(row[9]),
+            two_factor_secret=row[10],
+            referral_code=row[11],
+        )
+
+    async def get_user_by_email(self, email: str) -> AppUser:
+        """Retrieve a user from the database by email address."""
+        cursor = self._get_cursor()
+        cursor.execute(
+            """
+            SELECT id, email, username, created_at, password_hash, password_salt,
+                   auth_provider, auth_provider_id, role, is_verified,
+                   two_factor_secret, referral_code
+            FROM users
+            WHERE lower(email) = lower(?)
+            LIMIT 1
+            """,
+            (email,),
+        )
+
+        row = cursor.fetchone()
+
+        if row:
+            return self._row_to_app_user(row)
+
+        raise KeyError(email)
 
     async def get_user_by_username(
         self,
@@ -239,26 +333,37 @@ class Persistence:
         """
         cursor = self._get_cursor()
         cursor.execute(
-            "SELECT * FROM users WHERE username = ? LIMIT 1",
+            """
+            SELECT id, email, username, created_at, password_hash, password_salt,
+                   auth_provider, auth_provider_id, role, is_verified,
+                   two_factor_secret, referral_code
+            FROM users
+            WHERE username = ?
+            LIMIT 1
+            """,
             (username,),
         )
 
         row = cursor.fetchone()
 
         if row:
-            return AppUser(
-                id=uuid.UUID(row[0]),
-                username=row[1],
-                created_at=datetime.fromtimestamp(row[2], tz=timezone.utc),
-                password_hash=row[3],
-                password_salt=row[4],
-                role=row[5],
-                is_verified=bool(row[6]),
-                two_factor_secret=row[7],
-                referral_code=row[8],
-            )
+            return self._row_to_app_user(row)
 
         raise KeyError(username)
+
+    async def get_user_by_identity(self, identifier: str) -> AppUser:
+        """
+        Retrieve a user by primary identifier (email) with username fallback.
+
+        This keeps email as the default login value while still supporting
+        optional username-based flows for niche apps.
+        """
+        try:
+            return await self.get_user_by_email(identifier)
+        except KeyError:
+            if not self.allow_username_login:
+                raise
+            return await self.get_user_by_username(identifier)
 
     async def get_user_by_id(
         self,
@@ -280,24 +385,21 @@ class Persistence:
         cursor = self._get_cursor()
 
         cursor.execute(
-            "SELECT * FROM users WHERE id = ? LIMIT 1",
+            """
+            SELECT id, email, username, created_at, password_hash, password_salt,
+                   auth_provider, auth_provider_id, role, is_verified,
+                   two_factor_secret, referral_code
+            FROM users
+            WHERE id = ?
+            LIMIT 1
+            """,
             (str(id),),
         )
 
         row = cursor.fetchone()
 
         if row:
-            return AppUser(
-                id=uuid.UUID(row[0]),
-                username=row[1],
-                created_at=datetime.fromtimestamp(row[2], tz=timezone.utc),
-                password_hash=row[3],
-                password_salt=row[4],
-                role=row[5],
-                is_verified=bool(row[6]),
-                two_factor_secret=row[7],
-                referral_code=row[8],
-            )
+            return self._row_to_app_user(row)
 
         raise KeyError(id)
 

@@ -30,13 +30,13 @@ class AdminPage(rio.Component):
     df: pd.DataFrame | None = None
     
     # User change role fields
-    change_role_username: str = ""
+    change_role_identifier: str = ""
     change_role_new_role: str = "user"
     change_role_error: str = ""
     
     
     # User deletion fields
-    delete_user_username: str = ""
+    delete_user_identifier: str = ""
     delete_user_confirmation: str = ""
     delete_user_password: str = ""
     delete_user_error: str = ""
@@ -50,50 +50,78 @@ class AdminPage(rio.Component):
         
         # Get current user
         user_session = self.session[UserSession]
-        cursor.execute("SELECT id, username, created_at, role, is_verified FROM users WHERE id = ?", (str(user_session.user_id),))
+        cursor.execute(
+            """
+            SELECT id, email, username, created_at, password_hash, password_salt,
+                   auth_provider, auth_provider_id, role, is_verified,
+                   two_factor_secret, referral_code
+            FROM users
+            WHERE id = ?
+            """,
+            (str(user_session.user_id),)
+        )
         user_row = cursor.fetchone()
         if user_row:
             self.current_user = AppUser(
                 id=uuid.UUID(user_row[0]),
-                username=user_row[1],
-                created_at=datetime.fromtimestamp(user_row[2], tz=timezone.utc),
-                password_hash=b"",
-                password_salt=b"",
-                role=user_row[3],
-                is_verified=bool(user_row[4])
+                email=user_row[1],
+                username=user_row[2],
+                created_at=datetime.fromtimestamp(user_row[3], tz=timezone.utc),
+                password_hash=user_row[4],
+                password_salt=user_row[5],
+                auth_provider=user_row[6],
+                auth_provider_id=user_row[7],
+                role=user_row[8],
+                is_verified=bool(user_row[9]),
+                two_factor_secret=user_row[10],
+                referral_code=user_row[11],
             )
         
         # Get all users from the database
-        cursor.execute("SELECT id, username, created_at, role, is_verified FROM users")
+        cursor.execute(
+            """
+            SELECT id, email, username, created_at, password_hash, password_salt,
+                   auth_provider, auth_provider_id, role, is_verified,
+                   two_factor_secret, referral_code
+            FROM users
+            """
+        )
         rows = cursor.fetchall()
-        
+
         # Convert rows to AppUser objects and DataFrame
         self.users = []
         self.selected_role = {}
-        
+
         data = []
         for row in rows:
             user_id = uuid.UUID(row[0])
-            username = row[1]
-            created_at = datetime.fromtimestamp(row[2], tz=timezone.utc)
-            role = row[3]
-            is_verified = bool(row[4])
-            
+            email = row[1]
+            username = row[2]
+            created_at = datetime.fromtimestamp(row[3], tz=timezone.utc)
+            role = row[8]
+            is_verified = bool(row[9])
+
             user = AppUser(
                 id=user_id,
+                email=email,
                 username=username,
                 created_at=created_at,
-                password_hash=b"",
-                password_salt=b"",
+                password_hash=row[4],
+                password_salt=row[5],
+                auth_provider=row[6],
+                auth_provider_id=row[7],
                 role=role,
-                is_verified=is_verified
+                is_verified=is_verified,
+                two_factor_secret=row[10],
+                referral_code=row[11],
             )
             self.users.append(user)
             self.selected_role[str(user_id)] = role
             
             # Add to DataFrame data
             data.append({
-                'Username': username,
+                'Email': email,
+                'Username': username or "",
                 'Created At': created_at.strftime("%Y-%m-%d %H:%M:%S"),
                 'Role': role,
                 'Verified': '✓' if is_verified else '✗',
@@ -105,21 +133,35 @@ class AdminPage(rio.Component):
     
 
     def _on_change_role_pressed(self) -> None:
-        if not self.change_role_username or self.change_role_username == "":
-            self.change_role_error = "Please enter a username"
+        if not self.change_role_identifier or self.change_role_identifier == "":
+            self.change_role_error = "Please enter an email or username"
             return
             
         if not self.change_role_new_role or self.change_role_new_role == "":
             self.change_role_error = "Please enter a new role"
             return
             
-        self._update_role(self.change_role_username, self.change_role_new_role)
-        self.change_role_username = ""
+        self._update_role(self.change_role_identifier, self.change_role_new_role)
+        self.change_role_identifier = ""
         self.change_role_new_role = ""
         
         self.force_refresh()
 
-    def _update_role(self, username: str, new_role: str) -> None:
+    def _fetch_user_record(self, cursor, identifier: str):
+        cursor.execute(
+            "SELECT id, email, username, role FROM users WHERE lower(email) = lower(?)",
+            (identifier,),
+        )
+        result = cursor.fetchone()
+        if result:
+            return result
+        cursor.execute(
+            "SELECT id, email, username, role FROM users WHERE username = ?",
+            (identifier,),
+        )
+        return cursor.fetchone()
+
+    def _update_role(self, identifier: str, new_role: str) -> None:
         """Update a user's role"""
         if not self.current_user:
             self.change_role_error = "You must be logged in to perform this action"
@@ -127,16 +169,15 @@ class AdminPage(rio.Component):
             
         persistence = self.session[Persistence]
         cursor = persistence.conn.cursor()
-        
-        # Get the target user's current role
-        cursor.execute("SELECT role FROM users WHERE username = ?", (username,))
-        result = cursor.fetchone()
+
+        result = self._fetch_user_record(cursor, identifier)
         if not result:
-            self.change_role_error = f"User {username} not found"
+            self.change_role_error = f"User {identifier} not found"
             return
             
-        current_role = result[0]
-        
+        user_id = result[0]
+        current_role = result[3]
+
         # Check if the current user can manage both the user's current and new roles
         if not (can_manage_role(self.current_user.role, current_role) and 
                 can_manage_role(self.current_user.role, new_role)):
@@ -145,8 +186,8 @@ class AdminPage(rio.Component):
             
         try:
             cursor.execute(
-                "UPDATE users SET role = ? WHERE username = ?",
-                (new_role, username)
+                "UPDATE users SET role = ? WHERE id = ?",
+                (new_role, result[0])
             )
             persistence.conn.commit()
             
@@ -164,26 +205,25 @@ class AdminPage(rio.Component):
             self.delete_user_error = "You must be logged in to perform this action"
             return
             
-        if not self.delete_user_username or self.delete_user_username == "":
-            self.delete_user_error = "Please enter a username to delete"
+        if not self.delete_user_identifier or self.delete_user_identifier == "":
+            self.delete_user_error = "Please enter an email or username to delete"
             return
             
-        if self.delete_user_confirmation != f"DELETE USER {self.delete_user_username}":
-            self.delete_user_error = f'Please type "DELETE USER {self.delete_user_username}" exactly to confirm deletion'
+        if self.delete_user_confirmation != f"DELETE USER {self.delete_user_identifier}":
+            self.delete_user_error = f'Please type "DELETE USER {self.delete_user_identifier}" exactly to confirm deletion'
             return
             
         persistence = self.session[Persistence]
         cursor = persistence.conn.cursor()
         
         # Get the target user's information
-        cursor.execute("SELECT id, role FROM users WHERE username = ?", (self.delete_user_username,))
-        result = cursor.fetchone()
+        result = self._fetch_user_record(cursor, self.delete_user_identifier)
         if not result:
-            self.delete_user_error = f"User not found: {self.delete_user_username}"
+            self.delete_user_error = f"User not found: {self.delete_user_identifier}"
             return
             
         target_user_id = uuid.UUID(result[0])
-        target_role = result[1]
+        target_role = result[3]
         
         # Check if current user has permission to delete this user
         if not can_manage_role(self.current_user.role, target_role):
@@ -207,7 +247,7 @@ class AdminPage(rio.Component):
             return
             
         # Store username for success message
-        username_to_delete = self.delete_user_username
+        identifier_to_delete = self.delete_user_identifier
         
         # Delete the user
         try:
@@ -218,9 +258,9 @@ class AdminPage(rio.Component):
             )
             if success:
                 # Set success message
-                self.delete_user_success = f"User '{username_to_delete}' has been successfully deleted"
+                self.delete_user_success = f"User '{identifier_to_delete}' has been successfully deleted"
                 # Clear the fields
-                self.delete_user_username = ""
+                self.delete_user_identifier = ""
                 self.delete_user_confirmation = ""
                 self.delete_user_password = ""
                 self.delete_user_error = ""
@@ -280,8 +320,8 @@ class AdminPage(rio.Component):
 
             rio.Row(
                 rio.TextInput(
-                    label="Username to Change Role",
-                    text=self.bind().change_role_username,
+                    label="Email or Username to Change Role",
+                    text=self.bind().change_role_identifier,
                 ),
                 rio.Dropdown(
                     label="New Role",
@@ -303,7 +343,7 @@ class AdminPage(rio.Component):
             ),
 
             rio.Text(
-                f"about to change {self.change_role_username}'s role to {self.change_role_new_role}",
+                f"about to change {self.change_role_identifier}'s role to {self.change_role_new_role}",
                 margin_top=1,
             ),
             
@@ -323,12 +363,12 @@ class AdminPage(rio.Component):
             
             rio.Row(
                 rio.TextInput(
-                    label="Username to Delete",
-                    text=self.bind().delete_user_username,
+                    label="Email or Username to Delete",
+                    text=self.bind().delete_user_identifier,
                     on_confirm=self._on_delete_user_pressed
                 ),
                 rio.TextInput(
-                    label='Type "DELETE USER username" to confirm',
+                    label='Type "DELETE USER identifier" to confirm',
                     text=self.bind().delete_user_confirmation,
                     on_confirm=self._on_delete_user_pressed
                 ),

@@ -3,7 +3,6 @@ from __future__ import annotations
 import typing as t
 from dataclasses import KW_ONLY, field
 
-import re
 import pyotp
 
 import rio
@@ -40,9 +39,13 @@ def guard(event: rio.GuardEvent) -> str | None:
 class LoginForm(rio.Component):
     """
     This Component handles the login flow, including 2FA verification if needed.
+
+    Email is treated as the primary identifier, but administrators can still
+    enable username-based sign-in flows later because the backend falls back to
+    username lookups when provided.
     """
 
-    username: str = ""
+    identifier: str = ""
     password: str = ""
     verification_code: str = ""
     error_message: str = ""
@@ -62,11 +65,18 @@ class LoginForm(rio.Component):
 
             pers = self.session[Persistence]
 
-            #  Try to find a user with this name
+            #  Try to find a user with this identifier (email first, username fallback)
             try:
-                user_info = await pers.get_user_by_username(username=self.username)
+                user_info = await pers.get_user_by_identity(identifier=self.identifier)
             except KeyError:
-                self.error_message = "Invalid username. Please try again or create a new account."
+                self.error_message = "Invalid email. Please try again or create a new account."
+                return
+
+            if user_info.auth_provider != "password":
+                provider_name = user_info.auth_provider.title()
+                self.error_message = (
+                    f"This account is configured for {provider_name} sign-in. Please continue with that provider."
+                )
                 return
 
             # Make sure their password matches
@@ -127,8 +137,8 @@ class LoginForm(rio.Component):
                     margin_top=1,
                 ),
                 rio.TextInput(
-                    text=self.bind().username,
-                    label="Email/Username",
+                    text=self.bind().identifier,
+                    label="Email",
                     on_confirm=self.login
                 ),
                 rio.TextInput(
@@ -171,8 +181,9 @@ class SignUpForm(rio.Component):
     """
     Provides interface for users to sign up for a new account.
 
-    It includes fields for username and password, handles user creation, and
-    displays error messages if the sign-up process fails.
+    Email addresses are treated as the primary identifier. Usernames can be
+    layered on in future use-cases without rewriting this form because the
+    backend exposes both email and username lookups.
     """
 
     # Fields
@@ -208,6 +219,7 @@ class SignUpForm(rio.Component):
             or not self.password
             or not self.confirm_password
         ):
+            self.banner_style = "danger"
             self.error_message = "Please fill in all fields"
             self.passwords_valid = False
             self.is_email_valid = False
@@ -215,15 +227,17 @@ class SignUpForm(rio.Component):
 
         # Check if the passwords match
         if self.password != self.confirm_password:
+            self.banner_style = "danger"
             self.error_message = "Passwords do not match"
             self.passwords_valid = False
             self.is_email_valid = True
             return
 
-        # Check if the user already exists
+        # Check if the email is already registered
         try:
-            await pers.get_user_by_username(username=self.email)
-            self.error_message = "This username is already taken"
+            await pers.get_user_by_email(email=self.email)
+            self.banner_style = "danger"
+            self.error_message = "This email is already registered"
             self.is_email_valid = False
             self.passwords_valid = True
             return
@@ -235,7 +249,7 @@ class SignUpForm(rio.Component):
 
         # Create a new user
         user_info = AppUser.create_new_user_with_default_settings(
-            username=self.email,
+            email=self.email,
             password=self.password,
             referral_code=self.referral_code,
         )
@@ -274,6 +288,7 @@ class SignUpForm(rio.Component):
             else:
                 self.is_email_valid = False
         except Exception:
+            self.banner_style = "danger"
             self.is_email_valid = False
 
     async def update_email(self, event: rio.TextInputChangeEvent):
@@ -382,7 +397,7 @@ class SignUpForm(rio.Component):
 class ResetPasswordForm(rio.Component):
     """
     Provides an interface for resetting the user’s password.
-    User enters their email/username, then clicks reset.
+    User enters their email (or username if enabled), then clicks reset.
     """
 
     username_or_email: str = ""
@@ -398,13 +413,14 @@ class ResetPasswordForm(rio.Component):
         You’d typically generate a token, email the user, etc.
         """
         if not self.username_or_email:
-            self.error_message = "Please enter your username or email."
+            self.banner_style = "danger"
+            self.error_message = "Please enter your email address."
             return
 
-        # Here you can do your typical "get user by email" logic
+        # Attempt to locate the user by email first, username as a fallback.
         pers = self.session[Persistence]
         try:
-            user_info = await pers.get_user_by_username(username=self.username_or_email)
+            user_info = await pers.get_user_by_identity(identifier=self.username_or_email)
             # If user is found, you'd trigger an email or some method of resetting password
             # For now, let’s just simulate success.
             self.banner_style = "success"
@@ -414,7 +430,7 @@ class ResetPasswordForm(rio.Component):
         except KeyError:
             self.banner_style = "danger"
             self.error_message = (
-                "No account found with that username or email. Please try again."
+                "No account found with that email address. Please try again."
             )
 
     def on_back_to_login_pressed(self):
@@ -435,7 +451,7 @@ class ResetPasswordForm(rio.Component):
                 ),
                 rio.TextInput(
                     text=self.bind().username_or_email,
-                    label="Username / Email",
+                    label="Email",
                     on_confirm=self.on_reset_password_pressed,
                 ),
                 rio.Row(

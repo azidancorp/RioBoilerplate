@@ -43,7 +43,7 @@ class EnableMFA(rio.Component):
 
         # Generate a QR code for the secret
         totp_uri = pyotp.TOTP(self.temporary_two_factor_secret).provisioning_uri(
-            name=f"{user.username}:{user.id}",
+            name=f"{(user.username or user.email)}:{user.id}",
             issuer_name="RioBase"
         )
 

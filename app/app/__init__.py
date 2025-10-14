@@ -3,6 +3,7 @@ from __future__ import annotations
 import typing as t
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -21,7 +22,8 @@ from app.api.profiles import router as profile_router
 async def on_app_start(app: rio.App) -> None:
     # Create a persistence instance. This class hides the gritty details of
     # database interaction from the app.
-    pers = Persistence()
+    allow_username_login = os.getenv("RIO_ALLOW_USERNAME_LOGIN", "false").lower() in {"1", "true", "yes"}
+    pers = Persistence(allow_username_login=allow_username_login)
 
     # Now attach it to the session. This way, the persistence instance is
     # available to all components using `self.session[persistence.Persistence]`

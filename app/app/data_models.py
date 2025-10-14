@@ -44,15 +44,18 @@ class AppUser:
     Model for a user of the application.
     """
     id: uuid.UUID
-    username: str
+    email: str
+    username: str | None
     created_at: datetime
 
     # The hash and salt of the user's password. By storing these values we can
     # verify that a user entered the correct password without storing the actual
     # password in the database. Google "hashing & salting" for details if you're
     # curious.
-    password_hash: bytes
-    password_salt: bytes
+    password_hash: bytes | None
+    password_salt: bytes | None
+    auth_provider: str = "password"
+    auth_provider_id: str | None = None
     role: str = 'user'
     is_verified: bool = False
     
@@ -68,14 +71,21 @@ class AppUser:
         return self.two_factor_secret is not None
 
     @classmethod
-    def create_new_user_with_default_settings(cls, username, password, referral_code="") -> AppUser:
+    def create_new_user_with_default_settings(
+        cls,
+        email: str,
+        password: str,
+        username: str | None = None,
+        referral_code: str = "",
+    ) -> AppUser:
         """
-        Create a new user with the given username and password, filling in
+        Create a new user with the given email and password, filling in
         reasonable defaults for the other fields.
         
         Parameters:
-            username: The username for the new user
+            email: The email address for the new user. Acts as the primary identifier.
             password: The password for the new user
+            username: Optional username/handle for the user
             referral_code: Optional referral code used during sign-up
         """
 
@@ -83,10 +93,12 @@ class AppUser:
 
         return AppUser(
             id=uuid.uuid4(),
+            email=email.lower().strip(),
             username=username,
             created_at=datetime.now(timezone.utc),
             password_hash=cls.get_password_hash(password, password_salt),
             password_salt=password_salt,
+            auth_provider="password",
             role='user',
             is_verified=False,
             referral_code=referral_code,
@@ -109,6 +121,10 @@ class AppUser:
         Safely compare a password to the stored hash. This differs slightly from
         the `==` operator in that it is resistant to timing attacks.
         """
+        if self.password_hash is None or self.password_salt is None:
+            return False
+        if self.auth_provider != "password":
+            return False
         return secrets.compare_digest(
             self.password_hash,
             self.get_password_hash(password, self.password_salt),

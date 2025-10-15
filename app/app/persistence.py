@@ -712,7 +712,7 @@ class Persistence:
         )
         self.conn.commit()
 
-    def delete_user(self, user_id: uuid.UUID, password: str, two_factor_code: str | None = None) -> bool:
+    async def delete_user(self, user_id: uuid.UUID, password: str, two_factor_code: str | None = None) -> bool:
         """
         Delete a user and all their associated sessions from the database.
         
@@ -723,30 +723,40 @@ class Persistence:
         `two_factor_code`: Optional 2FA code, required if 2FA is enabled for the user
         
         ## Returns
-        
+
         `bool`: True if deletion was successful, False if authentication failed
-        
-        ## Raises
-        
-        `KeyError`: If the user does not exist
+        or the user does not exist
         """
         # First verify the user exists and get their data
         try:
-            user = self.get_user_by_id(user_id)
+            user = await self.get_user_by_id(user_id)
         except KeyError:
             return False
-            
-        # Admin deletion password from environment variable
-        ADMIN_DELETION_PASSWORD = os.getenv('ADMIN_DELETION_PASSWORD')
-        if ADMIN_DELETION_PASSWORD is None:
-            raise ValueError("ADMIN_DELETION_PASSWORD environment variable is not set. Please set it in your .env file or environment.")
-        
-        # For admin deletion, verify the admin deletion password
-        if password != ADMIN_DELETION_PASSWORD:
+
+        # Determine whether the provided password is a valid user password or admin override
+        admin_password = os.getenv("ADMIN_DELETION_PASSWORD")
+        admin_override = bool(
+            admin_password and secrets.compare_digest(password, admin_password)
+        )
+
+        user_password_valid = False
+        if user.auth_provider == "password":
+            user_password_valid = user.verify_password(password)
+
+        if not (user_password_valid or admin_override):
             return False
-            
+
+        # If the user has 2FA enabled, require a valid code unless using the admin override
+        if user.two_factor_enabled and not admin_override:
+            if not two_factor_code:
+                return False
+
+            sanitized_code = two_factor_code.strip()
+            if not sanitized_code or not self.verify_2fa(user_id, sanitized_code):
+                return False
+
         cursor = self._get_cursor()
-        
+
         # First delete all sessions first (due to foreign key constraint)
         cursor.execute(
             "DELETE FROM user_sessions WHERE user_id = ?",

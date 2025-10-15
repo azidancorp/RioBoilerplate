@@ -199,7 +199,7 @@ class AdminPage(rio.Component):
         except Exception as e:
             self.change_role_error = f"Error updating role: {str(e)}"
         
-    def _on_delete_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
+    async def _on_delete_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """Handle the user deletion process from admin panel."""
         if not self.current_user:
             self.delete_user_error = "You must be logged in to perform this action"
@@ -251,7 +251,7 @@ class AdminPage(rio.Component):
         
         # Delete the user
         try:
-            success = persistence.delete_user(
+            success = await persistence.delete_user(
                 user_id=target_user_id,
                 password=self.delete_user_password,  # Use entered admin deletion password
                 two_factor_code=None  # No 2FA needed for admin deletion

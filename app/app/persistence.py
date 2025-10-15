@@ -62,10 +62,17 @@ class Persistence:
         
     def close(self) -> None:
         """
-        Close the database connection.
+        Close the database connection, tolerating cross-thread teardown.
         """
-        if self.conn:
+        if not self.conn:
+            return
+
+        try:
             self.conn.close()
+        except sqlite3.ProgrammingError:
+            # Connection was created on a different thread; let GC handle it.
+            pass
+        finally:
             self.conn = None
             
     def __del__(self) -> None:

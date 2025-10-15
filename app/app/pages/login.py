@@ -29,7 +29,7 @@ def guard(event: rio.GuardEvent) -> str | None:
     except KeyError:
         return None
 
-    return "/home"
+    return "/"
 
 
 ################################################################################

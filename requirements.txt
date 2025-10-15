@@ -8,3 +8,4 @@ pandas
 plotly
 pydantic[email]
 matplotlib
+requests

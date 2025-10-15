@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import KW_ONLY, field
-import typing as t
-import re
-
 import rio
-from app.components.center_component import CenterComponent
+from fastapi import HTTPException
+
+from app.scripts.message_utils import create_contact_submission
 from app.validation import SecuritySanitizer
 
 @rio.page(
@@ -22,44 +20,63 @@ class ContactPage(rio.Component):
     message: str = ""
     error_message: str = ""
     banner_style: str = "danger"
+    is_submitting: bool = False
 
     def on_submit_pressed(self):
-        # Validate and sanitize inputs
+        if self.is_submitting:
+            return
+
+        self.is_submitting = True
+
         try:
-            # Sanitize name
             sanitized_name = SecuritySanitizer.sanitize_string(self.name, 100)
             if not sanitized_name:
                 self.error_message = "Please enter a valid name."
                 self.banner_style = "danger"
                 return
 
-            # Validate email format
             if not self.email:
                 self.error_message = "Please enter an email address."
                 self.banner_style = "danger"
                 return
-            
+
             sanitized_email = SecuritySanitizer.validate_email_format(self.email)
 
-            # Sanitize message
             sanitized_message = SecuritySanitizer.sanitize_string(self.message, 10000)
             if not sanitized_message:
                 self.error_message = "Please enter a valid message."
                 self.banner_style = "danger"
                 return
 
-            # Update form fields with sanitized values
-            self.name = sanitized_name
-            self.email = sanitized_email
-            self.message = sanitized_message
+            response = create_contact_submission(
+                name=sanitized_name,
+                email=sanitized_email,
+                message=sanitized_message,
+            )
 
-            # If everything is correct, rejoice!
             self.banner_style = "success"
-            self.error_message = "Your message has been sent successfully!"
+            submission_id = response.get("id")
+            if submission_id is not None:
+                self.error_message = (
+                    "Your message has been sent successfully! "
+                    f"Reference ID: {submission_id}."
+                )
+            else:
+                self.error_message = "Your message has been sent successfully!"
 
-        except Exception as e:
-            self.error_message = "Invalid input. Please check your entries and try again."
+            self.name = ""
+            self.email = ""
+            self.message = ""
+
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else "Unable to send your message."
+            self.error_message = detail
             self.banner_style = "danger"
+        except Exception:
+            self.error_message = "Unexpected error. Please try again later."
+            self.banner_style = "danger"
+        finally:
+            self.is_submitting = False
 
     def build(self) -> rio.Component:
         return rio.Column(
@@ -107,7 +124,7 @@ class ContactPage(rio.Component):
                         margin_bottom=2,
                     ),
                     rio.Button(
-                        "Send Message",
+                        "Sending..." if self.is_submitting else "Send Message",
                         shape="rounded",
                         on_press=self.on_submit_pressed,
                     ),

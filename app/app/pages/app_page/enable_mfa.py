@@ -20,6 +20,7 @@ from app.components.center_component import CenterComponent
 class EnableMFA(rio.Component):
     """Two-factor authentication setup page."""
 
+    password: str = ""
     temporary_two_factor_secret: str = ""
     verification_code: str = ""
     qr_code_image_bytes: bytes | None = None
@@ -57,10 +58,28 @@ class EnableMFA(rio.Component):
         totp = pyotp.TOTP(self.temporary_two_factor_secret)
         return totp.verify(self.verification_code)
 
-    def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
+    async def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
         Called when user presses "Verify" button.
+        Requires password verification before enabling 2FA.
         """
+        # Validate password first
+        if not self.password:
+            self.error_message = "Please enter your password to enable 2FA."
+            self.force_refresh()
+            return
+
+        # Get user and verify password
+        user_session = self.session[UserSession]
+        persistence = self.session[Persistence]
+        user = await persistence.get_user_by_id(user_session.user_id)
+
+        if not user.verify_password(self.password):
+            self.error_message = "Invalid password. Please try again."
+            self.force_refresh()
+            return
+
+        # Verify TOTP code
         is_code_matching = self.verify_totp()
         if is_code_matching:
             self.set_totp_secret_in_db()
@@ -98,13 +117,19 @@ class EnableMFA(rio.Component):
                     rio.Text("Or enter the 2FA secret manually:"),
                     rio.Text(self.temporary_two_factor_secret),
                     rio.TextInput(
+                        text=self.bind().password,
+                        label="Enter your password",
+                        is_secret=True,
+                        on_confirm=self._on_totp_entered,
+                    ),
+                    rio.TextInput(
                         text=self.bind().verification_code,
                         label="Enter your 2FA code",
                         on_confirm=self._on_totp_entered,
                     ),
                     rio.Row(
                         rio.Button(
-                            "Verify",
+                            "Verify and Enable 2FA",
                             on_press=self._on_totp_entered,
                             shape='rounded'
                         ),

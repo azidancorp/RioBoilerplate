@@ -15,6 +15,7 @@ from app.components.center_component import CenterComponent
 class DisableMFA(rio.Component):
     """Two-factor authentication disable page."""
 
+    password: str = ""
     two_factor_secret: str | None = None
     verification_code: str = ""
     error_message: str = ""
@@ -34,7 +35,27 @@ class DisableMFA(rio.Component):
         totp = pyotp.TOTP(self.two_factor_secret)
         return totp.verify(self.verification_code)
 
-    def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
+    async def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
+        """
+        Verify password and 2FA code before disabling 2FA.
+        """
+        # Validate password first
+        if not self.password:
+            self.error_message = "Please enter your password to disable 2FA."
+            self.force_refresh()
+            return
+
+        # Get user and verify password
+        user_session = self.session[UserSession]
+        persistence = self.session[Persistence]
+        user = await persistence.get_user_by_id(user_session.user_id)
+
+        if not user.verify_password(self.password):
+            self.error_message = "Invalid password. Please try again."
+            self.force_refresh()
+            return
+
+        # Verify TOTP code
         is_code_matching = self.verify_totp()
         if is_code_matching:
             self.disable_2fa()
@@ -55,7 +76,13 @@ class DisableMFA(rio.Component):
                     rio.Text("Disable Two-Factor Authentication", style="heading1", justify="center"),
                     rio.Banner(text=self.error_message, style="danger", margin_top=1),
                     rio.Text("Two-factor authentication is currently enabled."),
-                    rio.Text("To disable 2FA, please enter your 6-digit verification code:"),
+                    rio.Text("To disable 2FA, please enter your password and 2FA code:"),
+                    rio.TextInput(
+                        text=self.bind().password,
+                        label="Enter your password",
+                        is_secret=True,
+                        on_confirm=self._on_totp_entered,
+                    ),
                     rio.TextInput(
                         text=self.bind().verification_code,
                         label="Enter your 2FA code",

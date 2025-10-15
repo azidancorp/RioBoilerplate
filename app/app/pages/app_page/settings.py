@@ -46,7 +46,7 @@ class Settings(rio.Component):
     @rio.event.on_populate
     async def on_populate(self):
         user_session = self.session[UserSession]
-        persistence = Persistence()
+        persistence = self.session[Persistence]
         user = await persistence.get_user_by_id(user_session.user_id)
         self.two_factor_enabled = bool(user.two_factor_secret)
 
@@ -167,7 +167,7 @@ class Settings(rio.Component):
                 return
 
         user_session = self.session[UserSession]
-        persistence = Persistence()
+        persistence = self.session[Persistence]
 
         success = await persistence.delete_user(
             user_id=user_session.user_id,

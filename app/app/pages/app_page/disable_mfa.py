@@ -22,7 +22,7 @@ class DisableMFA(rio.Component):
     @rio.event.on_populate
     async def on_populate(self):
         user_session = self.session[UserSession]
-        persistence = Persistence()
+        persistence = self.session[Persistence]
         user = await persistence.get_user_by_id(user_session.user_id)
         self.two_factor_secret = user.two_factor_secret
 
@@ -44,7 +44,7 @@ class DisableMFA(rio.Component):
 
     def disable_2fa(self):
         user_session = self.session[UserSession]
-        persistence = Persistence()
+        persistence = self.session[Persistence]
         persistence.set_2fa_secret(user_session.user_id, None)
         self.session.navigate_to("/app/settings")
 

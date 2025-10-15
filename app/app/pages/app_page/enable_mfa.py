@@ -31,7 +31,7 @@ class EnableMFA(rio.Component):
     @rio.event.on_populate
     async def on_populate(self):
         user_session = self.session[UserSession]
-        persistence = Persistence()
+        persistence = self.session[Persistence]
         user = await persistence.get_user_by_id(user_session.user_id)
 
         # If the user already has a 2FA secret, redirect them
@@ -74,7 +74,7 @@ class EnableMFA(rio.Component):
         """
         secret = self.temporary_two_factor_secret
         user_session = self.session[UserSession]
-        persistence = Persistence()
+        persistence = self.session[Persistence]
         persistence.set_2fa_secret(user_session.user_id, secret)
         
         self.session.navigate_to("/app/settings")

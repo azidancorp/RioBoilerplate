@@ -2,12 +2,59 @@ from __future__ import annotations
 
 from dataclasses import KW_ONLY, field
 import re
+import warnings
 from typing import *  # type: ignore
 
 import rio
 import app.theme as theme
 from app.data_models import AppUser
 from app.permissions import PAGE_ROLE_MAPPING
+
+
+# Define all possible sidebar links with their paths and icons
+# This is the single source of truth for sidebar navigation
+ALL_SIDEBAR_LINKS = [
+    ("Dashboard", "/app/dashboard", "dashboard"),
+    ("Admin", "/app/admin", "admin-panel-settings"),
+    ("Test", "/app/test", "science"),
+    ("News", "/app/news", "newspaper"),
+    ("Notifications", "/app/notifications", "notifications"),
+    ("Settings", "/app/settings", "settings"),
+]
+
+
+def _validate_sidebar_configuration() -> None:
+    """
+    Validate that sidebar URLs and PAGE_ROLE_MAPPING are in sync.
+
+    This function runs once at module import time to catch configuration
+    mismatches during development rather than at runtime.
+    """
+    sidebar_urls = {url for _, url, _ in ALL_SIDEBAR_LINKS}
+
+    # Check if all sidebar URLs are defined in PAGE_ROLE_MAPPING
+    for _, url, _ in ALL_SIDEBAR_LINKS:
+        if url not in PAGE_ROLE_MAPPING:
+            warnings.warn(
+                f"Sidebar URL '{url}' is not defined in PAGE_ROLE_MAPPING",
+                RuntimeWarning,
+                stacklevel=2
+            )
+
+    # Check if all app URLs in PAGE_ROLE_MAPPING are defined in sidebar
+    # (excluding special pages like MFA setup that shouldn't be in sidebar)
+    for url in PAGE_ROLE_MAPPING:
+        if url.startswith("/app/") and url not in sidebar_urls and url not in {"/app/enable-mfa", "/app/disable-mfa"}:
+            warnings.warn(
+                f"PAGE_ROLE_MAPPING URL '{url}' is not defined in sidebar links",
+                RuntimeWarning,
+                stacklevel=2
+            )
+
+
+# Run validation once at module import time
+_validate_sidebar_configuration()
+
 
 class SideBarLink(rio.Component):
     title: str
@@ -127,37 +174,14 @@ class Sidebar(rio.Component):
             return rio.Column(
                 min_width=0,  # Shrink the sidebar when no links are shown
             )
-        
-        # Define all possible sidebar links with their paths and icons
-        all_links = [
-            ("Dashboard", "/app/dashboard", "dashboard"),
-            ("Admin", "/app/admin", "admin-panel-settings"),
-            ("Test", "/app/test", "science"),
-            ("News", "/app/news", "newspaper"),
-            ("Notifications", "/app/notifications", "notifications"),
-            ("Settings", "/app/settings", "settings"),
-        ]
-        
-        # Check if all sidebar URLs are defined in PAGE_ROLE_MAPPING
-        sidebar_urls = {url for _, url, _ in all_links}
-        for _, url, _ in all_links:
-            if url not in PAGE_ROLE_MAPPING:
-                import warnings
-                warnings.warn(f"Sidebar URL '{url}' is not defined in PAGE_ROLE_MAPPING", RuntimeWarning)
-        
-        # Check if all app URLs in PAGE_ROLE_MAPPING are defined in sidebar
-        for url in PAGE_ROLE_MAPPING:
-            if url.startswith("/app/") and url not in sidebar_urls and url not in {"/app/enable-mfa", "/app/disable-mfa"}:
-                import warnings
-                warnings.warn(f"PAGE_ROLE_MAPPING URL '{url}' is not defined in sidebar links", RuntimeWarning)
-        
+
         # Show all links if user is root, otherwise filter based on role
         visible_links = [
             SideBarLink(title, url, icon)
-            for title, url, icon in all_links
+            for title, url, icon in ALL_SIDEBAR_LINKS
         ] if user_role == "root" else [
             SideBarLink(title, url, icon)
-            for title, url, icon in all_links
+            for title, url, icon in ALL_SIDEBAR_LINKS
             if url in PAGE_ROLE_MAPPING and user_role in PAGE_ROLE_MAPPING[url]
         ]
         

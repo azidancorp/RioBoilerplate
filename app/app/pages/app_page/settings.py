@@ -24,10 +24,17 @@ class Settings(rio.Component):
     Settings page containing various user configuration options.
     """
 
+    # Notification preferences (loaded from database)
     email_notifications_enabled: bool = True
     sms_notifications_enabled: bool = False
     two_factor_enabled: bool = False
 
+    # Profile fields (loaded from database)
+    profile_display_name: str = ""
+    profile_email: str = ""
+    profile_bio: str = ""
+
+    # Password change fields
     change_password_current_password: str = ""
     change_password_new_password: str = ""
     change_password_confirm_password: str = ""
@@ -37,24 +44,54 @@ class Settings(rio.Component):
     change_password_new_password_strength: int = 0
     change_password_passwords_match: bool = False
 
+    # Account deletion fields
     delete_account_password: str = ""
     delete_account_2fa: str = ""
     delete_account_confirmation: str = ""
     delete_account_error: str = ""
+
+    # Error/success messages
     error_message: str = ""
+    profile_success_message: str = ""
 
     @rio.event.on_populate
     async def on_populate(self):
+        """Load user data from database when page loads."""
         user_session = self.session[UserSession]
         persistence = self.session[Persistence]
+
+        # Load user data
         user = await persistence.get_user_by_id(user_session.user_id)
         self.two_factor_enabled = bool(user.two_factor_secret)
+        self.email_notifications_enabled = user.email_notifications_enabled
+        self.sms_notifications_enabled = user.sms_notifications_enabled
 
-    def _on_email_notifications_switch_pressed(self, event: rio.SwitchChangeEvent):
+        # Load profile data
+        profile = await persistence.get_profile_by_user_id(str(user_session.user_id))
+        if profile:
+            self.profile_display_name = profile.full_name or ""
+            self.profile_email = profile.email or ""
+            self.profile_bio = profile.bio or ""
+
+    async def _on_email_notifications_switch_pressed(self, event: rio.SwitchChangeEvent):
+        """Handle email notification toggle and save to database."""
         self.email_notifications_enabled = event.is_on
+        user_session = self.session[UserSession]
+        persistence = self.session[Persistence]
+        await persistence.update_notification_preferences(
+            user_session.user_id,
+            email_notifications_enabled=event.is_on
+        )
 
-    def _on_sms_notifications_switch_pressed(self, event: rio.SwitchChangeEvent):
+    async def _on_sms_notifications_switch_pressed(self, event: rio.SwitchChangeEvent):
+        """Handle SMS notification toggle and save to database."""
         self.sms_notifications_enabled = event.is_on
+        user_session = self.session[UserSession]
+        persistence = self.session[Persistence]
+        await persistence.update_notification_preferences(
+            user_session.user_id,
+            sms_notifications_enabled=event.is_on
+        )
 
     async def on_change_new_password(self, event: rio.TextInputChangeEvent):
         self.change_password_new_password = event.text
@@ -142,6 +179,49 @@ class Settings(rio.Component):
         except Exception as e:
             self.error_message = f"Failed to update password: {str(e)}"
 
+    async def _on_save_profile_pressed(self) -> None:
+        """Handle saving profile information to the database."""
+        user_session = self.session[UserSession]
+        persistence = self.session[Persistence]
+
+        try:
+            # Validate and sanitize inputs
+            sanitized_display_name = None
+            sanitized_email = None
+            sanitized_bio = None
+
+            if self.profile_display_name:
+                sanitized_display_name = SecuritySanitizer.sanitize_string(
+                    self.profile_display_name, 100
+                )
+
+            if self.profile_email:
+                sanitized_email = SecuritySanitizer.validate_email_format(self.profile_email)
+
+            if self.profile_bio:
+                sanitized_bio = SecuritySanitizer.sanitize_string(
+                    self.profile_bio, 2000
+                )
+
+            # Update profile in database
+            updated_profile = await persistence.update_profile(
+                user_id=str(user_session.user_id),
+                full_name=sanitized_display_name,
+                email=sanitized_email,
+                bio=sanitized_bio
+            )
+
+            if updated_profile:
+                self.profile_success_message = "Profile updated successfully!"
+                self.error_message = ""
+            else:
+                self.error_message = "Failed to update profile. Profile not found."
+                self.profile_success_message = ""
+
+        except Exception as e:
+            self.error_message = f"Failed to update profile: {str(e)}"
+            self.profile_success_message = ""
+
     async def _on_delete_account_pressed(self) -> None:
         """Handle the account deletion process."""
         # Validate confirmation text
@@ -216,17 +296,31 @@ class Settings(rio.Component):
                 ),
 
                 rio.Column(
+                    rio.Banner(
+                        text=self.profile_success_message,
+                        style="success",
+                        margin_bottom=1,
+                    ) if self.profile_success_message else rio.Spacer(height=0),
                     rio.TextInput(
                         label="Display Name",
+                        text=self.bind().profile_display_name,
                         margin_bottom=1,
                     ),
                     rio.TextInput(
                         label="Email",
+                        text=self.bind().profile_email,
                         margin_bottom=1,
                     ),
                     rio.MultiLineTextInput(
                         label="Bio",
+                        text=self.bind().profile_bio,
                         min_height=4,
+                        margin_bottom=1,
+                    ),
+                    rio.Button(
+                        "Save Profile",
+                        on_press=self._on_save_profile_pressed,
+                        shape="rounded",
                     ),
                     spacing=1,
                 ),

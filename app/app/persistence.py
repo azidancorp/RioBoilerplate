@@ -119,7 +119,9 @@ class Persistence:
                 role TEXT NOT NULL DEFAULT 'user',
                 is_verified BOOLEAN NOT NULL DEFAULT 0,
                 two_factor_secret TEXT,
-                referral_code TEXT DEFAULT ''
+                referral_code TEXT DEFAULT '',
+                email_notifications_enabled BOOLEAN NOT NULL DEFAULT 1,
+                sms_notifications_enabled BOOLEAN NOT NULL DEFAULT 0
             )
         """
         )
@@ -239,9 +241,11 @@ class Persistence:
                 role,
                 is_verified,
                 two_factor_secret,
-                referral_code
+                referral_code,
+                email_notifications_enabled,
+                sms_notifications_enabled
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(user.id),
@@ -256,6 +260,8 @@ class Persistence:
                 user.is_verified,
                 user.two_factor_secret,
                 user.referral_code,
+                user.email_notifications_enabled,
+                user.sms_notifications_enabled,
             ),
         )
         
@@ -297,6 +303,8 @@ class Persistence:
             is_verified=bool(row[9]),
             two_factor_secret=row[10],
             referral_code=row[11],
+            email_notifications_enabled=bool(row[12]) if len(row) > 12 else True,
+            sms_notifications_enabled=bool(row[13]) if len(row) > 13 else False,
         )
 
     async def get_user_by_email(self, email: str) -> AppUser:
@@ -306,7 +314,8 @@ class Persistence:
             """
             SELECT id, email, username, created_at, password_hash, password_salt,
                    auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code
+                   two_factor_secret, referral_code,
+                   email_notifications_enabled, sms_notifications_enabled
             FROM users
             WHERE lower(email) = lower(?)
             LIMIT 1
@@ -343,7 +352,8 @@ class Persistence:
             """
             SELECT id, email, username, created_at, password_hash, password_salt,
                    auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code
+                   two_factor_secret, referral_code,
+                   email_notifications_enabled, sms_notifications_enabled
             FROM users
             WHERE username = ?
             LIMIT 1
@@ -395,7 +405,8 @@ class Persistence:
             """
             SELECT id, email, username, created_at, password_hash, password_salt,
                    auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code
+                   two_factor_secret, referral_code,
+                   email_notifications_enabled, sms_notifications_enabled
             FROM users
             WHERE id = ?
             LIMIT 1
@@ -617,6 +628,57 @@ class Persistence:
         # Invalidate all existing sessions for security
         await self.invalidate_all_sessions(user_id)
 
+    async def update_notification_preferences(
+        self,
+        user_id: uuid.UUID,
+        email_notifications_enabled: bool | None = None,
+        sms_notifications_enabled: bool | None = None,
+    ) -> None:
+        """
+        Update a user's notification preferences.
+
+        ## Parameters
+
+        `user_id`: The UUID of the user whose preferences to update
+        `email_notifications_enabled`: Whether email notifications should be enabled
+        `sms_notifications_enabled`: Whether SMS notifications should be enabled
+
+        ## Raises
+
+        `KeyError`: If the user does not exist
+        """
+        cursor = self._get_cursor()
+
+        # First verify the user exists
+        await self.get_user_by_id(user_id)  # Will raise KeyError if user doesn't exist
+
+        # Build the update query dynamically based on provided fields
+        update_fields = []
+        params = []
+
+        if email_notifications_enabled is not None:
+            update_fields.append("email_notifications_enabled = ?")
+            params.append(email_notifications_enabled)
+
+        if sms_notifications_enabled is not None:
+            update_fields.append("sms_notifications_enabled = ?")
+            params.append(sms_notifications_enabled)
+
+        if not update_fields:
+            return  # Nothing to update
+
+        # Add user_id to params
+        params.append(str(user_id))
+
+        query = f"""
+            UPDATE users
+            SET {', '.join(update_fields)}
+            WHERE id = ?
+        """
+
+        cursor.execute(query, params)
+        self.conn.commit()
+
     async def create_reset_code(self, user_id: uuid.UUID) -> PasswordResetCode:
         """
         Create a new password reset code for a user.
@@ -785,12 +847,28 @@ class Persistence:
         return True
 
     # Profile management methods
-    async def create_profile(self, user_id: str, full_name: str, email: str, 
-                           phone: str = None, address: str = None, 
-                           bio: str = None, avatar_url: str = None) -> dict:
+
+    def _row_to_profile(self, row: tuple) -> dict[str, t.Any]:
+        """Convert a database row into a serializable profile dict."""
+        return {
+            "id": row[0],
+            "user_id": str(row[1]) if row[1] is not None else None,
+            "full_name": row[2],
+            "email": row[3],
+            "phone": row[4],
+            "address": row[5],
+            "bio": row[6],
+            "avatar_url": row[7],
+            "created_at": float(row[8]) if row[8] is not None else None,
+            "updated_at": float(row[9]) if row[9] is not None else None,
+        }
+
+    async def create_profile(self, user_id: str, full_name: str, email: str,
+                           phone: str = None, address: str = None,
+                           bio: str = None, avatar_url: str = None) -> dict[str, t.Any]:
         """
         Create a new user profile.
-        
+
         Args:
             user_id: The ID of the user this profile belongs to
             full_name: User's full name
@@ -799,119 +877,97 @@ class Persistence:
             address: User's address (optional)
             bio: Short bio/description (optional)
             avatar_url: URL to user's avatar image (optional)
-            
+
         Returns:
-            Dict: The created profile data
-            
+            dict[str, Any]: The created profile data
+
         Raises:
             sqlite3.IntegrityError: If a profile with the user_id or email already exists
         """
         cursor = self._get_cursor()
-        now = datetime.now().timestamp()
-        
+        now = datetime.now(timezone.utc).timestamp()
+
         cursor.execute(
             """
-            INSERT INTO profiles 
+            INSERT INTO profiles
             (user_id, full_name, email, phone, address, bio, avatar_url, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (user_id, full_name, email, phone, address, bio, avatar_url, now, now)
         )
         self.conn.commit()
-        
+
         return await self.get_profile_by_user_id(user_id)
     
-    async def get_profile(self, profile_id: int) -> t.Optional[dict]:
+    async def get_profile(self, profile_id: int) -> dict[str, t.Any] | None:
         """
         Retrieve a profile by its ID.
-        
+
         Args:
             profile_id: The ID of the profile to retrieve
-            
+
         Returns:
-            Optional[Dict]: The profile data if found, None otherwise
+            dict[str, Any] | None: The profile data if found, None otherwise
         """
         cursor = self._get_cursor()
-        
+
         cursor.execute(
             """
-            SELECT id, user_id, full_name, email, phone, address, bio, avatar_url, 
+            SELECT id, user_id, full_name, email, phone, address, bio, avatar_url,
                    created_at, updated_at
-            FROM profiles 
+            FROM profiles
             WHERE id = ?
             """,
             (profile_id,)
         )
-        
+
         row = cursor.fetchone()
         if not row:
             return None
-            
-        return {
-            "id": row[0],
-            "user_id": row[1],
-            "full_name": row[2],
-            "email": row[3],
-            "phone": row[4],
-            "address": row[5],
-            "bio": row[6],
-            "avatar_url": row[7],
-            "created_at": row[8],
-            "updated_at": row[9]
-        }
+
+        return self._row_to_profile(row)
     
-    async def get_profile_by_user_id(self, user_id: str) -> t.Optional[dict]:
+    async def get_profile_by_user_id(self, user_id: str) -> dict[str, t.Any] | None:
         """
         Retrieve a profile by user ID.
-        
+
         Args:
             user_id: The ID of the user whose profile to retrieve
-            
+
         Returns:
-            Optional[Dict]: The profile data if found, None otherwise
+            dict[str, Any] | None: The profile data if found, None otherwise
         """
         cursor = self._get_cursor()
-        
+
         cursor.execute(
             """
-            SELECT id, user_id, full_name, email, phone, address, bio, avatar_url, 
+            SELECT id, user_id, full_name, email, phone, address, bio, avatar_url,
                    created_at, updated_at
-            FROM profiles 
+            FROM profiles
             WHERE user_id = ?
             """,
             (user_id,)
         )
-        
+
         row = cursor.fetchone()
         if not row:
             return None
-            
-        return {
-            "id": row[0],
-            "user_id": row[1],
-            "full_name": row[2],
-            "email": row[3],
-            "phone": row[4],
-            "address": row[5],
-            "bio": row[6],
-            "avatar_url": row[7],
-            "created_at": row[8],
-            "updated_at": row[9]
-        }
+
+        return self._row_to_profile(row)
     
     async def update_profile(
-        self, 
-        user_id: str, 
-        full_name: str = None, 
-        email: str = None, 
-        phone: str = None, 
-        address: str = None, 
-        bio: str = None, 
+        self,
+        user_id: str,
+        full_name: str = None,
+        email: str = None,
+        phone: str = None,
+        address: str = None,
+        bio: str = None,
         avatar_url: str = None
-    ) -> t.Optional[dict]:
+    ) -> dict[str, t.Any] | None:
         """
         Update a user's profile.
-        
+
         Args:
             user_id: The ID of the user whose profile to update
             full_name: New full name (optional)
@@ -920,17 +976,17 @@ class Persistence:
             address: New address (optional)
             bio: New bio (optional)
             avatar_url: New avatar URL (optional)
-            
+
         Returns:
-            Optional[Dict]: The updated profile data if found, None otherwise
+            dict[str, Any] | None: The updated profile data if found, None otherwise
         """
         cursor = self._get_cursor()
-        now = datetime.now().timestamp()
-        
+        now = datetime.now(timezone.utc).timestamp()
+
         # Build the update query dynamically based on provided fields
         update_fields = []
         params = []
-        
+
         if full_name is not None:
             update_fields.append("full_name = ?")
             params.append(full_name)
@@ -949,26 +1005,26 @@ class Persistence:
         if avatar_url is not None:
             update_fields.append("avatar_url = ?")
             params.append(avatar_url)
-            
+
         if not update_fields:
             return await self.get_profile_by_user_id(user_id)
-            
+
         # Add updated_at and user_id to params
         update_fields.append("updated_at = ?")
         params.extend([now, user_id])
-        
+
         query = f"""
-            UPDATE profiles 
+            UPDATE profiles
             SET {', '.join(update_fields)}
             WHERE user_id = ?
         """
-        
+
         cursor.execute(query, params)
         self.conn.commit()
-        
+
         if cursor.rowcount == 0:
             return None
-            
+
         return await self.get_profile_by_user_id(user_id)
     
     async def delete_profile(self, user_id: str) -> bool:
@@ -991,37 +1047,23 @@ class Persistence:
         
         return cursor.rowcount > 0
     
-    async def get_profiles(self) -> t.List[dict]:
+    async def get_profiles(self) -> list[dict[str, t.Any]]:
         """
         Retrieve all user profiles.
-        
+
         Returns:
-            List[Dict]: List of all profiles
+            list[dict[str, Any]]: List of all profiles
         """
         cursor = self._get_cursor()
-        
+
         cursor.execute(
             """
-            SELECT id, user_id, full_name, email, phone, address, bio, avatar_url, 
+            SELECT id, user_id, full_name, email, phone, address, bio, avatar_url,
                    created_at, updated_at
             FROM profiles
             ORDER BY created_at DESC
             """
         )
-        
+
         rows = cursor.fetchall()
-        return [
-            {
-                "id": row[0],
-                "user_id": row[1],
-                "full_name": row[2],
-                "email": row[3],
-                "phone": row[4],
-                "address": row[5],
-                "bio": row[6],
-                "avatar_url": row[7],
-                "created_at": row[8],
-                "updated_at": row[9]
-            }
-            for row in rows
-        ]
+        return [self._row_to_profile(row) for row in rows]

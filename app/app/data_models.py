@@ -58,12 +58,16 @@ class AppUser:
     auth_provider_id: str | None = None
     role: str = 'user'
     is_verified: bool = False
-    
+
     # The referral code used during sign-up (if any)
     referral_code: str = ""
 
     # The secret key for two-factor authentication, None if not enabled
     two_factor_secret: str | None = None
+
+    # Notification preferences
+    email_notifications_enabled: bool = True
+    sms_notifications_enabled: bool = False
 
     @property
     def two_factor_enabled(self) -> bool:
@@ -160,3 +164,23 @@ class PasswordResetCode:
     def is_valid(self) -> bool:
         """Whether this reset code is still valid."""
         return datetime.now(timezone.utc) < self.valid_until
+
+
+@dataclass
+class Profile:
+    """
+    Model for user profile information.
+
+    This stores additional user information beyond authentication data,
+    such as display names, contact details, and bio information.
+    """
+    id: int
+    user_id: uuid.UUID
+    full_name: str | None
+    email: str | None
+    phone: str | None
+    address: str | None
+    bio: str | None
+    avatar_url: str | None
+    created_at: datetime
+    updated_at: datetime

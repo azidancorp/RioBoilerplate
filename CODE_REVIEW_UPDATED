@@ -4,7 +4,6 @@
 - **No rate limiting on authentication & API surfaces.** Login/signup handlers (`app/app/pages/login.py:58-259`) and FastAPI endpoints (`app/app/api/profiles.py:21-194`, `app/app/api/example.py:20-33`) accept unlimited attempts, enabling brute-force and abuse scenarios previously flagged.
 - **Persistence dependency leaks connections.** FastAPI’s `get_persistence` creates a fresh SQLite connection per request without closing it (`app/app/api/profiles.py:18-19`). Under load this can exhaust file descriptors.
 - **Async façade over blocking SQLite.** High-traffic operations (`app/app/persistence.py:210-960`) are declared `async` but execute synchronous `sqlite3` work, blocking the event loop and regressing throughput as noted earlier. # This performance issue does not apply now, as asyncsql is less performant at small scales.
-- **2FA setup lacks recovery codes.** Enabling MFA never provisions backup codes or fallback channels (`app/app/pages/app_page/enable_mfa.py:32-111`), so users who lose their authenticator remain locked out.
 - **Notifications page still hard-coded.** The page continues to surface static `SAMPLE_NOTIFICATIONS` and ignores persistence (`app/app/pages/app_page/notifications.py:14-168`), so the feature remains non-functional.
 
 ## Moderate Outstanding Issues
@@ -18,5 +17,5 @@
 
 ## Recommended Next Steps
 1. add rate limiting, and close persistence connections deterministically.
-3. Finish the security basics: deliver real password reset + 2FA recovery flows, enable SQLite foreign keys
+3. Finish the security basics: deliver real password reset
 4. Add at least smoke tests covering authentication, profile CRUD, and contact submissions to prevent these regressions from recurring.

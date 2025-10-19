@@ -12,6 +12,7 @@ PAGE_ROLE_MAPPING = {
     "/app/settings": ["root", "admin", "user"],
     "/app/enable-mfa": ["root", "admin", "user"],
     "/app/disable-mfa": ["root", "admin", "user"],
+    "/app/recovery-codes": ["root", "admin", "user"],
     "/app/admin": ["root", "admin"],
     "/app/notifications": ["root", "admin", "user"],
 }

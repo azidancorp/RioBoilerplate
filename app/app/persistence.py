@@ -1,3 +1,4 @@
+import hashlib
 import os
 import secrets
 import sqlite3
@@ -6,7 +7,7 @@ import typing as t
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.data_models import AppUser, UserSession, PasswordResetCode
+from app.data_models import AppUser, UserSession, PasswordResetCode, RecoveryCodeRecord
 from app.validation import SecuritySanitizer
 from app.config import config
 import pyotp
@@ -63,6 +64,7 @@ class Persistence:
         self._create_session_table()  # Ensure the sessions table exists
         self._create_reset_codes_table()  # Ensure the reset codes table exists
         self._create_profiles_table()  # Ensure the profiles table exists
+        self._create_recovery_codes_table()  # Ensure 2FA recovery codes table exists
 
     def _ensure_connection(self) -> None:
         """
@@ -233,6 +235,236 @@ class Persistence:
             """
         )
         self.conn.commit()
+
+    def _create_recovery_codes_table(self) -> None:
+        """
+        Create the 'two_factor_recovery_codes' table to store hashed backup codes.
+        """
+        cursor = self._get_cursor()
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS two_factor_recovery_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                code_hash BLOB NOT NULL,
+                salt BLOB NOT NULL,
+                created_at REAL NOT NULL,
+                used_at REAL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_recovery_codes_user_id
+            ON two_factor_recovery_codes(user_id)
+            """
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def _generate_recovery_code() -> str:
+        """
+        Generate a human-friendly recovery code in the format XXXX-XXXX-XXXX.
+        """
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        raw = "".join(secrets.choice(alphabet) for _ in range(12))
+        return "-".join(raw[i : i + 4] for i in range(0, 12, 4))
+
+    @staticmethod
+    def _normalize_recovery_code(code: str | None) -> str:
+        """
+        Normalize a recovery code for hashing/verification.
+        """
+        if not code:
+            return ""
+        return "".join(part.strip() for part in code.upper().split("-"))
+
+    @staticmethod
+    def _hash_recovery_code(code: str, salt: bytes) -> bytes:
+        """
+        Hash a recovery code using PBKDF2 to avoid storing it in plaintext.
+        """
+        return hashlib.pbkdf2_hmac(
+            "sha256",
+            code.encode("utf-8"),
+            salt,
+            100_000,
+        )
+
+    def generate_recovery_codes(
+        self,
+        user_id: uuid.UUID,
+        count: int = 10,
+    ) -> list[str]:
+        """
+        Generate a fresh set of recovery codes for a user, replacing any existing codes.
+        """
+        normalized_user_id = str(user_id)
+        cursor = self._get_cursor()
+        new_codes: list[str] = []
+
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+
+            # Clear existing codes within the same transaction to keep operations atomic.
+            self.invalidate_recovery_codes(user_id, commit=False)
+
+            for _ in range(count):
+                code = self._generate_recovery_code()
+                normalized_code = self._normalize_recovery_code(code)
+                salt = secrets.token_bytes(32)
+                code_hash = self._hash_recovery_code(normalized_code, salt)
+
+                cursor.execute(
+                    """
+                    INSERT INTO two_factor_recovery_codes (
+                        user_id, code_hash, salt, created_at, used_at
+                    ) VALUES (?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        normalized_user_id,
+                        code_hash,
+                        salt,
+                        datetime.now(timezone.utc).timestamp(),
+                    ),
+                )
+                new_codes.append(code)
+
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+        # TODO: Send notification email once email infrastructure supports recovery code events.
+        return new_codes
+
+    def invalidate_recovery_codes(self, user_id: uuid.UUID, *, commit: bool = True) -> None:
+        """Remove all recovery codes for a user."""
+        cursor = self._get_cursor()
+        cursor.execute(
+            "DELETE FROM two_factor_recovery_codes WHERE user_id = ?",
+            (str(user_id),),
+        )
+        if commit:
+            self.conn.commit()
+
+    def consume_recovery_code(self, user_id: uuid.UUID, code: str) -> bool:
+        """
+        Attempt to consume a recovery code. Returns True if a valid unused code was supplied.
+        Uses atomic check-and-set to prevent race conditions under concurrent load.
+        """
+        normalized_code = self._normalize_recovery_code(code)
+        if not normalized_code:
+            return False
+
+        cursor = self._get_cursor()
+
+        # Begin immediate transaction to acquire exclusive lock and prevent race conditions
+        self.conn.execute("BEGIN IMMEDIATE")
+
+        try:
+            # Only fetch unused codes
+            cursor.execute(
+                """
+                SELECT id, code_hash, salt
+                FROM two_factor_recovery_codes
+                WHERE user_id = ? AND used_at IS NULL
+                """,
+                (str(user_id),),
+            )
+
+            rows = cursor.fetchall()
+            for code_id, stored_hash, salt in rows:
+                candidate_hash = self._hash_recovery_code(normalized_code, salt)
+                if secrets.compare_digest(stored_hash, candidate_hash):
+                    # Atomic update with WHERE clause to ensure code is still unused
+                    cursor.execute(
+                        """
+                        UPDATE two_factor_recovery_codes
+                        SET used_at = ?
+                        WHERE id = ? AND used_at IS NULL
+                        """,
+                        (datetime.now(timezone.utc).timestamp(), code_id),
+                    )
+
+                    # Verify the update actually modified a row (prevents double-spend)
+                    if cursor.rowcount == 1:
+                        self.conn.commit()
+                        # TODO: Send notification email once email infrastructure supports recovery code events.
+                        return True
+                    else:
+                        # Another request consumed this code between our SELECT and UPDATE
+                        self.conn.rollback()
+                        return False
+
+            self.conn.rollback()
+            return False
+
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def get_recovery_codes_metadata(self, user_id: uuid.UUID) -> list[RecoveryCodeRecord]:
+        """
+        Retrieve metadata for all recovery codes belonging to a user.
+        """
+        cursor = self._get_cursor()
+        cursor.execute(
+            """
+            SELECT id, created_at, used_at
+            FROM two_factor_recovery_codes
+            WHERE user_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (str(user_id),),
+        )
+
+        rows = cursor.fetchall()
+        metadata: list[RecoveryCodeRecord] = []
+        for code_id, created_ts, used_ts in rows:
+            metadata.append(
+                RecoveryCodeRecord(
+                    id=code_id,
+                    user_id=user_id,
+                    created_at=datetime.fromtimestamp(created_ts, tz=timezone.utc),
+                    used_at=(
+                        datetime.fromtimestamp(used_ts, tz=timezone.utc)
+                        if used_ts is not None
+                        else None
+                    ),
+                )
+            )
+        return metadata
+
+    def get_recovery_codes_summary(
+        self,
+        user_id: uuid.UUID,
+    ) -> dict[str, t.Any]:
+        """
+        Provide aggregate information about a user's recovery codes.
+        """
+        metadata = self.get_recovery_codes_metadata(user_id)
+        if not metadata:
+            return {
+                "total": 0,
+                "used": 0,
+                "remaining": 0,
+                "last_generated": None,
+            }
+
+        total = len(metadata)
+        used = sum(1 for record in metadata if record.used_at is not None)
+        remaining = total - used
+        last_generated = max(record.created_at for record in metadata)
+
+        return {
+            "total": total,
+            "used": used,
+            "remaining": remaining,
+            "last_generated": last_generated,
+        }
 
     async def create_user(self, user: AppUser) -> None:
         """
@@ -673,6 +905,9 @@ class Persistence:
 
     def verify_2fa(self, user_id: uuid.UUID, token: str) -> bool:
         """Verify a 2FA token for a user."""
+        token = token.strip()
+        if not token:
+            return False
         cursor = self._get_cursor()
         cursor.execute(
             "SELECT two_factor_secret FROM users WHERE id = ? AND two_factor_secret IS NOT NULL",
@@ -704,6 +939,8 @@ class Persistence:
             (secret, str(user_id)),
         )
         self.conn.commit()
+        if secret is None:
+            self.invalidate_recovery_codes(user_id)
 
     async def invalidate_all_sessions(
         self,
@@ -951,9 +1188,22 @@ class Persistence:
             if not two_factor_code:
                 return False
 
-            sanitized_code = two_factor_code.strip()
-            if not sanitized_code or not self.verify_2fa(user_id, sanitized_code):
+            try:
+                sanitized_code = SecuritySanitizer.sanitize_auth_code(two_factor_code)
+            except Exception:
                 return False
+
+            if not sanitized_code:
+                return False
+
+            normalized_code = self._normalize_recovery_code(sanitized_code)
+            totp_valid = False
+            if normalized_code.isdigit():
+                totp_valid = self.verify_2fa(user_id, normalized_code)
+
+            if not totp_valid:
+                if not self.consume_recovery_code(user_id, sanitized_code):
+                    return False
 
         cursor = self._get_cursor()
 
@@ -968,7 +1218,13 @@ class Persistence:
             "DELETE FROM password_reset_codes WHERE user_id = ?",
             (str(user_id),)
         )
-        
+
+        # Delete all recovery codes for this user
+        cursor.execute(
+            "DELETE FROM two_factor_recovery_codes WHERE user_id = ?",
+            (str(user_id),)
+        )
+
         # Delete the user's profile
         cursor.execute(
             "DELETE FROM profiles WHERE user_id = ?",

@@ -6,6 +6,7 @@ import rio
 from app.data_models import UserSession
 from app.persistence import Persistence
 from app.components.center_component import CenterComponent
+from app.validation import SecuritySanitizer
 
 
 @rio.page(
@@ -31,13 +32,9 @@ class DisableMFA(rio.Component):
         if not self.two_factor_secret:
             self.session.navigate_to("/app/settings")
 
-    def verify_totp(self) -> bool:
-        totp = pyotp.TOTP(self.two_factor_secret)
-        return totp.verify(self.verification_code)
-
     async def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
-        Verify password and 2FA code before disabling 2FA.
+        Verify password and 2FA or recovery code before disabling 2FA.
         """
         # Validate password first
         if not self.password:
@@ -54,13 +51,37 @@ class DisableMFA(rio.Component):
             self.error_message = "Invalid password. Please try again."
             self.force_refresh()
             return
+        
+        try:
+            verification_code = SecuritySanitizer.sanitize_auth_code(self.verification_code)
+        except Exception:
+            self.error_message = "Invalid 2FA or recovery code format."
+            self.force_refresh()
+            return
 
-        # Verify TOTP code
-        is_code_matching = self.verify_totp()
+        if not verification_code:
+            self.error_message = "Please enter a 2FA code or recovery code."
+            self.force_refresh()
+            return
+
+        # Verify TOTP code or recovery code
+        is_code_matching = False
+        if self.two_factor_secret:
+            totp = pyotp.TOTP(self.two_factor_secret)
+            candidate = verification_code.replace("-", "")
+            if candidate.isdigit():
+                is_code_matching = totp.verify(candidate)
+
+        if not is_code_matching:
+            is_code_matching = persistence.consume_recovery_code(
+                user_session.user_id,
+                verification_code,
+            )
+
         if is_code_matching:
             self.disable_2fa()
         else:
-            self.error_message = "Invalid verification code. Please try again."
+            self.error_message = "Invalid verification or recovery code. Please try again."
             self.force_refresh()
 
     def disable_2fa(self):
@@ -85,7 +106,7 @@ class DisableMFA(rio.Component):
                     ),
                     rio.TextInput(
                         text=self.bind().verification_code,
-                        label="Enter your 2FA code",
+                        label="Enter your 2FA or recovery code",
                         on_confirm=self._on_totp_entered,
                     ),
                     rio.Row(

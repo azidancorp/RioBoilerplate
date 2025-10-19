@@ -77,6 +77,37 @@ class SecuritySanitizer:
                 )
         
         return sanitized
+
+    @staticmethod
+    def sanitize_auth_code(value: Optional[str], max_length: int = 32) -> Optional[str]:
+        """
+        Sanitize an authentication code (TOTP or recovery code). Preserves hyphens for
+        readability but enforces uppercase alphanumeric characters.
+        """
+        if value is None:
+            return None
+
+        sanitized = str(value).strip()
+        if not sanitized:
+            return None
+
+        # Remove whitespace and normalise casing
+        sanitized = sanitized.replace(" ", "").upper()
+
+        if len(sanitized) > max_length:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Authentication code too long. Maximum length is {max_length} characters."
+            )
+
+        allowed_characters = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
+        if any(char not in allowed_characters for char in sanitized):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Authentication code contains invalid characters."
+            )
+
+        return sanitized
     
     @staticmethod
     def validate_email_format(email: str, require_valid: bool | None = None) -> str:

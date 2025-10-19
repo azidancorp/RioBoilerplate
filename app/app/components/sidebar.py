@@ -22,6 +22,12 @@ ALL_SIDEBAR_LINKS = [
     ("Settings", "/app/settings", "settings"),
 ]
 
+EXCLUDED_FROM_SIDEBAR = {
+    "/app/enable-mfa",
+    "/app/disable-mfa",
+    "/app/recovery-codes",
+}
+
 
 def _validate_sidebar_configuration() -> None:
     """
@@ -44,7 +50,7 @@ def _validate_sidebar_configuration() -> None:
     # Check if all app URLs in PAGE_ROLE_MAPPING are defined in sidebar
     # (excluding special pages like MFA setup that shouldn't be in sidebar)
     for url in PAGE_ROLE_MAPPING:
-        if url.startswith("/app/") and url not in sidebar_urls and url not in {"/app/enable-mfa", "/app/disable-mfa"}:
+        if url.startswith("/app/") and url not in sidebar_urls and url not in EXCLUDED_FROM_SIDEBAR:
             warnings.warn(
                 f"PAGE_ROLE_MAPPING URL '{url}' is not defined in sidebar links",
                 RuntimeWarning,

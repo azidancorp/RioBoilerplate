@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import typing as t
 from dataclasses import KW_ONLY, field
+from datetime import datetime, timezone
 
 import rio
 from app.persistence import Persistence
-from app.data_models import AppUser, UserSession
+from app.data_models import AppUser, UserSession, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
 from app.scripts.utils import (
     get_password_strength,
@@ -53,6 +54,12 @@ class Settings(rio.Component):
     # Error/success messages
     error_message: str = ""
     profile_success_message: str = ""
+    recovery_code_notice: str = ""
+
+    # Recovery code metadata
+    recovery_codes_total: int = 0
+    recovery_codes_remaining: int = 0
+    recovery_codes_last_generated: str = "Never generated"
 
     @rio.event.on_populate
     async def on_populate(self):
@@ -70,8 +77,33 @@ class Settings(rio.Component):
         # Load profile data
         profile = await persistence.get_profile_by_user_id(str(user_session.user_id))
         if profile:
-            self.profile_display_name = profile.full_name or ""
-            self.profile_bio = profile.bio or ""
+            self.profile_display_name = profile.get("full_name") or ""
+            self.profile_bio = profile.get("bio") or ""
+
+        # Load recovery code summary
+        summary = persistence.get_recovery_codes_summary(user_session.user_id)
+        self.recovery_codes_total = summary["total"]
+        self.recovery_codes_remaining = summary["remaining"]
+        last_generated = summary["last_generated"]
+        if last_generated:
+            # Present timestamps in UTC to avoid timezone confusion in dashboard context.
+            self.recovery_codes_last_generated = last_generated.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        else:
+            self.recovery_codes_last_generated = "Never generated"
+
+        try:
+            usage = self.session[RecoveryCodeUsage]
+        except KeyError:
+            usage = None
+
+        if usage and (usage.used_at_login or usage.used_in_settings):
+            self.recovery_code_notice = (
+                "A recovery code was recently used. Generate a new set so you retain backups."
+            )
+            usage.used_at_login = False
+            usage.used_in_settings = False
+        else:
+            self.recovery_code_notice = ""
 
     async def _on_email_notifications_switch_pressed(self, event: rio.SwitchChangeEvent):
         """Handle email notification toggle and save to database."""
@@ -114,6 +146,14 @@ class Settings(rio.Component):
             color=get_password_strength_color(self.change_password_new_password_strength),
         )
 
+    def recovery_codes_summary_text(self) -> str:
+        if not self.recovery_codes_total:
+            return "Recovery codes have not been generated yet."
+        return (
+            f"Recovery codes remaining: {self.recovery_codes_remaining} "
+            f"of {self.recovery_codes_total}"
+        )
+
     async def _on_confirm_password_change_pressed(self) -> None:
         """Handle the password change process."""
         # Get required instances
@@ -146,20 +186,35 @@ class Settings(rio.Component):
                 if not self.change_password_2fa:
                     self.error_message = "2FA code is required"
                     return
-                
+
                 try:
-                    sanitized_2fa = SecuritySanitizer.sanitize_string(self.change_password_2fa, 6)
-                    if not sanitized_2fa:
-                        self.error_message = "Invalid 2FA code format"
-                        return
-                    self.change_password_2fa = sanitized_2fa
+                    sanitized_2fa = SecuritySanitizer.sanitize_auth_code(self.change_password_2fa)
                 except Exception:
-                    self.error_message = "Invalid 2FA code format"
+                    self.error_message = "Invalid 2FA or recovery code."
                     return
-                    
-                if not persistence.verify_2fa(user_session.user_id, self.change_password_2fa):
-                    self.error_message = "Invalid 2FA code"
+
+                if not sanitized_2fa:
+                    self.error_message = "Invalid 2FA or recovery code."
                     return
+
+                totp_candidate = sanitized_2fa.replace("-", "")
+                totp_valid = False
+                if totp_candidate.isdigit():
+                    totp_valid = persistence.verify_2fa(user_session.user_id, totp_candidate)
+
+                if not totp_valid:
+                    if not persistence.consume_recovery_code(user_session.user_id, sanitized_2fa):
+                        self.error_message = "Invalid 2FA or recovery code."
+                        return
+                    try:
+                        usage = self.session[RecoveryCodeUsage]
+                    except KeyError:
+                        usage = RecoveryCodeUsage()
+                        self.session.attach(usage)
+                    usage.used_in_settings = True
+                    self.recovery_code_notice = "A recovery code was used. Generate a new set to stay protected."
+
+                self.change_password_2fa = ""
             
             # Update the password
             await persistence.update_password(user_session.user_id, self.change_password_new_password)
@@ -232,14 +287,16 @@ class Settings(rio.Component):
         # Validate 2FA code if provided
         if self.two_factor_enabled and self.delete_account_2fa:
             try:
-                sanitized_2fa = SecuritySanitizer.sanitize_string(self.delete_account_2fa, 6)
-                if not sanitized_2fa:
-                    self.delete_account_error = "Invalid 2FA code format"
-                    return
-                self.delete_account_2fa = sanitized_2fa
+                sanitized_2fa = SecuritySanitizer.sanitize_auth_code(self.delete_account_2fa)
             except Exception:
-                self.delete_account_error = "Invalid 2FA code format"
+                self.delete_account_error = "Invalid 2FA or recovery code format"
                 return
+
+            if not sanitized_2fa:
+                self.delete_account_error = "Invalid 2FA or recovery code format"
+                return
+
+            self.delete_account_2fa = sanitized_2fa
 
         user_session = self.session[UserSession]
         persistence = self.session[Persistence]
@@ -295,7 +352,7 @@ class Settings(rio.Component):
                         text=self.profile_success_message,
                         style="success",
                         margin_bottom=1,
-                    ) if self.profile_success_message else rio.Spacer(height=0),
+                    ) if self.profile_success_message else rio.Spacer(min_height=0),
                     rio.TextInput(
                         label="Display Name",
                         text=self.bind().profile_display_name,
@@ -383,7 +440,7 @@ class Settings(rio.Component):
                                 on_change=self.on_change_confirm_password,
                             ),
                             rio.TextInput(
-                                label="2FA Code",
+                                label="2FA / Recovery Code",
                                 text=self.bind().change_password_2fa,
                             ),
                             rio.Button(
@@ -417,6 +474,39 @@ class Settings(rio.Component):
                             ),
                             target_url="/app/disable-mfa" if self.two_factor_enabled else "/app/enable-mfa",
                         ),
+                        rio.Column(
+                            rio.Text(
+                                "Recovery Codes",
+                                style="heading3",
+                                margin_top=2,
+                            ),
+                            rio.Banner(
+                                text=self.recovery_code_notice,
+                                style="warning",
+                                margin_top=1,
+                            ) if self.recovery_code_notice else rio.Spacer(min_height=0),
+                            rio.Text(self.recovery_codes_summary_text()),
+                            rio.Text(f"Last generated: {self.recovery_codes_last_generated}"),
+                            *(
+                                [
+                                    rio.Link(
+                                        rio.Button(
+                                            "Manage Recovery Codes",
+                                            shape="rounded",
+                                        ),
+                                        target_url="/app/recovery-codes",
+                                    )
+                                ]
+                                if self.two_factor_enabled
+                                else [
+                                    rio.Text(
+                                        "Enable two-factor authentication to generate recovery codes.",
+                                        margin_top=0.5,
+                                    )
+                                ]
+                            ),
+                            spacing=1,
+                        ),
 
                         rio.Button(
                             "Logout from All Devices",
@@ -438,7 +528,7 @@ class Settings(rio.Component):
                                 is_secret=True,
                             ),
                             rio.TextInput(
-                                label="2FA Code",
+                                label="2FA / Recovery Code",
                                 text=self.bind().delete_account_2fa,
                             ),
                             rio.TextInput(

@@ -8,7 +8,7 @@ import pyotp
 import rio
 
 from app.persistence import Persistence
-from app.data_models import AppUser, UserSettings
+from app.data_models import AppUser, UserSettings, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
 from app.scripts.utils import (
     get_password_strength,
@@ -86,15 +86,27 @@ class LoginForm(rio.Component):
                 return
 
             # Check if 2FA is enabled for this user
+            recovery_code_used = False
             if user_info.two_factor_secret:
-                if not self.verification_code:
-                    self.error_message = "2FA is enabled for this account. Please enter your verification code."
+                try:
+                    sanitized_code = SecuritySanitizer.sanitize_auth_code(self.verification_code)
+                except Exception as exc:
+                    detail = getattr(exc, "detail", "Invalid authentication code.")
+                    self.error_message = str(detail)
                     return
 
-                # Verify the TOTP code
+                if not sanitized_code:
+                    self.error_message = "2FA is enabled for this account. Please enter your verification or recovery code."
+                    return
+
+                totp_input = sanitized_code.replace("-", "")
                 totp = pyotp.TOTP(user_info.two_factor_secret)
-                if not totp.verify(self.verification_code):
-                    self.error_message = "Invalid verification code. Please try again."
+                if totp_input.isdigit() and totp.verify(totp_input):
+                    pass
+                elif pers.consume_recovery_code(user_info.id, sanitized_code):
+                    recovery_code_used = True
+                else:
+                    self.error_message = "Invalid verification or recovery code. Please try again."
                     return
 
             # The login was successful
@@ -108,6 +120,14 @@ class LoginForm(rio.Component):
             settings = self.session[UserSettings]
             settings.auth_token = user_session.id
             self.session.attach(settings)
+
+            if recovery_code_used:
+                try:
+                    usage = self.session[RecoveryCodeUsage]
+                except KeyError:
+                    usage = RecoveryCodeUsage()
+                    self.session.attach(usage)
+                usage.used_at_login = True
 
             self.session.navigate_to("/app/dashboard")
 
@@ -150,7 +170,7 @@ class LoginForm(rio.Component):
                 ),
                 rio.TextInput(
                     text=self.bind().verification_code,
-                    label="2FA Code (if applicable)",
+                    label="2FA or recovery code (if applicable)",
                     on_confirm=self.login,
                 ),
                 rio.Row(

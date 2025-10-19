@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import io
-import base64
-from dataclasses import KW_ONLY
 import qrcode
 import pyotp
 import rio
@@ -11,6 +9,7 @@ from rio.component_meta import C
 from app.data_models import UserSession
 from app.persistence import Persistence
 from app.components.center_component import CenterComponent
+from app.validation import SecuritySanitizer
 
 
 @rio.page(
@@ -26,6 +25,8 @@ class EnableMFA(rio.Component):
     qr_code_image_bytes: bytes | None = None
     secret: str | None = None
     error_message: str = ""
+    recovery_codes: tuple[str, ...] = ()
+    show_recovery_codes: bool = False
 
     # Cleanup method removed as QR codes are now generated in memory
 
@@ -38,9 +39,11 @@ class EnableMFA(rio.Component):
         # If the user already has a 2FA secret, redirect them
         if user.two_factor_secret:
             self.session.navigate_to("/app/settings")
-        
+
         # create a new 2FA secret
         self.temporary_two_factor_secret = pyotp.random_base32()
+        self.recovery_codes = ()
+        self.show_recovery_codes = False
 
         # Generate a QR code for the secret
         totp_uri = pyotp.TOTP(self.temporary_two_factor_secret).provisioning_uri(
@@ -55,8 +58,9 @@ class EnableMFA(rio.Component):
         self.qr_code_image_bytes = buffer.getvalue()
 
     def verify_totp(self) -> bool:
+        candidate = self.verification_code.replace("-", "")
         totp = pyotp.TOTP(self.temporary_two_factor_secret)
-        return totp.verify(self.verification_code)
+        return candidate.isdigit() and totp.verify(candidate)
 
     async def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
@@ -79,6 +83,20 @@ class EnableMFA(rio.Component):
             self.force_refresh()
             return
 
+        try:
+            sanitized_code = SecuritySanitizer.sanitize_auth_code(self.verification_code)
+        except Exception:
+            self.error_message = "Invalid verification code format."
+            self.force_refresh()
+            return
+
+        if not sanitized_code:
+            self.error_message = "Please enter your 2FA verification code."
+            self.force_refresh()
+            return
+
+        self.verification_code = sanitized_code
+
         # Verify TOTP code
         is_code_matching = self.verify_totp()
         if is_code_matching:
@@ -91,14 +109,57 @@ class EnableMFA(rio.Component):
         """
         Persists the user's TOTP secret.
         """
+
         secret = self.temporary_two_factor_secret
         user_session = self.session[UserSession]
         persistence = self.session[Persistence]
         persistence.set_2fa_secret(user_session.user_id, secret)
-        
+
+        recovery_codes = persistence.generate_recovery_codes(user_session.user_id)
+        self.recovery_codes = tuple(recovery_codes)
+        self.show_recovery_codes = True
+        self.error_message = ""
+        self.password = ""
+        self.verification_code = ""
+        self.force_refresh()
+
+    def _on_acknowledge_recovery_codes(self, _event=None) -> None:
+        """Navigate back to settings after the user confirms they've stored the codes."""
         self.session.navigate_to("/app/settings")
 
     def build(self) -> rio.Component:
+        if self.show_recovery_codes:
+            return CenterComponent(
+                rio.Card(
+                    rio.Column(
+                        rio.Text("Recovery Codes", style="heading1", justify="center"),
+                        rio.Text(
+                            "Two-factor authentication is now enabled. Store these recovery codes somewhere safe. "
+                            "Each code can be used once if you lose access to your authenticator app.",
+                            margin_bottom=1,
+                        ),
+                        rio.Column(
+                            *(rio.Text(code) for code in self.recovery_codes),
+                            spacing=0.5,
+                            margin_bottom=1.5,
+                        ),
+                        rio.Text(
+                            "You will not be able to see these codes again once you leave this page.",
+                            margin_bottom=1,
+                        ),
+                        rio.Button(
+                            "I have saved my recovery codes",
+                            on_press=self._on_acknowledge_recovery_codes,
+                            shape="rounded",
+                        ),
+                        spacing=1.5,
+                        margin=2,
+                    ),
+                    align_y=0,
+                ),
+                width_percent=50,
+            )
+
         return CenterComponent(
             rio.Card(
                 rio.Column(

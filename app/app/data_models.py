@@ -167,6 +167,29 @@ class PasswordResetCode:
 
 
 @dataclass
+class RecoveryCodeRecord:
+    """
+    Metadata describing a stored two-factor recovery code without revealing the
+    underlying secret.
+    """
+
+    id: int
+    user_id: uuid.UUID
+    created_at: datetime
+    used_at: datetime | None
+
+
+@dataclass
+class RecoveryCodeUsage:
+    """
+    Session-scoped flags indicating whether backup codes were recently used.
+    """
+
+    used_at_login: bool = False
+    used_in_settings: bool = False
+
+
+@dataclass
 class Profile:
     """
     Model for user profile information.

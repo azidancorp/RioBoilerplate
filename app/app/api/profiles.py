@@ -1,3 +1,22 @@
+"""
+Profile Management API Endpoints
+
+Authentication: Bearer token in Authorization header (UserSettings.auth_token in Rio apps)
+
+Authorization:
+- GET /api/profiles: Admin/root only (bulk profiles list)
+- GET /api/profiles/{user_id}: Any authenticated user can view specific profile
+- POST /api/profiles: Create profile (self or admin/root)
+- PUT /api/profiles/{user_id}: Update profile (self or admin/root)
+- DELETE /api/profiles/{user_id}: Delete profile (self or admin/root)
+
+Extension Points:
+    See auth_dependencies.py for examples of implementing:
+    - Profile visibility settings (public/private)
+    - Connection-based access (friends can view each other)
+    - Advanced permission systems
+"""
+
 from fastapi import APIRouter, HTTPException, Depends, status
 from typing import Dict, List, Optional
 import sqlite3
@@ -8,6 +27,13 @@ from app.validation import (
     ProfileResponse,
     SecuritySanitizer
 )
+from app.api.auth_dependencies import (
+    get_current_user,
+    get_persistence,
+    require_self_or_admin,
+    is_admin_or_root,
+)
+from app.data_models import AppUser
 
 router = APIRouter()
 
@@ -18,29 +44,39 @@ router = APIRouter()
 async def get_persistence():
     return Persistence()
 
-@router.get("/api/profile", response_model=List[ProfileResponse])
-async def get_profiles(db: Persistence = Depends(get_persistence)) -> List[Dict]:
+@router.get("/api/profiles", response_model=List[ProfileResponse])
+async def get_profiles(
+    current_user: AppUser = Depends(get_current_user),
+    db: Persistence = Depends(get_persistence)
+) -> List[Dict]:
     """
-    Get all user profiles
-    
-    Returns:
-        List[Dict]: List of all user profiles
+    Get all user profiles (admin/root only).
+
+    Only users with admin or root role can retrieve the full list of profiles.
+
+    Raises: 401 (auth fails), 403 (insufficient privileges).
     """
+    if not is_admin_or_root(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient privileges. Only admin or root users can view all profiles."
+        )
+
     return await db.get_profiles()
 
-@router.get("/api/profile/{user_id}", response_model=ProfileResponse)
-async def get_profile(user_id: str, db: Persistence = Depends(get_persistence)) -> Dict:
+@router.get("/api/profiles/{user_id}", response_model=ProfileResponse)
+async def get_profile(
+    user_id: str,
+    current_user: AppUser = Depends(get_current_user),
+    db: Persistence = Depends(get_persistence)
+) -> Dict:
     """
-    Get a user's profile by user ID with input validation
-    
-    Args:
-        user_id: The ID of the user whose profile to retrieve
-        
-    Returns:
-        Dict: The user's profile data
-        
-    Raises:
-        HTTPException: If profile is not found or user_id is invalid
+    Get profile by user ID (requires authentication).
+
+    Any authenticated user can view any profile. Extension ideas: visibility settings,
+    connection checks, metadata (connection status, mutual friends).
+
+    Raises: 401 (auth fails), 403 (private profile), 404 (not found), 422 (invalid ID).
     """
     # Validate and sanitize user_id
     try:
@@ -57,34 +93,36 @@ async def get_profile(user_id: str, db: Persistence = Depends(get_persistence)) 
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid user ID format"
         )
-    
+
+    # NOTE: For visibility: check profile.is_public, raise 403 if private and not
+    # (self-access or admin)
+
     profile = await db.get_profile_by_user_id(sanitized_user_id)
-    
+
     if profile is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Profile for user {user_id} not found"
         )
-        
+
     return profile
 
-@router.post("/api/profile", status_code=status.HTTP_201_CREATED, response_model=ProfileResponse)
+@router.post("/api/profiles", status_code=status.HTTP_201_CREATED, response_model=ProfileResponse)
 async def create_profile(
     profile_data: ProfileCreateRequest,
+    current_user: AppUser = Depends(get_current_user),
     db: Persistence = Depends(get_persistence)
 ) -> Dict:
     """
-    Create a new user profile with input validation and sanitization
-    
-    Args:
-        profile_data: Validated profile data from request body
-        
-    Returns:
-        Dict: The created profile data
-        
-    Raises:
-        HTTPException: If validation fails or a profile with the user_id or email already exists
+    Create user profile (requires auth and authorization).
+
+    Users can only create their own profile (admin/root can create any).
+    Note: Profiles auto-created during registration, this is for edge cases.
+
+    Raises: 401 (auth fails), 403 (unauthorized), 400 (duplicate), 422 (validation), 500 (DB error).
     """
+    require_self_or_admin(profile_data.user_id, current_user)
+
     try:
         return await db.create_profile(
             user_id=profile_data.user_id,
@@ -116,24 +154,20 @@ async def create_profile(
             detail=f"Failed to create profile: {str(e)}"
         )
 
-@router.put("/api/profile/{user_id}", response_model=ProfileResponse)
+@router.put("/api/profiles/{user_id}", response_model=ProfileResponse)
 async def update_profile(
     user_id: str,
     profile_data: ProfileUpdateRequest,
+    current_user: AppUser = Depends(get_current_user),
     db: Persistence = Depends(get_persistence)
 ) -> Dict:
     """
-    Update a user's profile with input validation and sanitization
-    
-    Args:
-        user_id: The ID of the user whose profile to update
-        profile_data: Validated profile update data from request body
-        
-    Returns:
-        Dict: The updated profile data
-        
-    Raises:
-        HTTPException: If the profile is not found or validation fails
+    Update user profile (requires auth and authorization).
+
+    Users can only update their own profile (admin/root can update any).
+
+    Raises: 401 (auth fails), 403 (unauthorized), 404 (not found), 400 (duplicate email),
+    422 (validation), 500 (DB error).
     """
     # Validate and sanitize user_id
     try:
@@ -150,7 +184,9 @@ async def update_profile(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid user ID format"
         )
-    
+
+    require_self_or_admin(sanitized_user_id, current_user)
+
     try:
         updated_profile = await db.update_profile(
             user_id=sanitized_user_id,
@@ -161,13 +197,13 @@ async def update_profile(
             bio=profile_data.bio,
             avatar_url=profile_data.avatar_url
         )
-        
+
         if updated_profile is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Profile for user {sanitized_user_id} not found"
             )
-            
+
         return updated_profile
     except HTTPException:
         raise
@@ -187,19 +223,20 @@ async def update_profile(
             detail=f"Failed to update profile: {str(e)}"
         )
 
-@router.delete("/api/profile/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/api/profiles/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_profile(
     user_id: str,
+    current_user: AppUser = Depends(get_current_user),
     db: Persistence = Depends(get_persistence)
 ) -> None:
     """
-    Delete a user's profile with input validation
-    
-    Args:
-        user_id: The ID of the user whose profile to delete
-        
-    Raises:
-        HTTPException: If the profile is not found or user_id is invalid
+    Delete user profile (requires auth and authorization).
+
+    Users can only delete their own profile (admin/root can delete any).
+    Note: Deletes profile only, not user account. For full account deletion,
+    use user deletion endpoint with password/2FA verification.
+
+    Raises: 401 (auth fails), 403 (unauthorized), 404 (not found), 422 (validation).
     """
     # Validate and sanitize user_id
     try:
@@ -216,9 +253,11 @@ async def delete_profile(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid user ID format"
         )
-    
+
+    require_self_or_admin(sanitized_user_id, current_user)
+
     success = await db.delete_profile(sanitized_user_id)
-    
+
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

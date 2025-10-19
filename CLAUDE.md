@@ -130,10 +130,55 @@ Core dependencies include:
 - Proper HTTP status codes and error handling
 - SQLite integrity constraint handling
 
+## Configuration (`app/config.py`)
+
+The application uses a centralized configuration system that can be controlled via the `AppConfig` class or environment variables:
+
+**Email Validation Settings**:
+- `REQUIRE_VALID_EMAIL` (default: `True`) - Controls whether strict email format validation is enforced
+  - `True`: Enforces RFC-compliant email validation in both frontend and backend
+  - `False`: Allows any string as email (useful for username-based apps)
+  - Environment variable: `REQUIRE_VALID_EMAIL=true|false`
+  - **Security Note**: Even when disabled, XSS and injection patterns are still blocked
+
+**Authentication Settings**:
+- `ALLOW_USERNAME_LOGIN` (default: `False`) - Enables username-based login in addition to email
+  - Environment variable: `ALLOW_USERNAME_LOGIN=true|false`
+  - Works with `get_user_by_identity()` method in Persistence class
+
+**Primary Identifier**:
+- `PRIMARY_IDENTIFIER` (default: `"email"`) - Indicates which field is the primary user identifier
+  - Options: `"email"` or `"username"`
+  - Environment variable: `PRIMARY_IDENTIFIER=email|username`
+
+**Configuration Methods**:
+```python
+# Direct modification (for hardcoded settings)
+from app.config import config
+config.REQUIRE_VALID_EMAIL = False
+
+# Environment variable (recommended for deployment)
+# In .env file:
+REQUIRE_VALID_EMAIL=false
+ALLOW_USERNAME_LOGIN=true
+```
+
+**Defense-in-Depth Validation**:
+Email validation is enforced at multiple layers when `REQUIRE_VALID_EMAIL=True`:
+1. **Frontend**: Real-time validation in `SignUpForm.validate_email()` (app/pages/login.py:294)
+2. **Form Submission**: Pre-submission check in `on_sign_up_pressed()` (app/pages/login.py:229)
+3. **Backend**: Database-level validation in `Persistence.create_user()` (app/persistence.py:228)
+4. **API Layer**: Pydantic model validation in API endpoints (app/validation.py:163)
+
+This multi-layer approach ensures email validation cannot be bypassed even if users manipulate client-side code or directly call APIs.
+
 ## Environment Variables
 
 Required environment variables (see `.env.example`):
 - `ADMIN_DELETION_PASSWORD` - Secure password for administrative user deletion operations
+- `REQUIRE_VALID_EMAIL` - Enable/disable strict email validation (default: `true`)
+- `ALLOW_USERNAME_LOGIN` - Enable username-based login (default: `false`)
+- `PRIMARY_IDENTIFIER` - Primary user identifier type: `email` or `username` (default: `email`)
 
 ## API Documentation
 

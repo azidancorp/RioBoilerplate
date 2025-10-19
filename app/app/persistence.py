@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.data_models import AppUser, UserSession, PasswordResetCode
+from app.validation import SecuritySanitizer
+from app.config import config
 import pyotp
 
 
@@ -216,13 +218,22 @@ class Persistence:
         ## Parameters
 
         `user`: The user object containing user details.
+
+        ## Raises
+
+        `HTTPException`: If email validation is enabled and the email format is invalid.
         """
+        # BACKEND VALIDATION: Enforce email validation if configured
+        # This provides defense-in-depth even if frontend validation is bypassed
+        if config.REQUIRE_VALID_EMAIL:
+            SecuritySanitizer.validate_email_format(user.email, require_valid=True)
+
         cursor = self._get_cursor()
-        
+
         # Check if this is the first user
         cursor.execute("SELECT COUNT(*) FROM users")
         user_count = cursor.fetchone()[0]
-        
+
         # If this is the first user, set their role to root
         if user_count == 0:
             user.role = "root"
@@ -266,7 +277,7 @@ class Persistence:
         )
         
         # Create a default profile for the new user
-        now = datetime.now().timestamp()
+        now = datetime.now(timezone.utc).timestamp()
         cursor.execute(
             """
             INSERT INTO profiles 

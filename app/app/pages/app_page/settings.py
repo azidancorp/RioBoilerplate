@@ -31,8 +31,8 @@ class Settings(rio.Component):
 
     # Profile fields (loaded from database)
     profile_display_name: str = ""
-    profile_email: str = ""
     profile_bio: str = ""
+    account_email: str = ""
 
     # Password change fields
     change_password_current_password: str = ""
@@ -65,12 +65,12 @@ class Settings(rio.Component):
         self.two_factor_enabled = bool(user.two_factor_secret)
         self.email_notifications_enabled = user.email_notifications_enabled
         self.sms_notifications_enabled = user.sms_notifications_enabled
+        self.account_email = user.email
 
         # Load profile data
         profile = await persistence.get_profile_by_user_id(str(user_session.user_id))
         if profile:
             self.profile_display_name = profile.full_name or ""
-            self.profile_email = profile.email or ""
             self.profile_bio = profile.bio or ""
 
     async def _on_email_notifications_switch_pressed(self, event: rio.SwitchChangeEvent):
@@ -187,16 +187,12 @@ class Settings(rio.Component):
         try:
             # Validate and sanitize inputs
             sanitized_display_name = None
-            sanitized_email = None
             sanitized_bio = None
 
             if self.profile_display_name:
                 sanitized_display_name = SecuritySanitizer.sanitize_string(
                     self.profile_display_name, 100
                 )
-
-            if self.profile_email:
-                sanitized_email = SecuritySanitizer.validate_email_format(self.profile_email)
 
             if self.profile_bio:
                 sanitized_bio = SecuritySanitizer.sanitize_string(
@@ -207,7 +203,6 @@ class Settings(rio.Component):
             updated_profile = await persistence.update_profile(
                 user_id=str(user_session.user_id),
                 full_name=sanitized_display_name,
-                email=sanitized_email,
                 bio=sanitized_bio
             )
 
@@ -306,9 +301,8 @@ class Settings(rio.Component):
                         text=self.bind().profile_display_name,
                         margin_bottom=1,
                     ),
-                    rio.TextInput(
-                        label="Email",
-                        text=self.bind().profile_email,
+                    rio.Text(
+                        f"Account Email: {self.account_email}",
                         margin_bottom=1,
                     ),
                     rio.MultiLineTextInput(

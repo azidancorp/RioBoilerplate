@@ -8,8 +8,10 @@ for sanitizing user input to prevent security vulnerabilities.
 import re
 import html
 from typing import Optional
-from pydantic import BaseModel, validator, EmailStr, Field
+from pydantic import BaseModel, validator, Field
 from fastapi import HTTPException, status
+
+from app.config import config
 
 
 # Validation Constants
@@ -77,32 +79,40 @@ class SecuritySanitizer:
         return sanitized
     
     @staticmethod
-    def validate_email_format(email: str) -> str:
+    def validate_email_format(email: str, require_valid: bool | None = None) -> str:
         """
         Additional email validation beyond Pydantic's EmailStr.
         
         Args:
             email: Email address to validate
+            require_valid: If True, enforces strict email validation. If False, only checks
+                          for dangerous patterns. If None, uses global config setting.
             
         Returns:
             Validated email address
         """
+        # Use global config if not explicitly specified
+        if require_valid is None:
+            require_valid = config.REQUIRE_VALID_EMAIL
+        
         # Basic length check
         if len(email) > MAX_EMAIL_LENGTH:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Email too long. Maximum length is {MAX_EMAIL_LENGTH} characters."
             )
-            
-        # Basic email format validation using regex
-        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        if not re.match(email_regex, email):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Invalid email format. Must be a valid email address."
-            )
-            
-        # Check for suspicious patterns
+        
+        # Only enforce email format validation if required
+        if require_valid:
+            # Basic email format validation using regex
+            email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            if not re.match(email_regex, email):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Invalid email format. Must be a valid email address."
+                )
+        
+        # Always check for suspicious patterns (security measure)
         suspicious_patterns = [
             r'javascript:', r'data:', r'vbscript:', r'onload=', r'onerror='
         ]
@@ -211,7 +221,7 @@ class ProfileCreateRequest(BaseModel):
     
     user_id: str = Field(..., min_length=1, max_length=50, description="User ID")
     full_name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH, description="User's full name")
-    email: EmailStr = Field(..., description="User's email address")
+    email: str = Field(..., min_length=1, description="User's email address or username identifier")
     phone: Optional[str] = Field(None, description="User's phone number")
     address: Optional[str] = Field(None, max_length=MAX_ADDRESS_LENGTH, description="User's address")
     bio: Optional[str] = Field(None, max_length=MAX_BIO_LENGTH, description="User's bio")
@@ -230,7 +240,7 @@ class ProfileCreateRequest(BaseModel):
     
     @validator('email')
     def validate_email(cls, v):
-        return SecuritySanitizer.validate_email_format(str(v))
+        return SecuritySanitizer.validate_email_format(v)
     
     @validator('phone')
     def validate_phone(cls, v):
@@ -253,7 +263,7 @@ class ProfileUpdateRequest(BaseModel):
     """Request model for updating an existing user profile."""
     
     full_name: Optional[str] = Field(None, min_length=1, max_length=MAX_NAME_LENGTH, description="New full name")
-    email: Optional[EmailStr] = Field(None, description="New email address")
+    email: Optional[str] = Field(None, min_length=1, description="New email address or username identifier")
     phone: Optional[str] = Field(None, description="New phone number")
     address: Optional[str] = Field(None, max_length=MAX_ADDRESS_LENGTH, description="New address")
     bio: Optional[str] = Field(None, max_length=MAX_BIO_LENGTH, description="New bio")
@@ -265,7 +275,7 @@ class ProfileUpdateRequest(BaseModel):
     
     @validator('email')
     def validate_email(cls, v):
-        return SecuritySanitizer.validate_email_format(str(v)) if v is not None else None
+        return SecuritySanitizer.validate_email_format(v) if v is not None else None
     
     @validator('phone')
     def validate_phone(cls, v):

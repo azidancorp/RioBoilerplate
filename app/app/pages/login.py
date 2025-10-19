@@ -16,6 +16,7 @@ from app.scripts.utils import (
     get_password_strength_status,
 )
 from app.validation import SecuritySanitizer
+from app.config import config
 
 
 def guard(event: rio.GuardEvent) -> str | None:
@@ -225,6 +226,16 @@ class SignUpForm(rio.Component):
             self.is_email_valid = False
             return
 
+        # BACKEND VALIDATION: Enforce email validation if configured
+        if config.REQUIRE_VALID_EMAIL:
+            try:
+                SecuritySanitizer.validate_email_format(self.email, require_valid=True)
+            except Exception as e:
+                self.banner_style = "danger"
+                self.error_message = f"Invalid email: {str(e.detail if hasattr(e, 'detail') else e)}"
+                self.is_email_valid = False
+                return
+
         # Check if the passwords match
         if self.password != self.confirm_password:
             self.banner_style = "danger"
@@ -281,9 +292,14 @@ class SignUpForm(rio.Component):
             self.on_toggle_form("login")
 
     def validate_email(self, email: str):
+        """
+        FRONTEND VALIDATION: Validate email format in real-time as user types.
+        Respects the global config setting for email validation.
+        """
         try:
             if email:
-                SecuritySanitizer.validate_email_format(email)
+                # Use config setting for validation
+                SecuritySanitizer.validate_email_format(email, require_valid=config.REQUIRE_VALID_EMAIL)
                 self.is_email_valid = True
             else:
                 self.is_email_valid = False

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import typing as t
 from dataclasses import KW_ONLY, field
 
@@ -7,6 +8,8 @@ import rio
 
 from app.data_models import AppUser, UserSession
 from app.permissions import PAGE_ROLE_MAPPING, check_access
+
+logger = logging.getLogger(__name__)
 
 
 def guard(event: rio.GuardEvent) -> str | None:
@@ -23,18 +26,21 @@ def guard(event: rio.GuardEvent) -> str | None:
         # Get the current page path
         current_page = event.active_pages[-1].url_segment
         full_path = f"{prefix}{current_page}"
-        # print("guard checking:", full_path)
+        logger.debug(f"Guard checking access to: {full_path}")
 
         # Use the check_access function to verify permissions
         if not check_access(full_path, session.role):
-            print("Access denied, redirecting to home")
+            logger.warning(
+                f"Access denied for user (role: {session.role}) to path: {full_path}. "
+                f"Redirecting to home."
+            )
             return f"/"
 
         return None
 
     except KeyError:
         # User is not logged in, redirect to the login page
-        print("User is not logged in, redirecting to login page")
+        logger.info("Unauthenticated user attempted to access protected page. Redirecting to login.")
         return "/"
 
 

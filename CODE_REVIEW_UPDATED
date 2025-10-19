@@ -1,9 +1,4 @@
 # CODE_REVIEW_UPDATED
-
-## Critical Outstanding Issues
-- **Profile API still unauthenticated (stop-ship).** Every route under `/api/profile` is exposed without any auth dependency (`app/app/api/profiles.py:18-194`), so anonymous callers can enumerate, edit, or delete profile records. This was previously acknowledged and remains unfixed.
-- **Contact submissions leak PII to a public ntfy topic _(new)_.** `create_contact_submission` posts the full name/email/message payload to `https://ntfy.sh/rioboilerplate` when env vars are absent (`app/app/scripts/message_utils.py:16-114`). The listener topic is world-readable, so the default setup exfiltrates sensitive contact data from both the public API (`app/app/api/example.py:23-33`) and the UI form (`app/app/pages/contact.py:33-117`). Treat as a critical privacy incident.
-
 ## Major Outstanding Issues
 - **Password reset flow is still a stub.** The reset handler only shows a banner and never issues tokens or emails (`app/app/pages/login.py:410-433`), leaving users unable to recover accounts.
 - **No rate limiting on authentication & API surfaces.** Login/signup handlers (`app/app/pages/login.py:58-259`) and FastAPI endpoints (`app/app/api/profiles.py:21-194`, `app/app/api/example.py:20-33`) accept unlimited attempts, enabling brute-force and abuse scenarios previously flagged.
@@ -13,12 +8,10 @@
 - **Admin UI bypasses the persistence layer.** The admin page issues raw SQL through ad-hoc cursors (`app/app/pages/app_page/admin.py:45-218`), duplicating logic and skipping safeguards the repository was meant to centralise.
 - **2FA setup lacks recovery codes.** Enabling MFA never provisions backup codes or fallback channels (`app/app/pages/app_page/enable_mfa.py:32-111`), so users who lose their authenticator remain locked out.
 - **Notifications page still hard-coded.** The page continues to surface static `SAMPLE_NOTIFICATIONS` and ignores persistence (`app/app/pages/app_page/notifications.py:14-168`), so the feature remains non-functional.
-- **Settings toggles are non-persistent.** Notification switches only mutate component state and discard changes on reload (`app/app/pages/app_page/settings.py:53-57,218-233`).
 
 ## Moderate Outstanding Issues
 - **Navigation highlighting is brittle.** Both sidebar and navbar still index `active_page_instances[1]` (`app/app/components/sidebar.py:74-86`, `app/app/components/navbar.py:75-80`), breaking active-state styling on top-level routes and risking `IndexError`.
 - **CenterComponent API remains unsafe.** Helper methods rely on attributes populated inside `build` (`app/app/components/center_component.py:52-84`); external callers still hit `AttributeError`, exactly as the in-file warning describes.
-- **Logging via `print` persists.** Access guard and other flows emit plain prints (`app/app/pages/app_page.py:30-38`, `app/app/scripts/message_utils.py:114`), leaving no structured audit trail for denied access or notification failures.
 - **Wildcard imports & commented debug remnants.** Files such as the sidebar keep `from typing import *` and commented diagnostics (`app/app/components/sidebar.py:6,70-76`), adding lint noise.
 
 ## Testing & Tooling Gaps
@@ -27,6 +20,5 @@
 
 ## Recommended Next Steps
 1. Lock down the FastAPI surface: require authenticated sessions for profile & contact routes, add rate limiting, and close persistence connections deterministically.
-2. Replace the ntfy default with a disabled/no-op configuration until a private topic plus secret is provided, and scrub any data already posted.
 3. Finish the security basics: deliver real password reset + 2FA recovery flows, enable SQLite foreign keys, and refactor admin/notifications/settings to use the persistence/service layer.
 4. Add at least smoke tests covering authentication, profile CRUD, and contact submissions to prevent these regressions from recurring.

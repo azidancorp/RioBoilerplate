@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,8 +14,7 @@ from fastapi import HTTPException, status
 
 from app.validation import SecuritySanitizer
 
-DEFAULT_NTFY_CHANNEL = "rioboilerplate"
-DEFAULT_NTFY_PRIORITY = "max"
+logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "contact_messages"
 
@@ -98,9 +98,23 @@ def send_ntfy_message(
     channel: Optional[str] = None,
     priority: Optional[str] = None,
 ) -> None:
-    """Send a notification to an ntfy topic."""
-    target_channel = channel or DEFAULT_NTFY_CHANNEL
-    target_priority = priority or DEFAULT_NTFY_PRIORITY
+    """Send a notification to an ntfy topic.
+
+    Security: This function requires explicit configuration via environment variables.
+    When RIO_CONTACT_NTFY_CHANNEL is not set, notifications are disabled to prevent
+    accidental data leaks to public ntfy channels.
+    """
+    # Security: Require explicit channel configuration to prevent PII leaks
+    if not channel:
+        logger.warning(
+            "NTFY NOTIFICATIONS DISABLED: RIO_CONTACT_NTFY_CHANNEL environment variable "
+            "is not set. Contact form submissions will be saved locally but no notifications "
+            "will be sent. Set RIO_CONTACT_NTFY_CHANNEL to enable ntfy notifications."
+        )
+        return
+
+    target_channel = channel
+    target_priority = priority or "default"
 
     try:
         requests.post(
@@ -109,7 +123,8 @@ def send_ntfy_message(
             headers={"Priority": target_priority},
             timeout=10,
         )
-    except Exception:
+        logger.info(f"Notification sent to ntfy channel: {target_channel}")
+    except Exception as e:
         # Swallow exceptions so downstream workflows do not fail.
-        print("Failed to send ntfy message.")
+        logger.error(f"Failed to send ntfy message: {e}")
         pass

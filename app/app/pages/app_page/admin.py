@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import KW_ONLY, field
+from dataclasses import field
 import os
 import typing as t
-from datetime import datetime, timezone
-import uuid
 import pandas as pd
 
 import rio
 from app.persistence import Persistence
 from app.data_models import AppUser, UserSession
-from app.components.center_component import CenterComponent
-from app.permissions import get_manageable_roles, can_manage_role
+from app.permissions import can_manage_role
 
 @rio.page(
     name="AdminPage",
@@ -43,207 +40,158 @@ class AdminPage(rio.Component):
     delete_user_success: str = ""
     
     @rio.event.on_populate
-    def on_populate(self):
-        """Load all users when the page is populated"""
-        persistence = self.session[Persistence]
-        cursor = persistence.conn.cursor()
-        
-        # Get current user
-        user_session = self.session[UserSession]
-        cursor.execute(
-            """
-            SELECT id, email, username, created_at, password_hash, password_salt,
-                   auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code
-            FROM users
-            WHERE id = ?
-            """,
-            (str(user_session.user_id),)
-        )
-        user_row = cursor.fetchone()
-        if user_row:
-            self.current_user = AppUser(
-                id=uuid.UUID(user_row[0]),
-                email=user_row[1],
-                username=user_row[2],
-                created_at=datetime.fromtimestamp(user_row[3], tz=timezone.utc),
-                password_hash=user_row[4],
-                password_salt=user_row[5],
-                auth_provider=user_row[6],
-                auth_provider_id=user_row[7],
-                role=user_row[8],
-                is_verified=bool(user_row[9]),
-                two_factor_secret=user_row[10],
-                referral_code=user_row[11],
-            )
-        
-        # Get all users from the database
-        cursor.execute(
-            """
-            SELECT id, email, username, created_at, password_hash, password_salt,
-                   auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code
-            FROM users
-            """
-        )
-        rows = cursor.fetchall()
+    async def on_populate(self):
+        """Load all users when the page is populated."""
+        await self._load_user_data()
 
-        # Convert rows to AppUser objects and DataFrame
-        self.users = []
-        self.selected_role = {}
+    async def _load_user_data(self) -> None:
+        """Populate component state with the latest user data."""
+        persistence = self.session[Persistence]
+        user_session = self.session[UserSession]
+
+        try:
+            self.current_user = await persistence.get_user_by_id(user_session.user_id)
+        except KeyError:
+            self.current_user = None
+            self.users = []
+            self.selected_role = {}
+            self.df = pd.DataFrame([])
+            return
+
+        self.users = await persistence.list_users()
+        self.selected_role = {str(user.id): user.role for user in self.users}
 
         data = []
-        for row in rows:
-            user_id = uuid.UUID(row[0])
-            email = row[1]
-            username = row[2]
-            created_at = datetime.fromtimestamp(row[3], tz=timezone.utc)
-            role = row[8]
-            is_verified = bool(row[9])
-
-            user = AppUser(
-                id=user_id,
-                email=email,
-                username=username,
-                created_at=created_at,
-                password_hash=row[4],
-                password_salt=row[5],
-                auth_provider=row[6],
-                auth_provider_id=row[7],
-                role=role,
-                is_verified=is_verified,
-                two_factor_secret=row[10],
-                referral_code=row[11],
-            )
-            self.users.append(user)
-            self.selected_role[str(user_id)] = role
-            
-            # Add to DataFrame data
+        for user in self.users:
             data.append({
-                'Email': email,
-                'Username': username or "",
-                'Created At': created_at.strftime("%Y-%m-%d %H:%M:%S"),
-                'Role': role,
-                'Verified': '✓' if is_verified else '✗',
-                'ID': str(user_id)
+                "Email": user.email,
+                "Username": user.username or "",
+                "Created At": user.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "Role": user.role,
+                "Verified": "✓" if user.is_verified else "✗",
+                "ID": str(user.id),
             })
-        
-        # Create DataFrame
-        self.df = pd.DataFrame(data)
-    
 
-    def _on_change_role_pressed(self) -> None:
-        if not self.change_role_identifier or self.change_role_identifier == "":
+        self.df = pd.DataFrame(data)
+
+    async def _on_change_role_pressed(self) -> None:
+        identifier = (self.change_role_identifier or "").strip()
+        new_role = (self.change_role_new_role or "").strip()
+
+        if not identifier:
             self.change_role_error = "Please enter an email or username"
+            self.force_refresh()
             return
             
-        if not self.change_role_new_role or self.change_role_new_role == "":
+        if not new_role:
             self.change_role_error = "Please enter a new role"
+            self.force_refresh()
             return
-            
-        self._update_role(self.change_role_identifier, self.change_role_new_role)
-        self.change_role_identifier = ""
-        self.change_role_new_role = ""
-        
+
+        updated = await self._update_role(identifier, new_role)
+        if updated:
+            self.change_role_identifier = ""
+            self.change_role_new_role = "user"
+            await self._load_user_data()
+
         self.force_refresh()
 
-    def _fetch_user_record(self, cursor, identifier: str):
-        cursor.execute(
-            "SELECT id, email, username, role FROM users WHERE lower(email) = lower(?)",
-            (identifier,),
-        )
-        result = cursor.fetchone()
-        if result:
-            return result
-        cursor.execute(
-            "SELECT id, email, username, role FROM users WHERE username = ?",
-            (identifier,),
-        )
-        return cursor.fetchone()
-
-    def _update_role(self, identifier: str, new_role: str) -> None:
-        """Update a user's role"""
+    async def _update_role(self, identifier: str, new_role: str) -> bool:
+        """Update a user's role."""
         if not self.current_user:
             self.change_role_error = "You must be logged in to perform this action"
-            return
-            
-        persistence = self.session[Persistence]
-        cursor = persistence.conn.cursor()
+            return False
 
-        result = self._fetch_user_record(cursor, identifier)
-        if not result:
+        persistence = self.session[Persistence]
+        try:
+            target_user = await persistence.get_user_by_email_or_username(identifier)
+        except KeyError:
             self.change_role_error = f"User {identifier} not found"
-            return
-            
-        user_id = result[0]
-        current_role = result[3]
+            return False
+
+        current_role = target_user.role
+
+        try:
+            can_manage_target = can_manage_role(self.current_user.role, current_role)
+            can_manage_new = can_manage_role(self.current_user.role, new_role)
+        except ValueError:
+            self.change_role_error = f"Unknown role: {new_role}"
+            return False
 
         # Check if the current user can manage both the user's current and new roles
-        if not (can_manage_role(self.current_user.role, current_role) and 
-                can_manage_role(self.current_user.role, new_role)):
-            self.change_role_error = f"You do not have permission to change role from {current_role} to {new_role} because your role is {self.current_user.role}"
-            return
-            
-        try:
-            cursor.execute(
-                "UPDATE users SET role = ? WHERE id = ?",
-                (new_role, result[0])
+        if not (can_manage_target and can_manage_new):
+            self.change_role_error = (
+                f"You do not have permission to change role from {current_role} to "
+                f"{new_role} because your role is {self.current_user.role}"
             )
-            persistence.conn.commit()
-            
-            # Clear error on success
+            return False
+
+        try:
             self.change_role_error = ""
-            
-            # Refresh the page to show updated roles
-            self.on_populate()
-        except Exception as e:
-            self.change_role_error = f"Error updating role: {str(e)}"
+            await persistence.update_user_role(target_user.id, new_role)
+            return True
+        except Exception as exc:
+            self.change_role_error = f"Error updating role: {str(exc)}"
+            return False
         
     async def _on_delete_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """Handle the user deletion process from admin panel."""
         if not self.current_user:
             self.delete_user_error = "You must be logged in to perform this action"
+            self.delete_user_success = ""
+            self.force_refresh()
             return
             
         if not self.delete_user_identifier or self.delete_user_identifier == "":
             self.delete_user_error = "Please enter an email or username to delete"
+            self.delete_user_success = ""
+            self.force_refresh()
             return
             
         if self.delete_user_confirmation != f"DELETE USER {self.delete_user_identifier}":
             self.delete_user_error = f'Please type "DELETE USER {self.delete_user_identifier}" exactly to confirm deletion'
+            self.delete_user_success = ""
+            self.force_refresh()
             return
             
         persistence = self.session[Persistence]
-        cursor = persistence.conn.cursor()
-        
-        # Get the target user's information
-        result = self._fetch_user_record(cursor, self.delete_user_identifier)
-        if not result:
+
+        try:
+            target_user = await persistence.get_user_by_email_or_username(self.delete_user_identifier)
+        except KeyError:
             self.delete_user_error = f"User not found: {self.delete_user_identifier}"
+            self.delete_user_success = ""
+            self.force_refresh()
             return
             
-        target_user_id = uuid.UUID(result[0])
-        target_role = result[3]
+        target_role = target_user.role
         
         # Check if current user has permission to delete this user
         if not can_manage_role(self.current_user.role, target_role):
             self.delete_user_error = f"You do not have permission to delete users with role: {target_role} because your role is {self.current_user.role}"
+            self.delete_user_success = ""
+            self.force_refresh()
             return
             
         # Validate admin deletion password
         if not self.delete_user_password or self.delete_user_password == "":
             self.delete_user_error = "Please enter the admin deletion password"
+            self.delete_user_success = ""
+            self.force_refresh()
             return
             
         # Check admin deletion password against environment variable
         ADMIN_DELETION_PASSWORD = os.getenv('ADMIN_DELETION_PASSWORD')
         if ADMIN_DELETION_PASSWORD is None:
             self.delete_user_error = "ADMIN_DELETION_PASSWORD environment variable is not set. Please configure your environment variables."
+            self.delete_user_success = ""
+            self.force_refresh()
             return
             
         if self.delete_user_password != ADMIN_DELETION_PASSWORD:
             self.delete_user_error = "Incorrect admin deletion password"
             self.delete_user_success = ""
+            self.force_refresh()
             return
             
         # Store username for success message
@@ -252,7 +200,7 @@ class AdminPage(rio.Component):
         # Delete the user
         try:
             success = await persistence.delete_user(
-                user_id=target_user_id,
+                user_id=target_user.id,
                 password=self.delete_user_password,  # Use entered admin deletion password
                 two_factor_code=None  # No 2FA needed for admin deletion
             )
@@ -265,13 +213,16 @@ class AdminPage(rio.Component):
                 self.delete_user_password = ""
                 self.delete_user_error = ""
                 # Refresh the page to show updated user list
-                self.on_populate()
+                await self._load_user_data()
+                self.force_refresh()
             else:
                 self.delete_user_error = "Failed to delete user"
                 self.delete_user_success = ""
+                self.force_refresh()
         except Exception as e:
             self.delete_user_error = f"Error deleting user: {str(e)}"
             self.delete_user_success = ""
+            self.force_refresh()
     
     def build(self) -> rio.Component:
         if not self.current_user or self.df is None:

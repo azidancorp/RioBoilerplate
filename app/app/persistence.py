@@ -432,6 +432,110 @@ class Persistence:
 
         raise KeyError(id)
 
+    async def list_users(self) -> list[AppUser]:
+        """
+        Retrieve all users from the database.
+
+        Returns:
+            list[AppUser]: List of users ordered by creation time.
+        """
+        cursor = self._get_cursor()
+        cursor.execute(
+            """
+            SELECT id, email, username, created_at, password_hash, password_salt,
+                   auth_provider, auth_provider_id, role, is_verified,
+                   two_factor_secret, referral_code,
+                   email_notifications_enabled, sms_notifications_enabled
+            FROM users
+            ORDER BY created_at DESC
+            """
+        )
+
+        rows = cursor.fetchall()
+        return [self._row_to_app_user(row) for row in rows]
+
+    async def get_user_by_email_or_username(self, identifier: str) -> AppUser:
+        """
+        Retrieve a user by email or username regardless of login feature flags.
+
+        Args:
+            identifier: Email or username to look up.
+
+        Raises:
+            KeyError: If no matching user is found.
+        """
+        sanitized_identifier = identifier.strip()
+        if not sanitized_identifier:
+            raise KeyError(identifier)
+
+        cursor = self._get_cursor()
+        cursor.execute(
+            """
+            SELECT id, email, username, created_at, password_hash, password_salt,
+                   auth_provider, auth_provider_id, role, is_verified,
+                   two_factor_secret, referral_code,
+                   email_notifications_enabled, sms_notifications_enabled
+            FROM users
+            WHERE lower(email) = lower(?)
+            LIMIT 1
+            """,
+            (sanitized_identifier,),
+        )
+
+        row = cursor.fetchone()
+        if row:
+            return self._row_to_app_user(row)
+
+        cursor.execute(
+            """
+            SELECT id, email, username, created_at, password_hash, password_salt,
+                   auth_provider, auth_provider_id, role, is_verified,
+                   two_factor_secret, referral_code,
+                   email_notifications_enabled, sms_notifications_enabled
+            FROM users
+            WHERE username = ?
+            LIMIT 1
+            """,
+            (sanitized_identifier,),
+        )
+
+        row = cursor.fetchone()
+        if row:
+            return self._row_to_app_user(row)
+
+        raise KeyError(identifier)
+
+    async def update_user_role(self, user_id: uuid.UUID, new_role: str) -> None:
+        """
+        Update a user's role and keep active sessions in sync.
+
+        Args:
+            user_id: The user to update.
+            new_role: The new role value.
+
+        Raises:
+            KeyError: If the user does not exist.
+        """
+        cursor = self._get_cursor()
+
+        # Ensure the user exists before updating.
+        await self.get_user_by_id(user_id)
+
+        cursor.execute(
+            "UPDATE users SET role = ? WHERE id = ?",
+            (new_role, str(user_id)),
+        )
+
+        if cursor.rowcount == 0:
+            raise KeyError(user_id)
+
+        cursor.execute(
+            "UPDATE user_sessions SET role = ? WHERE user_id = ?",
+            (new_role, str(user_id)),
+        )
+
+        self.conn.commit()
+
     async def create_session(
         self,
         user_id: uuid.UUID,

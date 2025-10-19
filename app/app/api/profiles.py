@@ -144,6 +144,11 @@ async def create_profile(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"A profile with email {profile_data.email} already exists"
             )
+        elif "FOREIGN KEY constraint failed" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User {profile_data.user_id} does not exist"
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while creating the profile"

@@ -27,6 +27,22 @@ class Persistence:
 
     `db_path`: Path to the SQLite database file
     `allow_username_login`: Feature flag for username-based login fallbacks. Defaults to False.
+
+    ## Foreign Key Enforcement
+
+    This class enforces referential integrity via SQLite foreign key constraints.
+    All database connections automatically enable `PRAGMA foreign_keys = ON`.
+
+    **Active Foreign Key Constraints:**
+    - `user_sessions.user_id` → `users.id`
+    - `password_reset_codes.user_id` → `users.id`
+    - `profiles.user_id` → `users.id`
+
+    **Implications:**
+    - Cannot create child records (sessions, profiles, reset codes) for non-existent users
+    - Cannot delete users without first deleting all related child records
+    - Violations raise `sqlite3.IntegrityError` with foreign key constraint details
+    - All operations follow proper cascade order (verified safe)
     """
 
     def __init__(
@@ -51,9 +67,16 @@ class Persistence:
     def _ensure_connection(self) -> None:
         """
         Ensure database connection is active. Reconnect if needed.
+
+        CRITICAL: Enables foreign key constraints for data integrity.
+        SQLite disables FK enforcement by default for backwards compatibility.
+        This MUST be executed on EVERY connection to prevent orphaned records.
         """
         if self.conn is None:
             self.conn = sqlite3.connect(self.db_path)
+            # Enable foreign key constraint enforcement
+            # Without this, FK declarations in schema are completely ignored
+            self.conn.execute("PRAGMA foreign_keys = ON")
             
     def _get_cursor(self):
         """

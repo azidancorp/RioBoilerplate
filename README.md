@@ -57,8 +57,6 @@ Focus release verification on:
 - Profile CRUD via the UI and `/api/profiles`.
 - Error handling across contact flows and API responses.
 
-Capture additional coverage with pytest modules in `app/tests/`.
-
 ## Further Reading
 - `AGENTS.md` – contributor workflow and coding standards.
 - `CLAUDE.md` – extended architecture and assistant notes.

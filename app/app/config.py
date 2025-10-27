@@ -36,7 +36,12 @@ class AppConfig:
     # Options: "email" or "username"
     # Note: Even if set to "username", email field is still stored but not validated.
     PRIMARY_IDENTIFIER: str = "email"
-    
+
+    # Password Policy
+    # ---------------
+    # TODO: Evaluate and tune minimum password strength enforcement for all password updates.
+    MIN_PASSWORD_STRENGTH: int = 50
+
     @classmethod
     def from_env(cls) -> "AppConfig":
         """
@@ -48,6 +53,7 @@ class AppConfig:
             REQUIRE_VALID_EMAIL=os.getenv("REQUIRE_VALID_EMAIL", "true").lower() == "true",
             ALLOW_USERNAME_LOGIN=os.getenv("ALLOW_USERNAME_LOGIN", "false").lower() == "true",
             PRIMARY_IDENTIFIER=os.getenv("PRIMARY_IDENTIFIER", "email").lower(),
+            MIN_PASSWORD_STRENGTH=int(os.getenv("MIN_PASSWORD_STRENGTH", "50")),
         )
 
 

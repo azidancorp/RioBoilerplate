@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import KW_ONLY, field
-from typing import *  # type: ignore
 
 import rio
 import numpy as np

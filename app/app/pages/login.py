@@ -6,6 +6,7 @@ from dataclasses import KW_ONLY, field
 import pyotp
 
 import rio
+from fastapi import HTTPException
 
 from app.persistence import Persistence
 from app.data_models import AppUser, UserSettings, RecoveryCodeUsage
@@ -15,6 +16,7 @@ from app.scripts.utils import (
     get_password_strength_color,
     get_password_strength_status,
 )
+from app.scripts.message_utils import send_email
 from app.validation import SecuritySanitizer
 from app.config import config
 
@@ -432,42 +434,226 @@ class SignUpForm(rio.Component):
 
 class ResetPasswordForm(rio.Component):
     """
-    Provides an interface for resetting the user’s password.
-    User enters their email (or username if enabled), then clicks reset.
+    Provides an interface for resetting the user's password with a one-time code.
     """
 
-    username_or_email: str = ""
+    email: str = ""
+    reset_code: str = ""
+    new_password: str = ""
+    confirm_password: str = ""
+    verification_code: str = ""
     error_message: str = ""
     banner_style: str = "danger"
+    code_sent: bool = False
+    require_two_factor: bool = False
+    _is_processing: bool = False
+    password_strength: int = 0
+    do_passwords_match: bool = False
 
     # We'll expose an event so that the parent page can toggle forms
     on_toggle_form: t.Callable[[str], None] | None = None
 
-    async def on_reset_password_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
+    def _set_banner(self, style: str, message: str) -> None:
+        self.banner_style = style
+        self.error_message = message
+
+    async def on_primary_action(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
-        Handles sending a password reset request to the user’s email.
-        You’d typically generate a token, email the user, etc.
+        Handle the primary button or enter key presses.
         """
-        if not self.username_or_email:
-            self.banner_style = "danger"
-            self.error_message = "Please enter your email address."
+        if self._is_processing:
             return
 
-        # Attempt to locate the user by email first, username as a fallback.
-        pers = self.session[Persistence]
+        self._is_processing = True
+        self.force_refresh()
+
         try:
-            user_info = await pers.get_user_by_identity(identifier=self.username_or_email)
-            # If user is found, you'd trigger an email or some method of resetting password
-            # For now, let’s just simulate success.
-            self.banner_style = "success"
-            self.error_message = (
-                "A password reset link has been sent to your email (simulated)."
-            )
+            if self.code_sent:
+                await self._update_password()
+            else:
+                await self._send_reset_code()
+        finally:
+            self._is_processing = False
+            self.force_refresh()
+
+    async def on_resend_code(self, _=None) -> None:
+        """
+        Allow the user to regenerate a reset code if the previous one expired.
+        """
+        if self._is_processing:
+            return
+
+        self._is_processing = True
+        self.force_refresh()
+
+        try:
+            await self._send_reset_code()
+        finally:
+            self._is_processing = False
+            self.force_refresh()
+
+    async def _send_reset_code(self) -> None:
+        """
+        Generate a reset code, persist it, and send it via email.
+        """
+        try:
+            sanitized_email = SecuritySanitizer.validate_email_format(self.email)
+        except HTTPException as exc:
+            detail = getattr(exc, "detail", "Please provide a valid email address.")
+            self._set_banner("danger", str(detail))
+            return
+
+        pers = self.session[Persistence]
+
+        try:
+            user_info = await pers.get_user_by_identity(identifier=sanitized_email)
         except KeyError:
-            self.banner_style = "danger"
-            self.error_message = (
-                "No account found with that email address. Please try again."
+            self._set_banner("danger", "No account found with that email address. Please try again.")
+            return
+
+        if user_info.auth_provider != "password":
+            provider_name = user_info.auth_provider.title()
+            self._set_banner(
+                "danger",
+                f"This account is configured for {provider_name} sign-in. Please continue with that provider.",
             )
+            return
+
+        try:
+            reset_code = await pers.create_reset_code(user_info.id)
+        except Exception:
+            self._set_banner("danger", "We were unable to create a reset code. Please try again.")
+            return
+
+        email_body = (
+            "Hi,\n\n"
+            f"Your password reset code is {reset_code.code}. Enter this code in the Rio app to choose a new password.\n\n"
+            f"This code expires on {reset_code.valid_until.strftime('%Y-%m-%d %H:%M %Z')}.\n\n"
+            "If you did not request this code, you can ignore this email."
+        )
+
+        try:
+            send_email(
+                recipient=sanitized_email,
+                subject="Your Rio password reset code",
+                body=email_body,
+            )
+        except HTTPException as exc:
+            detail = getattr(exc, "detail", "Failed to send reset email.")
+            self._set_banner("danger", str(detail))
+            return
+        except Exception:
+            self._set_banner("danger", "Failed to send reset email. Please try again.")
+            return
+
+        self.email = sanitized_email
+        self.require_two_factor = bool(user_info.two_factor_secret)
+        self.code_sent = True
+        self.reset_code = ""
+        self.new_password = ""
+        self.confirm_password = ""
+        self.verification_code = ""
+        self._set_banner(
+            "success",
+            "We've emailed a reset code. Enter it below along with your new password.",
+        )
+
+    async def _update_password(self) -> None:
+        """
+        Validate the reset code and update the user's password.
+        """
+        try:
+            sanitized_email = SecuritySanitizer.validate_email_format(self.email)
+        except HTTPException as exc:
+            detail = getattr(exc, "detail", "Please provide a valid email address.")
+            self._set_banner("danger", str(detail))
+            return
+
+        try:
+            sanitized_code = SecuritySanitizer.sanitize_auth_code(self.reset_code, max_length=12)
+        except HTTPException as exc:
+            detail = getattr(exc, "detail", "Invalid reset code.")
+            self._set_banner("danger", str(detail))
+            return
+
+        if not sanitized_code:
+            self._set_banner("danger", "Please enter the reset code that was emailed to you.")
+            return
+
+        if not self.new_password:
+            self._set_banner("danger", "Please enter a new password.")
+            return
+
+        if self.new_password != self.confirm_password:
+            self._set_banner("danger", "Passwords do not match.")
+            return
+
+        strength = get_password_strength(self.new_password)
+        # TODO: Shift this strength gate into the persistence layer once strict policy resumes.
+        if strength < config.MIN_PASSWORD_STRENGTH:
+            self._set_banner(
+                "danger",
+                "Password is too weak. Please choose a stronger password.",
+            )
+            return
+
+        pers = self.session[Persistence]
+
+        try:
+            user = await pers.get_user_by_reset_code(sanitized_code)
+        except KeyError:
+            self._set_banner("danger", "Invalid or expired reset code. Please request a new one.")
+            return
+
+        if user.email.lower() != sanitized_email:
+            self._set_banner("danger", "Reset code does not match this email address.")
+            return
+
+        self.require_two_factor = bool(user.two_factor_secret)
+
+        if user.two_factor_secret:
+            try:
+                sanitized_verification = SecuritySanitizer.sanitize_auth_code(self.verification_code)
+            except HTTPException as exc:
+                detail = getattr(exc, "detail", "Invalid verification code.")
+                self._set_banner("danger", str(detail))
+                return
+
+            if not sanitized_verification:
+                self._set_banner(
+                    "danger",
+                    "2FA is enabled for this account. Please enter your verification or recovery code.",
+                )
+                return
+
+            totp_input = sanitized_verification.replace("-", "")
+            totp = pyotp.TOTP(user.two_factor_secret)
+            if not (totp_input.isdigit() and totp.verify(totp_input)):
+                if not pers.consume_recovery_code(user.id, sanitized_verification):
+                    self._set_banner("danger", "Invalid verification or recovery code.")
+                    return
+
+        consumed = await pers.consume_reset_code(sanitized_code, user.id)
+        if not consumed:
+            self._set_banner("danger", "Reset code has already been used. Please request a new one.")
+            return
+
+        try:
+            await pers.update_password(user.id, self.new_password)
+        except Exception:
+            self._set_banner("danger", "Failed to update password. Please request a new code and try again.")
+            return
+
+        self._set_banner(
+            "success",
+            "Your password has been updated. You can now log in with your new credentials.",
+        )
+        self.code_sent = False
+        self.require_two_factor = False
+        self.reset_code = ""
+        self.new_password = ""
+        self.confirm_password = ""
+        self.verification_code = ""
 
     def on_back_to_login_pressed(self):
         """
@@ -476,7 +662,108 @@ class ResetPasswordForm(rio.Component):
         if self.on_toggle_form:
             self.on_toggle_form("login")
 
+    async def update_new_password(self, event: rio.TextInputChangeEvent):
+        self.new_password = event.text
+        self.password_strength = get_password_strength(self.new_password)
+        self.do_passwords_match = self.new_password == self.confirm_password
+        self.force_refresh()
+
+    async def update_confirm_password(self, event: rio.TextInputChangeEvent):
+        self.confirm_password = event.text
+        self.do_passwords_match = self.new_password == self.confirm_password
+        self.force_refresh()
+
+    def password_strength_progress(self) -> rio.Component:
+        return rio.ProgressBar(
+            progress=max(0, min(self.password_strength / 100, 1)),
+            color=get_password_strength_color(self.password_strength),
+        )
+
     def build(self) -> rio.Component:
+        primary_label = "Update Password" if self.code_sent else "Send Reset Code"
+        strength = get_password_strength(self.new_password) if self.code_sent else 0
+
+        additional_inputs: list[rio.Component] = []
+        if self.code_sent:
+            additional_inputs.extend(
+                [
+                    rio.TextInput(
+                        text=self.new_password,
+                        label="New password",
+                        is_secret=True,
+                        on_change=self.update_new_password,
+                        on_confirm=self.on_primary_action,
+                    ),
+                    rio.TextInput(
+                        text=self.confirm_password,
+                        label="Confirm new password",
+                        is_secret=True,
+                        is_sensitive=True,
+                        on_change=self.update_confirm_password,
+                        on_confirm=self.on_primary_action,
+                    ),
+                    rio.TextInput(
+                        text=self.bind().reset_code,
+                        label="Email reset code",
+                        on_confirm=self.on_primary_action,
+                    ),
+                ]
+            )
+            if self.require_two_factor:
+                additional_inputs.append(
+                    rio.TextInput(
+                        text=self.bind().verification_code,
+                        label="2FA or recovery code (if enabled)",
+                        on_confirm=self.on_primary_action,
+                    )
+                )
+
+            # Always show password strength indicators when in password reset mode
+            additional_inputs.extend(
+                [
+                    rio.Text(
+                        f'Passwords match: {self.do_passwords_match}',
+                        style=rio.TextStyle(
+                            fill=rio.Color.from_rgb(0, 1, 0)
+                            if self.do_passwords_match else rio.Color.from_rgb(1, 0, 0)
+                        ),
+                    ),
+                    rio.Text(
+                        f'Password strength: {self.password_strength}, '
+                        f'{get_password_strength_status(self.password_strength)}',
+                        style=rio.TextStyle(fill=get_password_strength_color(self.password_strength))
+                    ),
+                    self.password_strength_progress(),
+                ]
+            )
+
+        buttons: list[rio.Component] = [
+            rio.Button(
+                primary_label,
+                on_press=self.on_primary_action,
+                is_loading=self._is_processing,
+                shape='rounded',
+            ),
+        ]
+
+        if self.code_sent:
+            buttons.append(
+                rio.Button(
+                    "Resend Code",
+                    on_press=self.on_resend_code,
+                    is_loading=self._is_processing,
+                    shape='rounded',
+                )
+            )
+
+        buttons.append(
+            rio.Button(
+                "Back to Login",
+                on_press=self.on_back_to_login_pressed,
+                shape='rounded',
+            )
+        )
+
         return rio.Card(
             rio.Column(
                 rio.Text("Reset Password", style="heading1", justify="center"),
@@ -486,21 +773,14 @@ class ResetPasswordForm(rio.Component):
                     margin_top=1,
                 ),
                 rio.TextInput(
-                    text=self.bind().username_or_email,
+                    text=self.bind().email,
                     label="Email",
-                    on_confirm=self.on_reset_password_pressed,
+                    on_confirm=self.on_primary_action,
+                    is_sensitive=True,
                 ),
+                *additional_inputs,
                 rio.Row(
-                    rio.Button(
-                        "Reset Password",
-                        on_press=self.on_reset_password_pressed,
-                        shape='rounded',
-                    ),
-                    rio.Button(
-                        "Back to Login",
-                        on_press=self.on_back_to_login_pressed,
-                        shape='rounded',
-                    ),
+                    *buttons,
                     spacing=2
                 ),
                 spacing=1,

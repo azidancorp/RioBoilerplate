@@ -986,6 +986,7 @@ class Persistence:
         await self.get_user_by_id(user_id)  # Will raise KeyError if user doesn't exist
         
         # Generate new password hash and salt using AppUser's method
+        # TODO: Enforce minimum password strength once QA convenience window closes.
         password_salt = secrets.token_bytes(64)
         password_hash = AppUser.get_password_hash(new_password, password_salt)
         
@@ -1072,27 +1073,40 @@ class Persistence:
         """
         # First verify the user exists
         await self.get_user_by_id(user_id)
-        
-        # Create a new reset code
-        reset_code = PasswordResetCode.create_new_reset_code(user_id)
-        
-        # Store it in the database
+
+        # Remove any existing codes for this user to enforce single-use semantics
+        await self.clear_reset_code(user_id)
+
         cursor = self._get_cursor()
-        cursor.execute(
-            """
-            INSERT INTO password_reset_codes (code, user_id, created_at, valid_until)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                reset_code.code,
-                str(reset_code.user_id),
-                reset_code.created_at.timestamp(),
-                reset_code.valid_until.timestamp(),
-            ),
-        )
-        self.conn.commit()
-        
-        return reset_code
+        attempts = 0
+
+        while attempts < 5:
+            attempts += 1
+            reset_code = PasswordResetCode.create_new_reset_code(user_id)
+
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO password_reset_codes (code, user_id, created_at, valid_until)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        reset_code.code,
+                        str(reset_code.user_id),
+                        reset_code.created_at.timestamp(),
+                        reset_code.valid_until.timestamp(),
+                    ),
+                )
+                self.conn.commit()
+                return reset_code
+            except sqlite3.IntegrityError:
+                self.conn.rollback()
+                continue
+            except Exception:
+                self.conn.rollback()
+                raise
+
+        raise RuntimeError("Failed to generate a unique password reset code.")
 
     async def get_user_by_reset_code(self, code: str) -> AppUser:
         """
@@ -1129,10 +1143,44 @@ class Persistence:
         # Check if the code is expired
         valid_until = datetime.fromtimestamp(row[1], tz=timezone.utc)
         if datetime.now(timezone.utc) >= valid_until:
+            cursor.execute(
+                "DELETE FROM password_reset_codes WHERE code = ?",
+                (code,),
+            )
+            self.conn.commit()
             raise KeyError(f"Reset code has expired: {code}")
             
         # Get and return the associated user
         return await self.get_user_by_id(uuid.UUID(row[0]))
+
+    async def consume_reset_code(self, code: str, user_id: uuid.UUID) -> bool:
+        """
+        Delete a password reset code after successful use.
+
+        Returns True when the code was removed; False when the code was missing.
+        """
+        cursor = self._get_cursor()
+
+        self.conn.execute("BEGIN IMMEDIATE")
+
+        try:
+            cursor.execute(
+                """
+                DELETE FROM password_reset_codes
+                WHERE code = ? AND user_id = ?
+                """,
+                (code, str(user_id)),
+            )
+
+            if cursor.rowcount != 1:
+                self.conn.rollback()
+                return False
+
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
 
     async def clear_reset_code(self, user_id: uuid.UUID) -> None:
         """

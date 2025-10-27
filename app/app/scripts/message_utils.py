@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import smtplib
 from datetime import datetime, timezone
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -17,6 +19,7 @@ from app.validation import SecuritySanitizer
 logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "contact_messages"
+_EMAIL_OUTBOX_DIR = Path(__file__).resolve().parent.parent / "data" / "email_outbox"
 
 
 def create_contact_submission(name: str, email: str, message: str) -> Dict[str, Any]:
@@ -90,6 +93,79 @@ def _notify_contact_submission(submission: Dict[str, Any]) -> None:
         channel=os.getenv("RIO_CONTACT_NTFY_CHANNEL"),
         priority=os.getenv("RIO_CONTACT_NTFY_PRIORITY"),
     )
+
+
+def send_email(
+    recipient: str,
+    subject: str,
+    body: str,
+    *,
+    sender: Optional[str] = None,
+    persist_copy: bool = True,
+) -> None:
+    """
+    Send a plain text email using basic SMTP configuration with a local outbox fallback.
+
+    When no SMTP settings are provided, the message is persisted to the data/email_outbox
+    directory so testers can inspect outbound mail during development.
+    """
+    sanitized_recipient = SecuritySanitizer.validate_email_format(recipient)
+
+    subject = (subject or "").strip()
+    if not subject:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Email subject must not be empty.",
+        )
+
+    sender_address = (sender or os.getenv("RIO_DEFAULT_EMAIL_SENDER") or "no-reply@rio.local").strip()
+    if not sender_address:
+        sender_address = "no-reply@rio.local"
+
+    message = EmailMessage()
+    message["To"] = sanitized_recipient
+    message["From"] = sender_address
+    message["Subject"] = subject
+    message.set_content(body)
+
+    smtp_host = os.getenv("RIO_SMTP_HOST")
+    if smtp_host:
+        smtp_port = int(os.getenv("RIO_SMTP_PORT", "587"))
+        username = os.getenv("RIO_SMTP_USERNAME")
+        password = os.getenv("RIO_SMTP_PASSWORD")
+        use_tls = os.getenv("RIO_SMTP_USE_TLS", "true").lower() not in {"0", "false", "no"}
+
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as smtp:
+                if use_tls:
+                    smtp.starttls()
+                if username and password:
+                    smtp.login(username, password)
+                smtp.send_message(message)
+                logger.info("Sent email via SMTP to %s", sanitized_recipient)
+                return
+        except Exception as exc:
+            logger.error("Failed to send email via SMTP: %s", exc)
+
+    if persist_copy:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        sanitized_filename = sanitized_recipient.replace("@", "_at_").replace(".", "_")
+        _EMAIL_OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
+        outbox_path = _EMAIL_OUTBOX_DIR / f"{timestamp}-{sanitized_filename}.txt"
+
+        try:
+            with outbox_path.open("w", encoding="utf-8") as handle:
+                handle.write(f"To: {sanitized_recipient}\n")
+                handle.write(f"From: {sender_address}\n")
+                handle.write(f"Subject: {subject}\n\n")
+                handle.write(body)
+            logger.info("Email saved to local outbox: %s", outbox_path)
+        except OSError as exc:
+            logger.error("Failed to persist email to outbox: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Unable to queue email for delivery.",
+            ) from exc
 
 
 def send_ntfy_message(

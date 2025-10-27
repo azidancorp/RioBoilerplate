@@ -151,10 +151,13 @@ class PasswordResetCode:
     def create_new_reset_code(cls, user_id: uuid.UUID) -> PasswordResetCode:
         """
         Create a new reset code for a user that is valid for 24 hours.
+
+        Reset codes are short-lived numeric tokens intended for one-time use.
         """
         now = datetime.now(timezone.utc)
+        numeric_code = f"{secrets.randbelow(1_000_000):06d}"
         return cls(
-            code=secrets.token_urlsafe(32),  # 32 bytes = 43 characters
+            code=numeric_code,
             user_id=user_id,
             created_at=now,
             valid_until=now + timedelta(hours=24)

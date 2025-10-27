@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import KW_ONLY, field
 import re
 import warnings
-from typing import *  # type: ignore
 
 import rio
 import app.theme as theme
@@ -73,12 +72,8 @@ class SideBarLink(rio.Component):
 
     def build(self) -> rio.Component:
         # Get the URL segment of the active page for comparison.
-        # print("active page instances", self.session.active_page_instances)
-        # print("active page 0", self.session.active_page_instances[0])
-        # print("active page url segment", self.session.active_page_instances[1].url_segment)
         try:
             active_page_url_segment = self.session.active_page_instances[1].url_segment
-            # print("active page url segment", active_page_url_segment)
         except IndexError:
             active_page_url_segment = None
 

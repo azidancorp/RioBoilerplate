@@ -130,6 +130,76 @@ Core dependencies include:
 - Proper HTTP status codes and error handling
 - SQLite integrity constraint handling
 
+## Role Management & Customization
+
+**Centralized Role System** (`app/permissions.py`):
+The application uses a fully centralized role management system where **all role definitions** live in a single file: `app/permissions.py`. This is the **single source of truth** for roles throughout the entire application.
+
+**Key Principle**: To customize roles for your application, you only need to edit the `ROLE_HIERARCHY` dictionary in `permissions.py`. All other components automatically adapt to your role definitions.
+
+**Role Hierarchy**:
+```python
+# In app/permissions.py
+ROLE_HIERARCHY = {
+    "root": 1,    # Highest privilege (lowest number)
+    "admin": 2,   # Medium privilege
+    "user": 3     # Lowest privilege (highest number)
+}
+```
+
+**Customization Example**:
+To create a custom role hierarchy for your application (e.g., a forum):
+```python
+ROLE_HIERARCHY = {
+    "owner": 1,
+    "moderator": 2,
+    "member": 3,
+    "guest": 4
+}
+```
+
+**Helper Functions Available**:
+- `get_all_roles()` - Returns list of all valid roles
+- `get_default_role()` - Returns the default role for new users (lowest privilege)
+- `get_first_user_role()` - Returns role for first registered user (highest privilege)
+- `get_highest_privilege_role()` - Returns the highest privilege role name
+- `get_manageable_roles(user_role)` - Returns roles that a user can manage
+- `validate_role(role)` - Checks if a role is valid
+- `is_privileged_role(role, min_level)` - Checks if role meets privilege threshold
+- `can_manage_role(manager_role, target_role)` - Permission checks for role changes
+- `get_role_level(role)` - Returns hierarchy level number
+
+**Components Using Centralized Roles**:
+- `app/data_models.py` - Default role for new AppUser instances
+- `app/persistence.py` - Database operations, first user assignment, role validation
+- `app/pages/app_page/admin.py` - Role dropdown dynamically generated from manageable roles
+- `app/components/sidebar.py` - Link visibility based on highest privilege role
+- `app/api/auth_dependencies.py` - Privilege checks without hardcoded role names
+
+**Page Access Control**:
+Page-level permissions are defined in `PAGE_ROLE_MAPPING` (also in `permissions.py`):
+```python
+PAGE_ROLE_MAPPING = {
+    "/app/dashboard": ["root", "admin", "user"],
+    "/app/admin": ["root", "admin"],
+    "/app/news": ["root", "admin"],
+    ...
+}
+```
+
+Update these mappings when you customize your roles. The highest privilege role automatically has access to all pages.
+
+**Role Validation**:
+- All role changes are validated against `ROLE_HIERARCHY` in the persistence layer
+- Invalid roles are rejected with helpful error messages
+- Database schema stores roles as TEXT for flexibility
+
+**Best Practices**:
+1. Always use helper functions instead of hardcoding role names
+2. Use privilege level checks (`is_privileged_role()`) instead of exact role matches
+3. Update `PAGE_ROLE_MAPPING` when adding new protected pages
+4. Keep the hierarchy numbering consistent (lower = higher privilege)
+
 ## Configuration (`app/config.py`)
 
 The application uses a centralized configuration system that can be controlled via the `AppConfig` class or environment variables:

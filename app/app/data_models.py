@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 import rio
+from app.permissions import get_default_role
 
 
 @dataclass
@@ -56,7 +57,7 @@ class AppUser:
     password_salt: bytes | None
     auth_provider: str = "password"
     auth_provider_id: str | None = None
-    role: str = 'user'
+    role: str = get_default_role()  # Dynamically set from permissions.ROLE_HIERARCHY
     is_verified: bool = False
 
     # The referral code used during sign-up (if any)
@@ -103,7 +104,7 @@ class AppUser:
             password_hash=cls.get_password_hash(password, password_salt),
             password_salt=password_salt,
             auth_provider="password",
-            role='user',
+            role=get_default_role(),
             is_verified=False,
             referral_code=referral_code,
         )

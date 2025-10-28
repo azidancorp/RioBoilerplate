@@ -23,7 +23,7 @@ from fastapi import Depends, HTTPException, status, Header
 
 from app.data_models import AppUser, UserSession
 from app.persistence import Persistence
-from app.permissions import get_role_level
+from app.permissions import get_role_level, is_privileged_role
 
 
 # ============================================================================
@@ -119,8 +119,13 @@ async def get_current_user(
 # ============================================================================
 
 def is_admin_or_root(user: AppUser) -> bool:
-    """Check if user has admin or root role."""
-    return user.role in ["admin", "root"]
+    """
+    Check if user has admin or higher privileges.
+
+    Uses the role hierarchy to determine if user has sufficient privileges
+    without hardcoding role names.
+    """
+    return is_privileged_role(user.role, min_level=2)
 
 
 def require_self_or_admin(

@@ -7,7 +7,7 @@ import warnings
 import rio
 import app.theme as theme
 from app.data_models import AppUser
-from app.permissions import PAGE_ROLE_MAPPING
+from app.permissions import PAGE_ROLE_MAPPING, get_highest_privilege_role
 
 
 # Define all possible sidebar links with their paths and icons
@@ -176,11 +176,11 @@ class Sidebar(rio.Component):
                 min_width=0,  # Shrink the sidebar when no links are shown
             )
 
-        # Show all links if user is root, otherwise filter based on role
+        # Show all links if user has highest privilege, otherwise filter based on role
         visible_links = [
             SideBarLink(title, url, icon)
             for title, url, icon in ALL_SIDEBAR_LINKS
-        ] if user_role == "root" else [
+        ] if user_role == get_highest_privilege_role() else [
             SideBarLink(title, url, icon)
             for title, url, icon in ALL_SIDEBAR_LINKS
             if url in PAGE_ROLE_MAPPING and user_role in PAGE_ROLE_MAPPING[url]

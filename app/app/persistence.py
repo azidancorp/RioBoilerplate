@@ -10,6 +10,7 @@ from pathlib import Path
 from app.data_models import AppUser, UserSession, PasswordResetCode, RecoveryCodeRecord
 from app.validation import SecuritySanitizer
 from app.config import config
+from app.permissions import get_default_role, get_first_user_role, validate_role, get_all_roles
 import pyotp
 
 
@@ -143,7 +144,7 @@ class Persistence:
                 password_salt BLOB,
                 auth_provider TEXT NOT NULL DEFAULT 'password',
                 auth_provider_id TEXT,
-                role TEXT NOT NULL DEFAULT 'user',
+                role TEXT NOT NULL,
                 is_verified BOOLEAN NOT NULL DEFAULT 0,
                 two_factor_secret TEXT,
                 referral_code TEXT DEFAULT '',
@@ -489,9 +490,13 @@ class Persistence:
         cursor.execute("SELECT COUNT(*) FROM users")
         user_count = cursor.fetchone()[0]
 
-        # If this is the first user, set their role to root
+        # If this is the first user, set their role to the highest privilege role
         if user_count == 0:
-            user.role = "root"
+            user.role = get_first_user_role()
+
+        # Validate that the role is valid
+        if not validate_role(user.role):
+            raise ValueError(f"Invalid role: {user.role}. Must be one of: {', '.join(get_all_roles())}")
 
         cursor.execute(
             """
@@ -770,7 +775,12 @@ class Persistence:
 
         Raises:
             KeyError: If the user does not exist.
+            ValueError: If the role is not valid.
         """
+        # Validate the new role
+        if not validate_role(new_role):
+            raise ValueError(f"Invalid role: {new_role}. Must be one of: {', '.join(get_all_roles())}")
+
         cursor = self._get_cursor()
 
         # Ensure the user exists before updating.

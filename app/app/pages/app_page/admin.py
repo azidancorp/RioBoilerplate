@@ -8,7 +8,7 @@ import pandas as pd
 import rio
 from app.persistence import Persistence
 from app.data_models import AppUser, UserSession
-from app.permissions import can_manage_role
+from app.permissions import can_manage_role, get_manageable_roles, get_default_role
 
 @rio.page(
     name="AdminPage",
@@ -28,7 +28,7 @@ class AdminPage(rio.Component):
     
     # User change role fields
     change_role_identifier: str = ""
-    change_role_new_role: str = "user"
+    change_role_new_role: str = field(default_factory=get_default_role)
     change_role_error: str = ""
     
     
@@ -91,7 +91,7 @@ class AdminPage(rio.Component):
         updated = await self._update_role(identifier, new_role)
         if updated:
             self.change_role_identifier = ""
-            self.change_role_new_role = "user"
+            self.change_role_new_role = get_default_role()
             await self._load_user_data()
 
         self.force_refresh()
@@ -276,12 +276,7 @@ class AdminPage(rio.Component):
                 ),
                 rio.Dropdown(
                     label="New Role",
-                    # options=get_manageable_roles(self.current_user.role),
-                    options={
-                        "admin": "admin",
-                        "user": "user",
-                        "root": "root"
-                    },
+                    options={role: role for role in get_manageable_roles(self.current_user.role)},
                     selected_value=self.bind().change_role_new_role,
                 ),
                 rio.Button(

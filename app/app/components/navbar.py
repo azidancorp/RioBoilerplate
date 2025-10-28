@@ -64,6 +64,14 @@ class Navbar(rio.Component):
         self.session.navigate_to("/")
 
     def build(self) -> rio.Component:
+        # NOTE: Using active_page_instances[1] assumes a two-level route (e.g., '/app/<subpage>').
+        # This is brittle for top-level pages (no index 1) and deeper nesting.
+        # If you extend routing, consider instead:
+        #   - self.session.active_page_instances[-1].url_segment  # deepest active page
+        #   - Or build the current path:
+        #       "/" + "/".join(p.url_segment for p in self.session.active_page_instances if p.url_segment)
+        #     and use equality or startswith checks for parent highlighting.
+        # Note: The computed value below isn't currently used to style navbar links.
         try:
             # Which page is currently active? This will be used to highlight the
             # correct navigation button.

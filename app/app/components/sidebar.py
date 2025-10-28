@@ -72,6 +72,13 @@ class SideBarLink(rio.Component):
 
     def build(self) -> rio.Component:
         # Get the URL segment of the active page for comparison.
+        # NOTE: Using active_page_instances[1] assumes a two-level route like '/app/<subpage>'.
+        # This is brittle for top-level routes (no index 1) and deeper nesting.
+        # If you extend routing, consider instead:
+        #   - active_page_instances[-1].url_segment  # always deepest page
+        #   - Or build the current path: 
+        #       "/" + "/".join(p.url_segment for p in self.session.active_page_instances if p.url_segment)
+        #     then compare equality or use startswith(self.url + "/") to highlight parents on deeper routes.
         try:
             active_page_url_segment = self.session.active_page_instances[1].url_segment
         except IndexError:

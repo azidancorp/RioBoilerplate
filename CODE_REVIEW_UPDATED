@@ -1,14 +1,11 @@
 # CODE_REVIEW_UPDATED
 ## Major Outstanding Issues
-- **Password reset flow is still a stub.** The reset handler only shows a banner and never issues tokens or emails (`app/app/pages/login.py:410-433`), leaving users unable to recover accounts.
 - **No rate limiting on authentication & API surfaces.** Login/signup handlers (`app/app/pages/login.py:58-259`) and FastAPI endpoints (`app/app/api/profiles.py:21-194`, `app/app/api/example.py:20-33`) accept unlimited attempts, enabling brute-force and abuse scenarios previously flagged.
 - **Persistence dependency leaks connections.** FastAPI’s `get_persistence` creates a fresh SQLite connection per request without closing it (`app/app/api/profiles.py:18-19`). Under load this can exhaust file descriptors.
 - **Notifications page still hard-coded.** The page continues to surface static `SAMPLE_NOTIFICATIONS` and ignores persistence (`app/app/pages/app_page/notifications.py:14-168`), so the feature remains non-functional.
 
 ## Moderate Outstanding Issues
-- **Navigation highlighting is brittle.** Both sidebar and navbar still index `active_page_instances[1]` (`app/app/components/sidebar.py:74-86`, `app/app/components/navbar.py:75-80`), breaking active-state styling on top-level routes and risking `IndexError`.
 - **CenterComponent API remains unsafe.** Helper methods rely on attributes populated inside `build` (`app/app/components/center_component.py:52-84`); external callers still hit `AttributeError`, exactly as the in-file warning describes.
-- **Wildcard imports & commented debug remnants.** Files such as the sidebar keep `from typing import *` and commented diagnostics (`app/app/components/sidebar.py:6,70-76`), adding lint noise.
 
 ## Testing & Tooling Gaps
 - **No automated regression coverage.** The project still ships without an `app/tests/` suite or pytest scaffolding, so none of the above regressions are guarded.

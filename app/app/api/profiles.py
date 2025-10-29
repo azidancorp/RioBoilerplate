@@ -41,8 +41,6 @@ router = APIRouter()
 # Note: FastAPI endpoints run outside Rio's session context, so we cannot use
 # session[Persistence]. Creating a new instance here is the correct pattern
 # for API endpoints. Each request gets its own Persistence instance.
-async def get_persistence():
-    return Persistence()
 
 @router.get("/api/profiles", response_model=List[ProfileResponse])
 async def get_profiles(

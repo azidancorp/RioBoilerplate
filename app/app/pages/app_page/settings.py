@@ -8,6 +8,7 @@ import rio
 from app.persistence import Persistence
 from app.data_models import AppUser, UserSession, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
+from app.components.currency_summary import CurrencySummary, CurrencyOverview as CurrencySnapshot
 from app.scripts.utils import (
     get_password_strength,
     get_password_strength_color,
@@ -61,6 +62,9 @@ class Settings(rio.Component):
     recovery_codes_remaining: int = 0
     recovery_codes_last_generated: str = "Never generated"
 
+    # Currency overview
+    currency_overview: CurrencySnapshot | None = None
+
     @rio.event.on_populate
     async def on_populate(self):
         """Load user data from database when page loads."""
@@ -73,6 +77,10 @@ class Settings(rio.Component):
         self.email_notifications_enabled = user.email_notifications_enabled
         self.sms_notifications_enabled = user.sms_notifications_enabled
         self.account_email = user.email
+        self.currency_overview = CurrencySnapshot(
+            balance_minor=user.primary_currency_balance,
+            updated_at=user.primary_currency_updated_at,
+        )
 
         # Load profile data
         profile = await persistence.get_profile_by_user_id(str(user_session.user_id))
@@ -337,6 +345,14 @@ class Settings(rio.Component):
                     "Settings",
                     style="heading1",
                     margin_bottom=2,
+                ),
+
+                self.currency_overview and CurrencySummary(
+                    overview=self.currency_overview,
+                    title="Your Balance",
+                ) or rio.Card(
+                    rio.Text("Balance information unavailable", style="dim"),
+                    color="hud",
                 ),
 
                 # Profile Section

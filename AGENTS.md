@@ -12,6 +12,8 @@ Use 4-space indentation, type hints, and dataclass-friendly patterns (`app/pages
 ## Testing Guidelines
 Automated coverage is light today. Add new tests under `app/tests/` (create if missing) using `pytest` with files named `test_<feature>.py`; run them with `pytest`. Exercise interactive flows by launching `rio run --release` and walking through login, persistence, and 2FA utilities (see `scripts/test2fa.py` and `scripts/test_qr.py`). Record edge cases such as failed authentication or expired tokens in your test notes.
 
+If you have made any changes to the rio frontend, then smoke test using `rio run --port 8XXX` from the first app directory that contains rio.toml - with a 5s timeout, and then fix errors until it runs fine.
+
 ## Commit & Pull Request Guidelines
 Follow the existing concise imperative style (`remove redundant reset password page`). Each commit should bundle one logical change with related docs or data updates. PRs must explain user-facing impact, enumerate tests run (`rio run --release`, `pytest`), link issues, and attach screenshots/GIFs for UI changes. Request a maintainer review before merge.
 

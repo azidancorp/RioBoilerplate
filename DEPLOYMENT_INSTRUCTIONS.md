@@ -182,6 +182,30 @@ venv/                         100%  50MB     8.2MB/s   00:06
 - **No such file or directory**: Verify local path and create target directory if needed
 - **Connection timeout**: Check network connection and SSH configuration
 
+## Step 3.5: Configure Environment & Migrate Database
+
+```bash
+# From the application directory
+cd /root/[APP_NAME]
+[ -f .env ] || cp .env.example .env
+nano .env
+```
+
+**Recommended `.env` additions:**
+
+```
+ADMIN_DELETION_PASSWORD="<strong admin password>"
+# Primary currency configuration (override defaults as needed)
+RIO_PRIMARY_CURRENCY_NAME="credit"
+RIO_PRIMARY_CURRENCY_NAME_PLURAL="credits"
+RIO_PRIMARY_CURRENCY_SYMBOL=""
+RIO_PRIMARY_CURRENCY_DECIMAL_PLACES=0
+RIO_PRIMARY_CURRENCY_INITIAL_BALANCE=0
+RIO_PRIMARY_CURRENCY_ALLOW_NEGATIVE=true
+```
+
+> **Note:** The bundled schema expects a fresh database. If you are upgrading an existing installation, export your data and migrate manually before redeploying.
+
 ## Step 4: Test Application
 
 SSH back into the server and test the application:

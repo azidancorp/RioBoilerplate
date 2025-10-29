@@ -17,6 +17,7 @@ import app.theme as theme
 from app.components.root_component import RootComponent
 from app.api.example import router as example_router
 from app.api.profiles import router as profile_router
+from app.api.currency import router as currency_router
 
 
 async def on_app_start(app: rio.App) -> None:
@@ -92,4 +93,5 @@ fastapi_app = app.as_fastapi()
 
 fastapi_app.include_router(example_router)
 fastapi_app.include_router(profile_router)
+fastapi_app.include_router(currency_router)
 

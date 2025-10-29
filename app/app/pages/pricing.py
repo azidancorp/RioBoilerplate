@@ -5,6 +5,7 @@ from dataclasses import KW_ONLY, field
 
 import rio
 from app.components.center_component import CenterComponent
+from app.currency import get_currency_config
 
 
 
@@ -27,20 +28,22 @@ class PricingPlans(rio.Component):
         Build the PricingPage UI with toggling between monthly and yearly pricing.
         """
         # Define the prices depending on the current billing cycle:
+        currency_config = get_currency_config()
+        currency_plural = currency_config.name_plural
         sidekick_price = (
-            "290 Buzzcoins / year (2 months free)"
+            f"290 {currency_plural} / year (2 months free)"
             if self.is_yearly_billing
-            else "29 Buzzcoins / month"
+            else f"29 {currency_plural} / month"
         )
         hero_price = (
-            "990 Buzzcoins / year (2 months free)"
+            f"990 {currency_plural} / year (2 months free)"
             if self.is_yearly_billing
-            else "99 Buzzcoins / month"
+            else f"99 {currency_plural} / month"
         )
         supernova_price = (
-            "4,990 Buzzcoins / year (2 months free)"
+            f"4,990 {currency_plural} / year (2 months free)"
             if self.is_yearly_billing
-            else "499 Buzzcoins / month"
+            else f"499 {currency_plural} / month"
         )
 
         return CenterComponent(

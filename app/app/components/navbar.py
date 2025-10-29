@@ -90,9 +90,10 @@ class Navbar(rio.Component):
         # Check if the user is logged in and display the appropriate buttons
         # based on the user's status
         try:
-            self.session[AppUser]
+            current_user = self.session[AppUser]
             user_is_logged_in = True
         except KeyError:
+            current_user = None
             user_is_logged_in = False
 
         # Create the content of the navbar. First, create a row with a certain
@@ -135,7 +136,17 @@ class Navbar(rio.Component):
         )
 
         # Based on the user's status, display the appropriate buttons
-        if user_is_logged_in:
+        if user_is_logged_in and current_user is not None:
+            navbar_content.add(
+                rio.Card(
+                    rio.Text(
+                        current_user.primary_currency_formatted_with_label,
+                        style=rio.TextStyle(font_size=1.2),
+                    ),
+                    margin=0.5,
+                    color="hud",
+                )
+            )
 
             navbar_content.add(
                 NavBarLink('Settings', '/app/settings')

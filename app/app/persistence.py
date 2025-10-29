@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import secrets
 import sqlite3
@@ -7,10 +8,21 @@ import typing as t
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.data_models import AppUser, UserSession, PasswordResetCode, RecoveryCodeRecord
+from app.data_models import (
+    AppUser,
+    UserSession,
+    PasswordResetCode,
+    RecoveryCodeRecord,
+    CurrencyLedgerEntry,
+)
 from app.validation import SecuritySanitizer
 from app.config import config
 from app.permissions import get_default_role, get_first_user_role, validate_role, get_all_roles
+from app.currency import (
+    get_currency_config,
+    format_minor_amount,
+    get_major_amount,
+)
 import pyotp
 
 
@@ -47,6 +59,14 @@ class Persistence:
     - All operations follow proper cascade order (verified safe)
     """
 
+    USER_SELECT_COLUMNS = (
+        "id, email, username, created_at, password_hash, password_salt, "
+        "auth_provider, auth_provider_id, role, is_verified, "
+        "two_factor_secret, referral_code, "
+        "email_notifications_enabled, sms_notifications_enabled, "
+        "primary_currency_balance, primary_currency_updated_at"
+    )
+
     def __init__(
         self,
         db_path: Path = Path("app", "data", "app.db"),
@@ -66,6 +86,7 @@ class Persistence:
         self._create_reset_codes_table()  # Ensure the reset codes table exists
         self._create_profiles_table()  # Ensure the profiles table exists
         self._create_recovery_codes_table()  # Ensure 2FA recovery codes table exists
+        self._create_currency_ledger_table()  # Ensure ledger exists
 
     def _ensure_connection(self) -> None:
         """
@@ -149,7 +170,9 @@ class Persistence:
                 two_factor_secret TEXT,
                 referral_code TEXT DEFAULT '',
                 email_notifications_enabled BOOLEAN NOT NULL DEFAULT 1,
-                sms_notifications_enabled BOOLEAN NOT NULL DEFAULT 0
+                sms_notifications_enabled BOOLEAN NOT NULL DEFAULT 0,
+                primary_currency_balance INTEGER NOT NULL DEFAULT 0,
+                primary_currency_updated_at REAL NOT NULL DEFAULT 0
             )
         """
         )
@@ -168,6 +191,87 @@ class Persistence:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider ON users(auth_provider, auth_provider_id) WHERE auth_provider_id IS NOT NULL"
         )
         self.conn.commit()
+
+    def _create_currency_ledger_table(self) -> None:
+        """Ensure the currency ledger table exists."""
+        cursor = self._get_cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_currency_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                delta INTEGER NOT NULL,
+                balance_after INTEGER NOT NULL,
+                reason TEXT,
+                metadata TEXT,
+                actor_user_id TEXT,
+                created_at REAL NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_currency_ledger_user_id_created
+            ON user_currency_ledger(user_id, created_at DESC)
+            """
+        )
+        self.conn.commit()
+
+    def _append_currency_ledger_entry(
+        self,
+        *,
+        user_id: uuid.UUID,
+        delta: int,
+        balance_after: int,
+        reason: str | None,
+        metadata: dict[str, t.Any] | None,
+        actor_user_id: uuid.UUID | None,
+        created_at: float | None = None,
+        commit: bool = False,
+    ) -> CurrencyLedgerEntry:
+        """
+        Internal helper to insert a row into the currency ledger table.
+        """
+        cursor = self._get_cursor()
+        timestamp = created_at or datetime.now(timezone.utc).timestamp()
+        metadata_json = json.dumps(metadata) if metadata is not None else None
+        cursor.execute(
+            """
+            INSERT INTO user_currency_ledger (
+                user_id,
+                delta,
+                balance_after,
+                reason,
+                metadata,
+                actor_user_id,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(user_id),
+                int(delta),
+                int(balance_after),
+                reason,
+                metadata_json,
+                str(actor_user_id) if actor_user_id else None,
+                timestamp,
+            ),
+        )
+        entry_id = cursor.lastrowid
+        if commit:
+            self.conn.commit()
+
+        return CurrencyLedgerEntry(
+            id=entry_id,
+            user_id=user_id,
+            delta=int(delta),
+            balance_after=int(balance_after),
+            reason=reason,
+            metadata=metadata,
+            actor_user_id=actor_user_id,
+            created_at=datetime.fromtimestamp(timestamp, tz=timezone.utc),
+        )
 
     def _create_session_table(self) -> None:
         """
@@ -498,6 +602,8 @@ class Persistence:
         if not validate_role(user.role):
             raise ValueError(f"Invalid role: {user.role}. Must be one of: {', '.join(get_all_roles())}")
 
+        now_ts = datetime.now(timezone.utc).timestamp()
+
         cursor.execute(
             """
             INSERT INTO users (
@@ -514,9 +620,11 @@ class Persistence:
                 two_factor_secret,
                 referral_code,
                 email_notifications_enabled,
-                sms_notifications_enabled
+                sms_notifications_enabled,
+                primary_currency_balance,
+                primary_currency_updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(user.id),
@@ -533,11 +641,13 @@ class Persistence:
                 user.referral_code,
                 user.email_notifications_enabled,
                 user.sms_notifications_enabled,
+                user.primary_currency_balance,
+                now_ts,
             ),
         )
-        
+
         # Create a default profile for the new user
-        now = datetime.now(timezone.utc).timestamp()
+        now = now_ts
         cursor.execute(
             """
             INSERT INTO profiles 
@@ -557,10 +667,28 @@ class Persistence:
             )
         )
 
+        if user.primary_currency_balance:
+            self._append_currency_ledger_entry(
+                user_id=user.id,
+                delta=user.primary_currency_balance,
+                balance_after=user.primary_currency_balance,
+                reason="Initial balance",
+                metadata=None,
+                actor_user_id=None,
+                created_at=now_ts,
+                commit=False,
+            )
         self.conn.commit()
 
     def _row_to_app_user(self, row: tuple) -> AppUser:
         """Convert a database row into an AppUser instance."""
+        cfg = get_currency_config()
+        updated_at_ts = row[15] if len(row) > 15 else None
+        updated_at = (
+            datetime.fromtimestamp(updated_at_ts, tz=timezone.utc)
+            if updated_at_ts
+            else datetime.now(timezone.utc)
+        )
         return AppUser(
             id=uuid.UUID(row[0]),
             email=row[1],
@@ -576,17 +704,32 @@ class Persistence:
             referral_code=row[11],
             email_notifications_enabled=bool(row[12]) if len(row) > 12 else True,
             sms_notifications_enabled=bool(row[13]) if len(row) > 13 else False,
+            primary_currency_balance=int(row[14]) if len(row) > 14 and row[14] is not None else cfg.initial_balance,
+            primary_currency_updated_at=updated_at,
+        )
+
+    def _row_to_currency_ledger_entry(self, row: tuple) -> CurrencyLedgerEntry:
+        """Convert a ledger row tuple into a dataclass instance."""
+        metadata_json = row[5]
+        metadata = json.loads(metadata_json) if metadata_json else None
+        actor_id = uuid.UUID(row[6]) if row[6] else None
+        return CurrencyLedgerEntry(
+            id=row[0],
+            user_id=uuid.UUID(row[1]),
+            delta=int(row[2]),
+            balance_after=int(row[3]),
+            reason=row[4],
+            metadata=metadata,
+            actor_user_id=actor_id,
+            created_at=datetime.fromtimestamp(row[7], tz=timezone.utc),
         )
 
     async def get_user_by_email(self, email: str) -> AppUser:
         """Retrieve a user from the database by email address."""
         cursor = self._get_cursor()
         cursor.execute(
-            """
-            SELECT id, email, username, created_at, password_hash, password_salt,
-                   auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code,
-                   email_notifications_enabled, sms_notifications_enabled
+            f"""
+            SELECT {self.USER_SELECT_COLUMNS}
             FROM users
             WHERE lower(email) = lower(?)
             LIMIT 1
@@ -620,11 +763,8 @@ class Persistence:
         """
         cursor = self._get_cursor()
         cursor.execute(
-            """
-            SELECT id, email, username, created_at, password_hash, password_salt,
-                   auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code,
-                   email_notifications_enabled, sms_notifications_enabled
+            f"""
+            SELECT {self.USER_SELECT_COLUMNS}
             FROM users
             WHERE username = ?
             LIMIT 1
@@ -673,11 +813,8 @@ class Persistence:
         cursor = self._get_cursor()
 
         cursor.execute(
-            """
-            SELECT id, email, username, created_at, password_hash, password_salt,
-                   auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code,
-                   email_notifications_enabled, sms_notifications_enabled
+            f"""
+            SELECT {self.USER_SELECT_COLUMNS}
             FROM users
             WHERE id = ?
             LIMIT 1
@@ -701,11 +838,8 @@ class Persistence:
         """
         cursor = self._get_cursor()
         cursor.execute(
-            """
-            SELECT id, email, username, created_at, password_hash, password_salt,
-                   auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code,
-                   email_notifications_enabled, sms_notifications_enabled
+            f"""
+            SELECT {self.USER_SELECT_COLUMNS}
             FROM users
             ORDER BY created_at DESC
             """
@@ -713,6 +847,197 @@ class Persistence:
 
         rows = cursor.fetchall()
         return [self._row_to_app_user(row) for row in rows]
+
+    async def get_currency_balance(self, user_id: uuid.UUID) -> int:
+        """Return the raw minor-unit balance for a user."""
+        overview = await self.get_currency_overview(user_id)
+        return overview["balance_minor"]
+
+    async def get_currency_overview(self, user_id: uuid.UUID) -> dict[str, t.Any]:
+        """Retrieve balance, formatted string, and last update timestamp for a user."""
+        cursor = self._get_cursor()
+        cursor.execute(
+            """
+            SELECT primary_currency_balance, primary_currency_updated_at
+            FROM users
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (str(user_id),),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise KeyError(user_id)
+
+        balance_minor = int(row[0]) if row[0] is not None else 0
+        updated_at_ts = row[1] or 0
+        updated_at = (
+            datetime.fromtimestamp(updated_at_ts, tz=timezone.utc)
+            if updated_at_ts
+            else None
+        )
+
+        formatted = format_minor_amount(balance_minor)
+        cfg = get_currency_config()
+
+        return {
+            "balance_minor": balance_minor,
+            "balance_major": float(get_major_amount(balance_minor)),
+            "formatted": formatted,
+            "label": cfg.display_name(get_major_amount(balance_minor)),
+            "updated_at": updated_at,
+        }
+
+    async def adjust_currency_balance(
+        self,
+        user_id: uuid.UUID,
+        delta_minor: int,
+        *,
+        reason: str | None = None,
+        metadata: dict[str, t.Any] | None = None,
+        actor_user_id: uuid.UUID | None = None,
+    ) -> CurrencyLedgerEntry:
+        """
+        Increment a user's balance by the specified delta and record a ledger entry.
+        """
+        cfg = get_currency_config()
+        cursor = self._get_cursor()
+
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ValueError("metadata must be a mapping if provided")
+
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                "SELECT primary_currency_balance FROM users WHERE id = ?",
+                (str(user_id),),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise KeyError(user_id)
+
+            current_balance = int(row[0] or 0)
+            new_balance = current_balance + int(delta_minor)
+
+            if not cfg.allow_negative and new_balance < 0:
+                raise ValueError("Currency balance cannot be negative")
+
+            timestamp = datetime.now(timezone.utc).timestamp()
+            cursor.execute(
+                """
+                UPDATE users
+                SET primary_currency_balance = ?, primary_currency_updated_at = ?
+                WHERE id = ?
+                """,
+                (new_balance, timestamp, str(user_id)),
+            )
+
+            ledger_entry = self._append_currency_ledger_entry(
+                user_id=user_id,
+                delta=int(delta_minor),
+                balance_after=new_balance,
+                reason=reason,
+                metadata=metadata,
+                actor_user_id=actor_user_id,
+                created_at=timestamp,
+            )
+
+            self.conn.commit()
+            return ledger_entry
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    async def set_currency_balance(
+        self,
+        user_id: uuid.UUID,
+        new_balance_minor: int,
+        *,
+        reason: str | None = None,
+        metadata: dict[str, t.Any] | None = None,
+        actor_user_id: uuid.UUID | None = None,
+    ) -> CurrencyLedgerEntry:
+        """Set a user's balance to the provided amount and record ledger delta."""
+        cfg = get_currency_config()
+        if not cfg.allow_negative and new_balance_minor < 0:
+            raise ValueError("Currency balance cannot be negative")
+
+        cursor = self._get_cursor()
+
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                "SELECT primary_currency_balance FROM users WHERE id = ?",
+                (str(user_id),),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise KeyError(user_id)
+
+            current_balance = int(row[0] or 0)
+            delta = int(new_balance_minor) - current_balance
+
+            timestamp = datetime.now(timezone.utc).timestamp()
+            cursor.execute(
+                """
+                UPDATE users
+                SET primary_currency_balance = ?, primary_currency_updated_at = ?
+                WHERE id = ?
+                """,
+                (int(new_balance_minor), timestamp, str(user_id)),
+            )
+
+            ledger_entry = self._append_currency_ledger_entry(
+                user_id=user_id,
+                delta=delta,
+                balance_after=int(new_balance_minor),
+                reason=reason,
+                metadata=metadata,
+                actor_user_id=actor_user_id,
+                created_at=timestamp,
+            )
+
+            self.conn.commit()
+            return ledger_entry
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    async def list_currency_ledger(
+        self,
+        user_id: uuid.UUID,
+        *,
+        limit: int = 50,
+        before: datetime | None = None,
+        after: datetime | None = None,
+    ) -> list[CurrencyLedgerEntry]:
+        """Retrieve ledger entries for a user ordered by most recent first."""
+        cursor = self._get_cursor()
+
+        clauses = ["user_id = ?"]
+        params: list[t.Any] = [str(user_id)]
+
+        if before is not None:
+            clauses.append("created_at < ?")
+            params.append(before.timestamp())
+
+        if after is not None:
+            clauses.append("created_at > ?")
+            params.append(after.timestamp())
+
+        query = """
+            SELECT id, user_id, delta, balance_after, reason, metadata, actor_user_id, created_at
+            FROM user_currency_ledger
+            WHERE {conditions}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+        """.format(conditions=" AND ".join(clauses))
+
+        params.append(max(1, min(limit, 500)))
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        return [self._row_to_currency_ledger_entry(row) for row in rows]
 
     async def get_user_by_email_or_username(self, identifier: str) -> AppUser:
         """
@@ -730,11 +1055,8 @@ class Persistence:
 
         cursor = self._get_cursor()
         cursor.execute(
-            """
-            SELECT id, email, username, created_at, password_hash, password_salt,
-                   auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code,
-                   email_notifications_enabled, sms_notifications_enabled
+            f"""
+            SELECT {self.USER_SELECT_COLUMNS}
             FROM users
             WHERE lower(email) = lower(?)
             LIMIT 1
@@ -747,11 +1069,8 @@ class Persistence:
             return self._row_to_app_user(row)
 
         cursor.execute(
-            """
-            SELECT id, email, username, created_at, password_hash, password_salt,
-                   auth_provider, auth_provider_id, role, is_verified,
-                   two_factor_secret, referral_code,
-                   email_notifications_enabled, sms_notifications_enabled
+            f"""
+            SELECT {self.USER_SELECT_COLUMNS}
             FROM users
             WHERE username = ?
             LIMIT 1

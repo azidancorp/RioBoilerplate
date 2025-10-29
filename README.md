@@ -6,13 +6,14 @@ Production-ready Rio web application template featuring session-based authentica
 - Auth & security: login, password reset, role-based guards, MFA toggles, recovery codes, admin-only operations.
 - API layer: FastAPI routers for profile data, shared validation in `app/app/validation.py`, persistence helpers for SQLite.
 - UI experience: Rio pages for public marketing routes and protected app area, shared layout elements, Plotly/Matplotlib chart support.
+- Built-in primary currency system with configurable naming, precision, admin tooling, and ledger history.
 - Developer ergonomics: Example scripts, bundled Rio documentation, and deployment playbooks for quick onboarding.
 
 ## Quick Start
 1. Clone the repository and enter the project directory.
 2. Create and activate a virtual environment: `python -m venv venv` then `source venv/bin/activate` (or `venv\Scripts\activate` on Windows).
 3. Install dependencies: `pip install -r requirements.txt`.
-4. Copy `.env.example` to `.env` and set secrets such as `ADMIN_DELETION_PASSWORD`.
+4. Copy `.env.example` to `.env` and set secrets such as `ADMIN_DELETION_PASSWORD`. Configure optional currency overrides (e.g. `RIO_PRIMARY_CURRENCY_NAME=credits`, `RIO_PRIMARY_CURRENCY_DECIMAL_PLACES=2`).
 5. Run the app from `app/`: `rio run`. The first registered user is promoted to the `root` role.
 
 Access the dev server at `http://localhost:8000`. Use `rio run --port 8000 --release` to mirror production settings.
@@ -23,7 +24,19 @@ Access the dev server at `http://localhost:8000`. Use `rio run --port 8000 --rel
 
 ## Configuration
 - Environment variables live in `.env`. Common toggles: `ADMIN_DELETION_PASSWORD`, `REQUIRE_VALID_EMAIL`, `ALLOW_USERNAME_LOGIN`, `PRIMARY_IDENTIFIER`.
+- Currency controls:
+  - `RIO_PRIMARY_CURRENCY_NAME` / `_PLURAL` – label used across UI/API (defaults to `credit/credits`).
+  - `RIO_PRIMARY_CURRENCY_SYMBOL` – optional symbol prefix (e.g. `$`).
+  - `RIO_PRIMARY_CURRENCY_DECIMAL_PLACES` – stored precision (0 = whole units).
+  - `RIO_PRIMARY_CURRENCY_INITIAL_BALANCE` – starting balance for brand new users.
+  - `RIO_PRIMARY_CURRENCY_ALLOW_NEGATIVE` – defaults to `false`; set to `true` only if overdrafts are acceptable.
 - Runtime defaults live in `app/app/config.py`; adjust there for build-time overrides.
+
+## Currency System
+- SQLite schema stores a single minor-unit balance per user plus an audited `user_currency_ledger`.
+- Admin UI (`/app/admin`) now surfaces balances, allows grants/deductions, and shows success/error feedback.
+- FastAPI endpoints (`/api/currency/*`) expose balance, ledger, and privileged adjustment APIs.
+- CLI helper `python app/app/scripts/currency_admin.py` supports `list`, `ledger`, `adjust`, and `set` operations from the terminal.
 
 
 ## Project Layout
@@ -56,6 +69,7 @@ Focus release verification on:
 - Enabling/disabling MFA and using recovery codes.
 - Profile CRUD via the UI and `/api/profiles`.
 - Error handling across contact flows and API responses.
+- Currency adjustments: verify admin operations, ledger history, and `/api/currency/*` behaviour (positive & negative paths).
 
 ## Further Reading
 - `AGENTS.md` – contributor workflow and coding standards.

@@ -9,9 +9,13 @@ import rio
 from app.components.center_component import CenterComponent
 from app.persistence import Persistence
 from app.data_models import UserSession
+from app.currency import get_currency_config
 
 
 # Sample notification data
+_CURRENCY_CONFIG = get_currency_config()
+_CURRENCY_PLURAL = _CURRENCY_CONFIG.name_plural
+
 SAMPLE_NOTIFICATIONS = [
     {
         "type": "SUCCESS",
@@ -25,7 +29,7 @@ SAMPLE_NOTIFICATIONS = [
     },
     {
         "type": "WARNING",
-        "message": "Your synergy tokens are running low! Reach out to your account rep or consider leveling up to the Infinity Plan.",
+        "message": f"Your {_CURRENCY_PLURAL} are running low! Reach out to your account rep or consider leveling up to the Infinity Plan.",
         "days_ago": 1
     },
     {

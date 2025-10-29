@@ -170,6 +170,7 @@ class Sidebar(rio.Component):
         `grow_x` and `grow_y` properties are set to False.
         """
         
+        user: AppUser | None = None
         try:
             user = self.session[AppUser]
             user_is_logged_in = True
@@ -183,6 +184,28 @@ class Sidebar(rio.Component):
                 min_width=0,  # Shrink the sidebar when no links are shown
             )
 
+        header_components: list[rio.Component] = []
+        if user_role is not None and user is not None:
+            header_components.append(
+                rio.Card(
+                    rio.Column(
+                        rio.Text(
+                            "Balance",
+                            style="dim",
+                            align_x=0,
+                        ),
+                        rio.Text(
+                            user.primary_currency_formatted_with_label,
+                            style=rio.TextStyle(font_size=1.5),
+                            align_x=0,
+                        ),
+                        spacing=0.5,
+                    ),
+                    margin=0.5,
+                    color="hud",
+                )
+            )
+
         # Show all links if user has highest privilege, otherwise filter based on role
         visible_links = [
             SideBarLink(title, url, icon)
@@ -194,6 +217,7 @@ class Sidebar(rio.Component):
         ]
         
         return rio.Column(
+            *header_components,
             *visible_links,
             align_x=0,
             align_y=0,

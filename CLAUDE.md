@@ -472,3 +472,5 @@ Required environment variables (see `.env.example`):
   - No need for --yolo flag for read-only analysis
   - Gemini's context window can handle entire codebases that would overflow Claude's context
   - When checking implementations, be specific about what you're looking for to get accurate results
+
+  If you have made any changes to the rio frontend, then smoke test using `rio run --port 8XXX` from the first app directory that contains rio.toml - with a 5s timeout, and then fix errors until it runs fine.

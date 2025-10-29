@@ -4,10 +4,17 @@ import hashlib
 import os
 import secrets
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+import typing as t
 import rio
 from app.permissions import get_default_role
+from app.currency import (
+    get_currency_config,
+    format_minor_amount,
+    get_major_amount,
+    attach_currency_name,
+)
 
 
 @dataclass
@@ -69,11 +76,31 @@ class AppUser:
     # Notification preferences
     email_notifications_enabled: bool = True
     sms_notifications_enabled: bool = False
+    primary_currency_balance: int = get_currency_config().initial_balance
+    primary_currency_updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def two_factor_enabled(self) -> bool:
         """Whether two-factor authentication is enabled for this user."""
         return self.two_factor_secret is not None
+
+    @property
+    def primary_currency_balance_major(self) -> float:
+        """Balance in major units for display (float for UI convenience)."""
+        return float(get_major_amount(self.primary_currency_balance))
+
+    @property
+    def primary_currency_formatted(self) -> str:
+        """Formatted balance string using configured symbol/precision."""
+        return format_minor_amount(self.primary_currency_balance)
+
+    @property
+    def primary_currency_formatted_with_label(self) -> str:
+        """Formatted balance string that includes the currency label."""
+        return attach_currency_name(
+            self.primary_currency_formatted,
+            quantity_minor_units=self.primary_currency_balance,
+        )
 
     @classmethod
     def create_new_user_with_default_settings(
@@ -101,13 +128,15 @@ class AppUser:
             email=email.lower().strip(),
             username=username,
             created_at=datetime.now(timezone.utc),
-            password_hash=cls.get_password_hash(password, password_salt),
-            password_salt=password_salt,
-            auth_provider="password",
-            role=get_default_role(),
-            is_verified=False,
-            referral_code=referral_code,
-        )
+        password_hash=cls.get_password_hash(password, password_salt),
+        password_salt=password_salt,
+        auth_provider="password",
+        role=get_default_role(),
+        is_verified=False,
+        referral_code=referral_code,
+        primary_currency_balance=get_currency_config().initial_balance,
+        primary_currency_updated_at=datetime.now(timezone.utc),
+    )
 
     @classmethod
     def get_password_hash(cls, password, password_salt: bytes) -> bytes:
@@ -191,6 +220,20 @@ class RecoveryCodeUsage:
 
     used_at_login: bool = False
     used_in_settings: bool = False
+
+
+@dataclass
+class CurrencyLedgerEntry:
+    """Record describing a single currency adjustment for a user."""
+
+    id: int
+    user_id: uuid.UUID
+    delta: int
+    balance_after: int
+    reason: str | None
+    metadata: dict[str, t.Any] | None
+    actor_user_id: uuid.UUID | None
+    created_at: datetime
 
 
 @dataclass

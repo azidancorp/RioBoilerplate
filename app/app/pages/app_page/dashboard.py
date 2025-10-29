@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import KW_ONLY, field
+from datetime import datetime, timezone
 
 import rio
 import numpy as np
@@ -10,12 +11,40 @@ import plotly.graph_objects as go
 
 from app.components.testimonial import Testimonial
 from app.components.dashboard_components import DeltaCard
+from app.components.currency_summary import CurrencySummary, CurrencyOverview as CurrencySnapshot
+from app.persistence import Persistence
+from app.data_models import UserSession
 
 # -----------------------------
 # Component Definitions
 # -----------------------------
 
 class Overview(rio.Component):
+
+    currency_overview: CurrencySnapshot | None = None
+
+    @rio.event.on_populate
+    async def on_populate(self):
+        try:
+            user_session = self.session[UserSession]
+            persistence = self.session[Persistence]
+        except KeyError:
+            self.currency_overview = None
+            return
+
+        overview_data = await persistence.get_currency_overview(user_session.user_id)
+        updated_at = overview_data.get("updated_at")
+        if isinstance(updated_at, datetime):
+            updated = updated_at
+        elif updated_at is None:
+            updated = None
+        else:
+            updated = datetime.fromtimestamp(updated_at, tz=timezone.utc)
+
+        self.currency_overview = CurrencySnapshot(
+            balance_minor=overview_data["balance_minor"],
+            updated_at=updated,
+        )
 
     def build(self):
 
@@ -31,6 +60,14 @@ class Overview(rio.Component):
                     delta_a=12,
                     delta_b=8,
                     color=rio.Color.from_hex('#2ECC71')
+                ),
+
+                self.currency_overview and CurrencySummary(
+                    overview=self.currency_overview,
+                    title="Primary Balance",
+                ) or rio.Card(
+                    rio.Text("Balance data unavailable", style="dim"),
+                    color="hud",
                 ),
 
                 DeltaCard(

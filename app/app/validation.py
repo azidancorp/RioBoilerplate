@@ -7,8 +7,10 @@ for sanitizing user input to prevent security vulnerabilities.
 
 import re
 import html
-from typing import Optional
-from pydantic import BaseModel, validator, Field
+from decimal import Decimal
+from typing import Optional, Any, Dict
+from uuid import UUID
+from pydantic import BaseModel, validator, Field, model_validator
 from fastapi import HTTPException, status
 
 from app.config import config
@@ -340,6 +342,122 @@ class ProfileResponse(BaseModel):
     avatar_url: Optional[str]
     created_at: float
     updated_at: float
+
+
+class CurrencyConfigResponse(BaseModel):
+    """Expose primary currency configuration values to clients."""
+
+    name: str
+    name_plural: str
+    symbol: str
+    decimal_places: int
+    allow_negative: bool
+
+
+class CurrencyBalanceResponse(BaseModel):
+    """Response schema for balance lookups."""
+
+    balance_minor: int
+    balance_major: float
+    formatted: str
+    label: str
+    formatted_with_label: str
+    updated_at: Optional[float]
+
+
+class CurrencyLedgerEntryResponse(BaseModel):
+    """Ledger entry data shaped for API responses."""
+
+    id: int
+    delta_minor: int
+    delta_major: float
+    delta_formatted: str
+    delta_with_label: str
+    balance_after_minor: int
+    balance_after_major: float
+    balance_after_formatted: str
+    balance_after_with_label: str
+    reason: Optional[str]
+    metadata: Optional[Dict[str, Any]]
+    actor_user_id: Optional[UUID]
+    created_at: float
+
+
+class CurrencyAdjustmentRequest(BaseModel):
+    """Payload for adjusting a user's balance by a delta amount."""
+
+    target_user_id: Optional[UUID] = Field(None, description="Explicit user ID to adjust")
+    target_identifier: Optional[str] = Field(
+        None,
+        description="Email or username fallback if user ID is not provided",
+        max_length=MAX_EMAIL_LENGTH,
+    )
+    amount: Decimal = Field(..., description="Delta amount in major units (e.g. credits)")
+    reason: Optional[str] = Field(None, max_length=200, description="Reason for audit trail")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata blob recorded in ledger")
+
+    @model_validator(mode="after")
+    def _validate_targets(self) -> "CurrencyAdjustmentRequest":
+        if not self.target_user_id and not self.target_identifier:
+            raise ValueError("Provide either target_user_id or target_identifier")
+        return self
+
+    @validator("target_identifier")
+    def _sanitize_identifier(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        sanitized = SecuritySanitizer.sanitize_string(value, MAX_EMAIL_LENGTH)
+        if sanitized is None:
+            raise ValueError("Identifier cannot be empty")
+        return sanitized
+
+    @validator("reason")
+    def _sanitize_reason(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return SecuritySanitizer.sanitize_string(value, 200)
+
+    @validator("amount")
+    def _validate_amount(cls, value: Decimal) -> Decimal:
+        if value == 0:
+            raise ValueError("Amount must be non-zero")
+        return value
+
+
+class CurrencySetBalanceRequest(BaseModel):
+    """Payload for setting a user's balance to a specific amount."""
+
+    target_user_id: Optional[UUID] = Field(None, description="Explicit user ID")
+    target_identifier: Optional[str] = Field(
+        None,
+        description="Email or username fallback",
+        max_length=MAX_EMAIL_LENGTH,
+    )
+    balance: Decimal = Field(..., description="Desired balance in major units")
+    reason: Optional[str] = Field(None, max_length=200)
+    metadata: Optional[Dict[str, Any]] = Field(None)
+
+    @model_validator(mode="after")
+    def _validate_targets(self) -> "CurrencySetBalanceRequest":
+        if not self.target_user_id and not self.target_identifier:
+            raise ValueError("Provide either target_user_id or target_identifier")
+        return self
+
+    @validator("target_identifier")
+    def _sanitize_identifier(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        sanitized = SecuritySanitizer.sanitize_string(value, MAX_EMAIL_LENGTH)
+        if sanitized is None:
+            raise ValueError("Identifier cannot be empty")
+        return sanitized
+
+    @validator("reason")
+    def _sanitize_reason(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return SecuritySanitizer.sanitize_string(value, 200)
+
 
 
 

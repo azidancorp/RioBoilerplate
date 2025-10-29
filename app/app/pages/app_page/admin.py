@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import field
+from decimal import Decimal, InvalidOperation
+import uuid
 import os
 import typing as t
 import pandas as pd
@@ -9,6 +11,8 @@ import rio
 from app.persistence import Persistence
 from app.data_models import AppUser, UserSession
 from app.permissions import can_manage_role, get_manageable_roles, get_default_role
+from app.currency import major_to_minor, format_minor_amount, attach_currency_name
+from app.validation import SecuritySanitizer
 
 @rio.page(
     name="AdminPage",
@@ -38,6 +42,14 @@ class AdminPage(rio.Component):
     delete_user_password: str = ""
     delete_user_error: str = ""
     delete_user_success: str = ""
+
+    # Currency management fields
+    currency_user_identifier: str = ""
+    currency_amount: str = ""
+    currency_reason: str = ""
+    currency_mode_is_set: bool = False  # False -> adjust delta, True -> set absolute
+    currency_error: str = ""
+    currency_success: str = ""
     
     @rio.event.on_populate
     async def on_populate(self):
@@ -69,6 +81,10 @@ class AdminPage(rio.Component):
                 "Created At": user.created_at.strftime("%Y-%m-%d %H:%M:%S"),
                 "Role": user.role,
                 "Verified": "✓" if user.is_verified else "✗",
+                "Balance": attach_currency_name(
+                    format_minor_amount(user.primary_currency_balance),
+                    quantity_minor_units=user.primary_currency_balance,
+                ),
                 "ID": str(user.id),
             })
 
@@ -196,7 +212,7 @@ class AdminPage(rio.Component):
             
         # Store username for success message
         identifier_to_delete = self.delete_user_identifier
-        
+
         # Delete the user
         try:
             success = await persistence.delete_user(
@@ -223,7 +239,121 @@ class AdminPage(rio.Component):
             self.delete_user_error = f"Error deleting user: {str(e)}"
             self.delete_user_success = ""
             self.force_refresh()
-    
+
+    async def _on_currency_submit(self, _: rio.TextInputConfirmEvent | None = None) -> None:
+        """Handle currency adjustments or absolute updates."""
+        if not self.current_user:
+            self.currency_error = "You must be logged in to perform this action"
+            self.currency_success = ""
+            self.force_refresh()
+            return
+
+        identifier = (self.currency_user_identifier or "").strip()
+        if not identifier:
+            self.currency_error = "Please provide a user email, username, or ID"
+            self.currency_success = ""
+            self.force_refresh()
+            return
+
+        try:
+            amount_decimal = Decimal((self.currency_amount or "").strip())
+        except (InvalidOperation, AttributeError):
+            self.currency_error = "Enter a valid numeric amount"
+            self.currency_success = ""
+            self.force_refresh()
+            return
+
+        persistence = self.session[Persistence]
+
+        target_user: AppUser | None = None
+        try:
+            target_user = await persistence.get_user_by_id(uuid.UUID(identifier))
+        except (ValueError, KeyError):
+            try:
+                target_user = await persistence.get_user_by_email_or_username(identifier)
+            except KeyError:
+                target_user = None
+
+        if not target_user:
+            self.currency_error = f"User not found: {identifier}"
+            self.currency_success = ""
+            self.force_refresh()
+            return
+
+        # Ensure the admin has permission to manage this user when roles differ.
+        if (
+            self.current_user.id != target_user.id
+            and not can_manage_role(self.current_user.role, target_user.role)
+        ):
+            self.currency_error = (
+                f"You do not have permission to update balances for users with role {target_user.role}."
+            )
+            self.currency_success = ""
+            self.force_refresh()
+            return
+
+        reason = None
+        if self.currency_reason:
+            try:
+                sanitized_reason = SecuritySanitizer.sanitize_string(self.currency_reason, 200)
+            except Exception:
+                sanitized_reason = None
+            reason = sanitized_reason
+
+        try:
+            minor_amount = major_to_minor(amount_decimal)
+        except ValueError:
+            self.currency_error = "Amount must be a valid number"
+            self.currency_success = ""
+            self.force_refresh()
+            return
+
+        try:
+            if self.currency_mode_is_set:
+                entry = await persistence.set_currency_balance(
+                    target_user.id,
+                    new_balance_minor=minor_amount,
+                    reason=reason,
+                    metadata=None,
+                    actor_user_id=self.current_user.id,
+                )
+                action_word = "Set"
+            else:
+                entry = await persistence.adjust_currency_balance(
+                    target_user.id,
+                    delta_minor=minor_amount,
+                    reason=reason,
+                    metadata=None,
+                    actor_user_id=self.current_user.id,
+                )
+                action_word = "Adjusted"
+        except ValueError as exc:
+            self.currency_error = str(exc)
+            self.currency_success = ""
+            self.force_refresh()
+            return
+
+        delta_text = attach_currency_name(
+            format_minor_amount(entry.delta), quantity_minor_units=entry.delta
+        )
+        balance_text = attach_currency_name(
+            format_minor_amount(entry.balance_after), quantity_minor_units=entry.balance_after
+        )
+
+        self.currency_success = (
+            f"{action_word} {target_user.email or target_user.username}'s balance. "
+            f"Delta: {delta_text}. New balance: {balance_text}."
+        )
+        self.currency_error = ""
+        self.currency_amount = ""
+        await self._load_user_data()
+        self.force_refresh()
+
+    def _on_currency_mode_toggle(self, event: rio.SwitchChangeEvent) -> None:
+        """Toggle between adjust and set modes."""
+        self.currency_mode_is_set = event.is_on
+        self.force_refresh()
+
     def build(self) -> rio.Component:
         if not self.current_user or self.df is None:
             return rio.Text("Error: Could not load user information")
@@ -298,6 +428,59 @@ class AdminPage(rio.Component):
                 style="danger",
                 margin_top=1,
             ),
+
+
+            rio.Text(
+                "Currency Management",
+                style="heading3",
+                margin_top=2,
+                margin_bottom=1,
+            ),
+
+            rio.Row(
+                rio.TextInput(
+                    label="User Email / Username / ID",
+                    text=self.bind().currency_user_identifier,
+                ),
+                rio.TextInput(
+                    label="Amount",
+                    text=self.bind().currency_amount,
+                    on_confirm=self._on_currency_submit,
+                ),
+                rio.TextInput(
+                    label="Reason (optional)",
+                    text=self.bind().currency_reason,
+                    on_confirm=self._on_currency_submit,
+                ),
+                spacing=1,
+                proportions=[1, 1, 1],
+            ),
+
+            rio.Row(
+                rio.Text("Set absolute balance"),
+                rio.Switch(
+                    is_on=self.currency_mode_is_set,
+                    on_change=self._on_currency_mode_toggle,
+                ),
+                rio.Button(
+                    "Apply",
+                    on_press=self._on_currency_submit,
+                    shape="rounded",
+                ),
+                spacing=1,
+            ),
+
+            rio.Banner(
+                text=self.currency_success,
+                style="success",
+                margin_top=1,
+            ) if self.currency_success else rio.Spacer(),
+
+            rio.Banner(
+                text=self.currency_error,
+                style="danger",
+                margin_top=1,
+            ) if self.currency_error else rio.Spacer(),
 
             
             rio.Text(

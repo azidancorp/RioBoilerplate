@@ -183,11 +183,12 @@ PAGE_ROLE_MAPPING = {
     "/app/dashboard": ["root", "admin", "user"],
     "/app/admin": ["root", "admin"],
     "/app/news": ["root", "admin"],
+    "/app/settings": ["*"],  # wildcard grants access to every role
     ...
 }
 ```
 
-Update these mappings when you customize your roles. The highest privilege role automatically has access to all pages.
+Use the `"*"` wildcard when every current and future role should be allowed without updating the list (e.g., settings or MFA pages). Update these mappings when you customize your roles. The highest privilege role automatically has access to all pages.
 
 **Role Validation**:
 - All role changes are validated against `ROLE_HIERARCHY` in the persistence layer

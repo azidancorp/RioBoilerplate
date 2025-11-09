@@ -7,7 +7,7 @@ import warnings
 import rio
 import app.theme as theme
 from app.data_models import AppUser
-from app.permissions import PAGE_ROLE_MAPPING, get_highest_privilege_role
+from app.permissions import PAGE_ROLE_MAPPING, check_access, get_highest_privilege_role
 
 
 # Define all possible sidebar links with their paths and icons
@@ -213,7 +213,7 @@ class Sidebar(rio.Component):
         ] if user_role == get_highest_privilege_role() else [
             SideBarLink(title, url, icon)
             for title, url, icon in ALL_SIDEBAR_LINKS
-            if url in PAGE_ROLE_MAPPING and user_role in PAGE_ROLE_MAPPING[url]
+            if url in PAGE_ROLE_MAPPING and check_access(url, user_role)
         ]
         
         return rio.Column(

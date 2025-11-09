@@ -28,15 +28,15 @@ ROLE_HIERARCHY = {
 }
 
 PAGE_ROLE_MAPPING = {
-    "/app/dashboard": ["root", "admin", "user"],
-    "/app/news": ["root", "admin"],
-    "/app/test": ["root", "admin", "user"],
-    "/app/settings": ["root", "admin", "user"],
-    "/app/enable-mfa": ["root", "admin", "user"],
-    "/app/disable-mfa": ["root", "admin", "user"],
-    "/app/recovery-codes": ["root", "admin", "user"],
+    "/app/dashboard": ["*"],
+    "/app/settings": ["*"],
+    "/app/enable-mfa": ["*"],
+    "/app/disable-mfa": ["*"],
+    "/app/recovery-codes": ["*"],
+    "/app/notifications": ["*"],
     "/app/admin": ["root", "admin"],
-    "/app/notifications": ["root", "admin", "user"],
+    "/app/test": ["root", "admin"],
+    "/app/news": ["root", "admin", "user"],
 }
 
 def get_role_level(role: str) -> int:
@@ -72,6 +72,8 @@ def check_access(current_page: str, user_role: str) -> bool:
 
     if current_page in PAGE_ROLE_MAPPING:
         allowed_roles = PAGE_ROLE_MAPPING[current_page]
+        if "*" in allowed_roles:
+            return True
         return user_role in allowed_roles
     return False
 

@@ -466,7 +466,11 @@ Test your deployment:
 # Test HTTP to HTTPS redirect
 curl -I http://[DOMAIN_NAME]
 
-# Check if site is accessible
+# Test HTTPS with GET request (recommended)
+curl -s https://[DOMAIN_NAME] | head -20
+
+# Alternative: Test HTTPS with HEAD request
+# Note: May return 405 if app doesn't handle HEAD requests
 curl -I https://[DOMAIN_NAME]
 ```
 
@@ -481,11 +485,28 @@ Content-Length: 178
 Connection: keep-alive
 Location: https://[DOMAIN_NAME]/
 
-# HTTPS accessibility test
-HTTP/2 200
-server: nginx/1.26.0 (Ubuntu)
-date: Sat, 21 Jun 2025 11:36:15 GMT
-content-type: text/html; charset=utf-8
+# HTTPS GET request (shows actual content)
+<!doctype html>
+<html>
+    <head>
+        <title>Home</title>
+        <meta name="og:title" content="Home">
+        ...
+
+# HTTPS HEAD request (may show 405 - this is normal)
+HTTP/1.1 405 Method Not Allowed
+Server: nginx/1.24.0 (Ubuntu)
+Date: Sun, 09 Nov 2025 23:18:48 GMT
+Content-Type: application/json
+Content-Length: 31
+Connection: keep-alive
+allow: GET
+
+# Note: 405 for HEAD requests is normal behavior for Rio/FastAPI apps
+# that don't explicitly handle HEAD method. The important indicators are:
+# - Connection is established over HTTPS
+# - SSL certificate is valid (no errors)
+# - Browser test shows padlock and loads content
 ```
 
 **Browser tests:**

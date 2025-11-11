@@ -19,11 +19,21 @@
 
 ## Overview
 
-When you base your project on RioBoilerplate, you start with the template files in a subdirectory (e.g., `nnw/`) and build custom features on top. Over time, the upstream RioBoilerplate template gets updates (bug fixes, new features, security patches) that you want to integrate into your project.
+When you base your project on RioBoilerplate, you integrate the template into your repository. This integration can follow one of two structures:
 
-**The Challenge:** Merge upstream improvements WITHOUT losing your custom work.
+**Type A - Direct/Root Structure:** Your project root IS the RioBoilerplate webapp
+- Structure: `ProjectRoot/app/app/...` (mirrors `RioBoilerplate/app/app/...`)
+- Example: Your entire repository is a RioBoilerplate webapp
 
-**The Solution:** Git subtree merge with manual conflict resolution.
+**Type B - Subdirectory Structure:** RioBoilerplate lives in a subdirectory
+- Structure: `ProjectRoot/webapp/app/app/...` (or `nnw/`, `backend/`, etc.)
+- Example: You have multiple apps/sections in your project (such as mobile, research, etc), and the RioBoilerplate webapp is just one subdirectory
+
+Over time, the upstream RioBoilerplate template gets updates (bug fixes, new features, security patches) that you want to integrate into your project.
+
+**The Challenge:** Merge upstream improvements WITHOUT losing your custom work, regardless of your project structure.
+
+**The Solution:** Git subtree merge with manual conflict resolution, adapted to your specific structure.
 
 ---
 
@@ -31,7 +41,7 @@ When you base your project on RioBoilerplate, you start with the template files 
 
 ### Repository Structure
 Your repository should have:
-- **Main branch:** Contains your full project with the boilerplate in a subdirectory (e.g., `nnw/`)
+- **Main branch:** Contains your full project (with or without RioBoilerplate in a subdirectory)
 - **Upstream tracking branch:** A branch that tracks RioBoilerplate updates (e.g., `rioboilerplate-upstream`)
 - **Git remote:** A remote pointing to the RioBoilerplate repository
 
@@ -39,6 +49,100 @@ Your repository should have:
 - Basic Git operations (commit, add, status)
 - Understanding of merge conflicts
 - Text editor capable of handling conflict markers
+
+### Determining Your Project Structure
+
+**CRITICAL:** Before merging, you MUST identify which structure type you have. The merge command differs significantly between them.
+
+#### Step 1: Check Your Directory Layout
+
+Run from your project root:
+```bash
+ls -la
+```
+
+**Type A Indicators (Direct/Root Structure):**
+- You see `app/` and `requirements.txt` at the root level, and `rio.toml` lives inside that outer `app/` directory
+- Your project root directly contains the Rio application (within `app/`)
+- Structure looks like:
+  ```
+  ProjectRoot/
+  ├── app/
+  │   ├── rio.toml
+  │   ├── app/
+  │   │   ├── __init__.py
+  │   │   ├── pages/
+  │   │   ├── components/
+  │   │   └── ...
+  │   ├── assets/
+  │   └── data/
+  ├── requirements.txt
+  └── ...
+  ```
+
+**Type B Indicators (Subdirectory Structure):**
+- You see a subdirectory (e.g., `webapp/`, `nnw/`, `backend/`) that contains the Rio app, and inside that subdirectory's `app/` directory sits `rio.toml`
+- Your project root has OTHER things besides the Rio app
+- Structure looks like:
+  ```
+  ProjectRoot/
+  ├── webapp/          # Or nnw/, backend/, etc.
+  │   ├── app/
+  │   │   ├── rio.toml
+  │   │   ├── app/
+  │   │   │   ├── __init__.py
+  │   │   │   ├── pages/
+  │   │   │   └── ...
+  │   │   ├── assets/
+  │   │   └── data/
+  │   ├── requirements.txt
+  ├── docs/
+  ├── frontend/
+  └── ...
+  ```
+
+#### Step 2: Confirm with rio.toml
+
+Find your `rio.toml` file:
+
+```bash
+# Type A: In the outer app/ directory at the project root
+cat app/rio.toml
+
+# Type B: In the subdirectory's outer app/ directory
+cat $WEBAPP_DIR/app/rio.toml  # Replace 'webapp' with your actual subdirectory name
+```
+
+If `app/rio.toml` exists directly under your project root → **Type A**
+If you only find `rio.toml` under `$WEBAPP_DIR/app/` → **Type B**
+
+#### Step 3: Set Your Variables
+
+Based on your structure, set these variables for the rest of this guide:
+
+**For Type A (Direct/Root Structure):**
+```bash
+export WEBAPP_DIR="."
+export SUBTREE_FLAG=""
+```
+
+**For Type B (Subdirectory Structure):**
+```bash
+# Replace 'webapp' with YOUR actual subdirectory name (e.g., nnw, backend, etc.)
+export WEBAPP_DIR="webapp"
+export SUBTREE_FLAG="-X subtree=$WEBAPP_DIR"
+```
+
+**Verify your settings:**
+```bash
+echo "Webapp directory: $WEBAPP_DIR"
+echo "Subtree flag: $SUBTREE_FLAG"
+
+# Test that your paths work
+ls $WEBAPP_DIR/app/app/pages/
+```
+
+If the last command shows your pages, you've configured correctly.
 
 ---
 
@@ -118,21 +222,23 @@ Take note of:
 - Custom color schemes or styling
 - Any project-specific data
 
-**Example for this project:**
-```bash
-# List custom pages
-ls nnw/app/app/pages/app_page/
+**Using the variables from "Determining Your Project Structure" above:**
 
-# Expected custom files:
-# - account.py
-# - extract.py
-# - matches.py
-# - matchmaking.py
-# - messages.py
-# - profile.py
-# - search.py
-# - seek.py
+```bash
+# List custom pages (works for both Type A and Type B)
+ls $WEBAPP_DIR/app/app/pages/app_page/
+
+# List custom components
+ls $WEBAPP_DIR/app/app/components/
+
+# Check custom data files
+ls $WEBAPP_DIR/app/app/data/
 ```
+
+**Examples of custom files you might see:**
+- Custom pages: `account.py`, `profile.py`, `dashboard_custom.py`
+- Custom components: `custom_sidebar.py`, `custom_navbar.py`
+- Custom data: `custom_data.csv`, `app.db`
 
 ### 4. Review Upstream Changes
 
@@ -149,17 +255,32 @@ This shows commits you'll be merging.
 
 ### Step 1: Initiate the Merge
 
-Use the `--no-commit` flag to review changes before finalizing:
+Use the `--no-commit` flag to review changes before finalizing.
+
+**IMPORTANT:** The merge command differs based on your project structure!
+
+#### For Type A (Direct/Root Structure):
 
 ```bash
-git merge --no-commit --allow-unrelated-histories -X subtree=nnw rioboilerplate-upstream
+git merge --no-commit --allow-unrelated-histories rioboilerplate-upstream
+```
+
+#### For Type B (Subdirectory Structure):
+
+```bash
+# Using the variable you set earlier
+git merge --no-commit --allow-unrelated-histories $SUBTREE_FLAG rioboilerplate-upstream
+
+# Or explicitly (replace 'webapp' with YOUR subdirectory name)
+git merge --no-commit --allow-unrelated-histories -X subtree=webapp rioboilerplate-upstream
 ```
 
 **Flags explained:**
 - `--no-commit`: Don't auto-commit, allowing manual review
 - `--allow-unrelated-histories`: Required because upstream and your branch have different roots
-- `-X subtree=nnw`: Tells git the upstream root maps to your `nnw/` directory
-  - **IMPORTANT:** Replace `nnw` with your actual subdirectory name
+- `-X subtree=<dir>`: **Only for Type B** - Tells git the upstream root maps to your subdirectory
+  - Omit this flag entirely for Type A (direct/root structure)
+  - For Type B, replace `<dir>` with your actual subdirectory name (e.g., `webapp`, `nnw`, `backend`)
 
 ### Step 2: Initial Status Check
 
@@ -174,21 +295,34 @@ You'll see three categories:
 
 ### Step 3: Verify Custom Files Preserved
 
-**CRITICAL CHECK:** Ensure your custom files still exist:
+**CRITICAL CHECK:** Ensure your custom files still exist.
 
 ```bash
-# Example: Check custom pages
-ls nnw/app/app/pages/app_page/
+# Using the variable (works for both Type A and Type B)
+ls $WEBAPP_DIR/app/app/pages/app_page/
+
+# Type A example (if WEBAPP_DIR is ".")
+ls app/app/pages/app_page/
+
+# Type B example (if WEBAPP_DIR is "webapp")
+ls webapp/app/app/pages/app_page/
 ```
 
-If custom files are missing, **ABORT THE MERGE** and see [Recovery Section](#recovery-from-failed-merge).
+If custom files are missing, **ABORT THE MERGE** and see [Recovery Section](#common-issues--recovery).
 
 ### Step 4: Check for Conflict Markers
 
 Find all files with conflict markers:
 
 ```bash
-find nnw -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
+# Using the variable (works for both Type A and Type B)
+find $WEBAPP_DIR -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
+
+# Type A example (searches from root)
+find . -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
+
+# Type B example (searches in subdirectory)
+find webapp -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
 ```
 
 This lists files needing manual resolution.
@@ -297,8 +431,8 @@ git diff --name-only --diff-filter=U
 # 3. Stage resolved file
 git add path/to/resolved/file.py
 
-# 4. Verify no conflicts remain
-find nnw -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
+# 4. Verify no conflicts remain (using your $WEBAPP_DIR variable)
+find $WEBAPP_DIR -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
 ```
 
 **Expected output when done:** (empty)
@@ -310,23 +444,31 @@ find nnw -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
 ### 1. Final Conflict Check
 
 ```bash
-# Should return no results
-find nnw -type f -exec grep -l "<<<<<<< HEAD\|=======\|>>>>>>> rioboilerplate-upstream" {} \; 2>/dev/null
+# Using the variable (works for both Type A and Type B)
+find $WEBAPP_DIR -type f -exec grep -l "<<<<<<< HEAD\|=======\|>>>>>>> rioboilerplate-upstream" {} \; 2>/dev/null
+
+# Type A example
+find . -type f -exec grep -l "<<<<<<< HEAD\|=======\|>>>>>>> rioboilerplate-upstream" {} \; 2>/dev/null
+
+# Type B example
+find webapp -type f -exec grep -l "<<<<<<< HEAD\|=======\|>>>>>>> rioboilerplate-upstream" {} \; 2>/dev/null
 ```
+
+**Expected result:** No output (all conflicts resolved)
 
 ### 2. Verify Custom Work Preserved
 
 Check that your custom files still exist and have correct content:
 
 ```bash
-# List custom pages
-ls nnw/app/app/pages/app_page/
+# List custom pages (using variable)
+ls $WEBAPP_DIR/app/app/pages/app_page/
 
 # Check custom components
-ls nnw/app/app/components/
+ls $WEBAPP_DIR/app/app/components/
 
 # Verify custom data
-ls nnw/app/app/data/
+ls $WEBAPP_DIR/app/app/data/
 ```
 
 ### 3. Check for Subtle Overwrites
@@ -336,29 +478,38 @@ ls nnw/app/app/data/
 Check critical customizations:
 
 ```bash
-# Example: Verify color scheme in sidebar
-grep -n "Color.from_rgb" nnw/app/app/components/sidebar.py
+# Example: Verify color scheme in sidebar (using variable)
+grep -n "Color.from_rgb" $WEBAPP_DIR/app/app/components/sidebar.py
 
 # Example: Verify custom configuration
-grep -n "CUSTOM_" nnw/app/app/config.py
+grep -n "CUSTOM_" $WEBAPP_DIR/app/app/config.py
 ```
 
 If customizations are lost, restore them from git history:
 
 ```bash
-# View your version before merge
-git show HEAD~1:nnw/app/app/components/sidebar.py
+# View your version before merge (replace path as needed)
+git show HEAD~1:$WEBAPP_DIR/app/app/components/sidebar.py
 
 # Or compare
-git diff HEAD~1:nnw/app/app/components/sidebar.py nnw/app/app/components/sidebar.py
+git diff HEAD~1:$WEBAPP_DIR/app/app/components/sidebar.py $WEBAPP_DIR/app/app/components/sidebar.py
 ```
 
 ### 4. Stage All Changes
 
 Once everything is verified and resolved:
 
+**For Type A (Direct/Root):**
 ```bash
-git add nnw/
+git add .
+git status
+```
+
+**For Type B (Subdirectory):**
+```bash
+git add $WEBAPP_DIR/
+# Or explicitly
+git add webapp/
 git status
 ```
 
@@ -368,18 +519,47 @@ All conflicts fixed but you are still merging.
   (use "git commit" to conclude merge)
 
 Changes to be committed:
-    modified:   nnw/...
-    new file:   nnw/...
+    modified:   ...
+    new file:   ...
     ...
 ```
 
 ### 5. Commit the Merge
 
+**For Type A (Direct/Root):**
 ```bash
 git commit -m "$(cat <<'EOF'
-Merge RioBoilerplate upstream updates into nnw/
+Merge RioBoilerplate upstream updates
 
 Integrated [NUMBER] commits from RioBoilerplate template with custom features preserved.
+
+New Features Added:
+- [Feature 1]
+- [Feature 2]
+- [Feature 3]
+
+Modified Files (conflicts resolved):
+- [File 1]
+- [File 2]
+
+Custom Work Preserved:
+- All custom pages: [list key pages]
+- Custom configurations: [list key configs]
+- Project-specific data and styling
+
+Documentation:
+- [New doc files]
+EOF
+)"
+```
+
+**For Type B (Subdirectory):**
+```bash
+git commit -m "$(cat <<'EOF'
+Merge RioBoilerplate upstream updates into webapp/
+
+Integrated [NUMBER] commits from RioBoilerplate template with custom features preserved.
+Replace 'webapp/' with your actual subdirectory name in the title above.
 
 New Features Added:
 - [Feature 1]
@@ -414,8 +594,15 @@ Should show clean working tree.
 
 **CRITICAL:** Test before pushing to production.
 
+**For Type A (Direct/Root):**
 ```bash
-cd nnw/app
+cd app  # Outer app/ directory that holds rio.toml
+rio run --port 8000
+```
+
+**For Type B (Subdirectory):**
+```bash
+cd $WEBAPP_DIR/app  # Outer app/ directory inside your subdirectory
 rio run --port 8000
 ```
 
@@ -444,19 +631,25 @@ git push origin main
 
 **Symptom:** After merge, custom pages/files are missing.
 
-**Cause:** Wrong merge strategy or subtree path.
+**Cause:** Wrong merge strategy or subtree path (most common for Type B projects).
 
 **Recovery:**
 ```bash
 # Abort the merge
 git merge --abort
 
-# Verify files are back
-ls nnw/app/app/pages/app_page/
+# Verify files are back (using your variable)
+ls $WEBAPP_DIR/app/app/pages/app_page/
 
 # Try again with correct flags
-git merge --no-commit --allow-unrelated-histories -X subtree=nnw rioboilerplate-upstream
+# For Type A (Direct/Root):
+git merge --no-commit --allow-unrelated-histories rioboilerplate-upstream
+
+# For Type B (Subdirectory):
+git merge --no-commit --allow-unrelated-histories -X subtree=$WEBAPP_DIR rioboilerplate-upstream
 ```
+
+**Common mistake for Type B:** Forgetting the `-X subtree=<dir>` flag or using the wrong directory name.
 
 ### Issue 2: Merge Already Committed (Can't Abort)
 
@@ -469,9 +662,9 @@ git reset --hard HEAD~1
 
 # Verify files are restored
 git status
-ls nnw/app/app/pages/app_page/
+ls $WEBAPP_DIR/app/app/pages/app_page/
 
-# Try again with --no-commit flag
+# Try again with --no-commit flag (see Issue 1 for correct command)
 ```
 
 ### Issue 3: Too Many Conflicts
@@ -506,19 +699,31 @@ ls nnw/app/app/pages/app_page/
 **Symptom:** `requirements.txt` has conflicts, unclear which to keep.
 
 **Resolution:**
+
+**For Type A (Direct/Root):**
 ```bash
 # View both versions
-git show HEAD:nnw/requirements.txt > /tmp/yours.txt
+git show HEAD:requirements.txt > /tmp/yours.txt
 git show rioboilerplate-upstream:requirements.txt > /tmp/upstream.txt
 
 # Compare
 diff /tmp/yours.txt /tmp/upstream.txt
-
-# Strategy:
-# 1. Keep all YOUR custom dependencies
-# 2. Add NEW upstream dependencies
-# 3. Update VERSION numbers for shared dependencies (use upstream versions)
 ```
+
+**For Type B (Subdirectory):**
+```bash
+# View both versions (using variable)
+git show HEAD:$WEBAPP_DIR/requirements.txt > /tmp/yours.txt
+git show rioboilerplate-upstream:requirements.txt > /tmp/upstream.txt
+
+# Compare
+diff /tmp/yours.txt /tmp/upstream.txt
+```
+
+**Resolution Strategy (same for both types):**
+1. Keep all YOUR custom dependencies
+2. Add NEW upstream dependencies
+3. Update VERSION numbers for shared dependencies (use upstream versions)
 
 ### Issue 5: Application Won't Start After Merge
 
@@ -527,13 +732,29 @@ diff /tmp/yours.txt /tmp/upstream.txt
 **Debugging steps:**
 
 1. **Check imports:**
+
+   **Type A:**
    ```bash
+   cd app
+   python3 -c "import app"
+   ```
+
+   **Type B:**
+   ```bash
+   cd $WEBAPP_DIR/app
    python3 -c "import app"
    ```
 
 2. **Check for missing dependencies:**
+
+   **Type A:**
    ```bash
-   pip install -r nnw/requirements.txt
+   pip install -r requirements.txt
+   ```
+
+   **Type B:**
+   ```bash
+   pip install -r $WEBAPP_DIR/requirements.txt
    ```
 
 3. **Check database schema:**
@@ -543,9 +764,17 @@ diff /tmp/yours.txt /tmp/upstream.txt
    ```
 
 4. **Review merge commit:**
+
+   **Type A:**
    ```bash
    git show HEAD --stat
-   git diff HEAD~1 HEAD -- nnw/app/app/__init__.py
+   git diff HEAD~1 HEAD -- app/app/__init__.py
+   ```
+
+   **Type B:**
+   ```bash
+   git show HEAD --stat
+   git diff HEAD~1 HEAD -- $WEBAPP_DIR/app/app/__init__.py
    ```
 
 5. **If all else fails, revert:**
@@ -563,9 +792,20 @@ diff /tmp/yours.txt /tmp/upstream.txt
 - Aim for monthly or quarterly merges
 
 ### 2. Always Use --no-commit
+
+**Type A (Direct/Root):**
 ```bash
 # GOOD
-git merge --no-commit --allow-unrelated-histories -X subtree=nnw rioboilerplate-upstream
+git merge --no-commit --allow-unrelated-histories rioboilerplate-upstream
+
+# BAD (auto-commits, harder to verify)
+git merge rioboilerplate-upstream
+```
+
+**Type B (Subdirectory):**
+```bash
+# GOOD
+git merge --no-commit --allow-unrelated-histories -X subtree=webapp rioboilerplate-upstream
 
 # BAD (auto-commits, harder to verify)
 git merge -s subtree rioboilerplate-upstream
@@ -579,9 +819,21 @@ Maintain a file like `CUSTOMIZATIONS.md` listing:
 - Any deviations from the boilerplate
 
 ### 4. Use Feature Branches for Major Merges
+
+**Type A (Direct/Root):**
 ```bash
 git checkout -b merge-upstream-2025-01
-git merge --no-commit --allow-unrelated-histories -X subtree=nnw rioboilerplate-upstream
+git merge --no-commit --allow-unrelated-histories rioboilerplate-upstream
+# ... resolve conflicts ...
+git commit
+git push origin merge-upstream-2025-01
+# Create PR, review, then merge to main
+```
+
+**Type B (Subdirectory):**
+```bash
+git checkout -b merge-upstream-2025-01
+git merge --no-commit --allow-unrelated-histories -X subtree=$WEBAPP_DIR rioboilerplate-upstream
 # ... resolve conflicts ...
 git commit
 git push origin merge-upstream-2025-01
@@ -629,12 +881,25 @@ If you discover issues immediately after committing the merge (before pushing):
 
 ### Scenario 1: Forgot to Include a Fix
 
+**Type A (Direct/Root):**
 ```bash
 # Make your fix (e.g., restore color scheme)
 # Edit the file
 
 # Stage the fix
-git add nnw/app/app/components/sidebar.py
+git add app/app/components/sidebar.py
+
+# Amend the merge commit
+git commit --amend --no-edit
+```
+
+**Type B (Subdirectory):**
+```bash
+# Make your fix (e.g., restore color scheme)
+# Edit the file
+
+# Stage the fix
+git add $WEBAPP_DIR/app/app/components/sidebar.py
 
 # Amend the merge commit
 git commit --amend --no-edit
@@ -642,10 +907,22 @@ git commit --amend --no-edit
 
 ### Scenario 2: Need to Fix Multiple Files
 
+**Type A (Direct/Root):**
 ```bash
 # Fix all issues
 # Stage all fixes
-git add nnw/
+git add .
+
+# Amend with updated message
+git commit --amend
+# Edit message in editor if needed
+```
+
+**Type B (Subdirectory):**
+```bash
+# Fix all issues
+# Stage all fixes
+git add $WEBAPP_DIR/
 
 # Amend with updated message
 git commit --amend
@@ -658,7 +935,7 @@ git commit --amend
 
 ## Quick Reference Commands
 
-### Setup
+### Setup (Same for Both Types)
 ```bash
 git remote add rioboilerplate https://github.com/azidancorp/RioBoilerplate.git
 git fetch rioboilerplate
@@ -666,7 +943,7 @@ git checkout -b rioboilerplate-upstream rioboilerplate/main
 git push -u origin rioboilerplate-upstream
 ```
 
-### Update Upstream
+### Update Upstream (Same for Both Types)
 ```bash
 git checkout rioboilerplate-upstream
 git pull rioboilerplate main
@@ -674,40 +951,96 @@ git push origin rioboilerplate-upstream
 git checkout main
 ```
 
-### Merge Process
+### Determine Your Structure
+```bash
+# Check your layout
+ls -la
+
+# Set variables for Type A (Direct/Root)
+export WEBAPP_DIR="."
+export SUBTREE_FLAG=""
+
+# OR set variables for Type B (Subdirectory - replace 'webapp' with your dir)
+export WEBAPP_DIR="webapp"
+export SUBTREE_FLAG="-X subtree=$WEBAPP_DIR"
+
+# Verify
+ls $WEBAPP_DIR/app/app/pages/
+```
+
+### Merge Process - Type A (Direct/Root)
 ```bash
 # 1. Ensure clean state
 git status
 
-# 2. Merge without committing
-git merge --no-commit --allow-unrelated-histories -X subtree=nnw rioboilerplate-upstream
+# 2. Merge without committing (NO subtree flag)
+git merge --no-commit --allow-unrelated-histories rioboilerplate-upstream
 
 # 3. Verify custom files preserved
-ls nnw/app/app/pages/app_page/
+ls app/app/pages/app_page/
 
 # 4. Find conflicts
-find nnw -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
+find . -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
 
 # 5. Resolve each conflict, then stage
 git add path/to/resolved/file
 
 # 6. Verify all resolved
-find nnw -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
+find . -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
 
 # 7. Stage everything
-git add nnw/
+git add .
 
 # 8. Commit
 git commit
 
 # 9. Test
-cd nnw/app && rio run
+cd app && rio run
 
 # 10. Push
 git push origin main
 ```
 
-### Abort/Recover
+### Merge Process - Type B (Subdirectory)
+```bash
+# 1. Ensure clean state
+git status
+
+# 2. Merge without committing (WITH subtree flag - replace 'webapp')
+git merge --no-commit --allow-unrelated-histories -X subtree=webapp rioboilerplate-upstream
+# Or using variable:
+git merge --no-commit --allow-unrelated-histories $SUBTREE_FLAG rioboilerplate-upstream
+
+# 3. Verify custom files preserved
+ls webapp/app/app/pages/app_page/
+# Or: ls $WEBAPP_DIR/app/app/pages/app_page/
+
+# 4. Find conflicts
+find webapp -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
+# Or: find $WEBAPP_DIR -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
+
+# 5. Resolve each conflict, then stage
+git add path/to/resolved/file
+
+# 6. Verify all resolved
+find webapp -type f -exec grep -l "<<<<<<< HEAD" {} \; 2>/dev/null
+
+# 7. Stage everything
+git add webapp/
+# Or: git add $WEBAPP_DIR/
+
+# 8. Commit
+git commit
+
+# 9. Test
+cd $WEBAPP_DIR/app
+rio run
+
+# 10. Push
+git push origin main
+```
+
+### Abort/Recover (Same for Both Types)
 ```bash
 # Abort in-progress merge
 git merge --abort
@@ -715,7 +1048,7 @@ git merge --abort
 # Undo last commit (not pushed)
 git reset --hard HEAD~1
 
-# View file from before merge
+# View file from before merge (adjust path for your structure)
 git show HEAD~1:path/to/file
 ```
 
@@ -725,8 +1058,10 @@ git show HEAD~1:path/to/file
 
 Before asking for help, verify:
 
+- [ ] Identified your project structure (Type A or Type B)
 - [ ] Used `--no-commit` flag
-- [ ] Specified correct subtree path (`-X subtree=nnw`)
+- [ ] **Type B only:** Specified correct subtree path (`-X subtree=<yourdir>`)
+- [ ] **Type A only:** Did NOT use subtree flag (common mistake)
 - [ ] Working tree was clean before merge
 - [ ] All conflict markers removed
 - [ ] Custom files still exist
@@ -740,16 +1075,21 @@ Before asking for help, verify:
 
 Merging upstream updates is a routine maintenance task that becomes easier with practice. The key principles:
 
-1. **Prepare:** Clean state, backup, review changes
-2. **Merge carefully:** Use `--no-commit` and `-X subtree`
-3. **Verify thoroughly:** Check custom work preserved
-4. **Resolve methodically:** One conflict at a time
-5. **Test extensively:** Before pushing to production
+1. **Identify structure:** Determine if you have Type A (Direct/Root) or Type B (Subdirectory)
+2. **Prepare:** Clean state, backup, review changes
+3. **Merge carefully:** Use `--no-commit` and correct flags for your structure
+   - Type A: NO subtree flag
+   - Type B: WITH `-X subtree=<yourdir>`
+4. **Verify thoroughly:** Check custom work preserved
+5. **Resolve methodically:** One conflict at a time
+6. **Test extensively:** Before pushing to production
 
 Keep this guide handy for future merges. Each time you merge, you'll get faster and more confident with the process.
 
+**Key Takeaway:** The most common mistake is using the wrong merge command for your project structure. Always verify your structure type before running the merge!
+
 ---
 
-**Last Updated:** 2025-11-09
-**Based on:** Actual merge of RioBoilerplate upstream into nikahnetwork/nnw
-**Verified with:** Git 2.x, RioBoilerplate template structure
+**Last Updated:** 2025-11-11
+**Based on:** Multiple successful merges covering both Type A and Type B structures
+**Verified with:** Git 2.x, RioBoilerplate template in various project configurations

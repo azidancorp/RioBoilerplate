@@ -57,6 +57,8 @@ From `.windsurfrules`:
 - Apply `update_layout(template='plotly_dark')` to all Plotly charts
 - Never use "children" as argument in Rio components - place components directly
 - Change only what's required, nothing more
+- After modifying any Rio component, run a smoke test from the outer `app/` directory (where `rio.toml` resides) using `rio run --port 8XXX` with a 5s timeout to ensure the app boots with correct arguments
+- Review each component instantiation against the references in the top-level `RioDocumentation/` folder and align constructor usage exactly with what the docs specify
 
 ## Key Files and Patterns
 

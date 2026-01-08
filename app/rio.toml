@@ -8,4 +8,4 @@ app-type = "website"
 main-module = "app"
 # All files which are part of your project. Changes to these will trigger a
 # reload and they will be packed up when deploying.
-project-files = ["*.py", "/assets/", "/rio.toml"]
+project-files = ["*.py", "/assets/", "/JSPages/", "/rio.toml"]

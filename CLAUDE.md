@@ -91,6 +91,8 @@ The application uses SQLite with these main tables in `app.db`:
 - `user_sessions` - Authentication sessions with expiration and role information
 - `password_reset_codes` - Temporary password reset tokens
 - `profiles` - User profile information (id, user_id, full_name, email, phone, address, bio, avatar_url, created_at, updated_at)
+- `currency_balances` - User currency balance tracking (user_id, balance_minor, updated_at)
+- `currency_ledger` - Transaction history (id, user_id, delta, balance_after, reason, metadata, actor_user_id, created_at)
 
 Profile Management:
 - One-to-one mapping between users and profiles
@@ -131,6 +133,36 @@ Core dependencies include:
 - All endpoints include input validation and sanitization
 - Proper HTTP status codes and error handling
 - SQLite integrity constraint handling
+
+## Currency System
+
+The application includes a configurable virtual currency system for credits, tokens, or points.
+
+**Core Module** (`app/currency.py`):
+- `CurrencyConfig` dataclass for currency metadata
+- Functions for formatting, conversion between minor/major units
+- `attach_currency_name()` for display strings with proper pluralization
+
+**Configuration** (`app/config.py`):
+```python
+PRIMARY_CURRENCY_NAME: str = "credit"
+PRIMARY_CURRENCY_NAME_PLURAL: str = "credits"
+PRIMARY_CURRENCY_SYMBOL: str = ""
+PRIMARY_CURRENCY_DECIMAL_PLACES: int = 0
+PRIMARY_CURRENCY_INITIAL_BALANCE: int = 0
+PRIMARY_CURRENCY_ALLOW_NEGATIVE: bool = False
+```
+
+**Currency API** (`app/api/currency.py`):
+- `GET /api/currency/config` - Get currency configuration
+- `GET /api/currency/balance` - Get authenticated user's balance
+- `GET /api/currency/ledger` - Get transaction history (paginated)
+- `POST /api/currency/adjust` - Adjust user balance by delta (admin only)
+- `POST /api/currency/set` - Set user balance to exact amount (admin only)
+
+**Database Tables**:
+- `currency_balances` - User balance tracking
+- `currency_ledger` - Full transaction history with actor, reason, and metadata
 
 ## Role Management & Customization
 
@@ -224,6 +256,16 @@ The application uses a centralized configuration system that can be controlled v
   - Options: `"email"` or `"username"`
   - Environment variable: `PRIMARY_IDENTIFIER=email|username`
 
+**Currency Settings**:
+- `PRIMARY_CURRENCY_NAME` / `PRIMARY_CURRENCY_NAME_PLURAL` - Display names (default: "credit"/"credits")
+- `PRIMARY_CURRENCY_SYMBOL` - Optional symbol prefix (default: "")
+- `PRIMARY_CURRENCY_DECIMAL_PLACES` - Decimal precision (default: 0)
+- `PRIMARY_CURRENCY_INITIAL_BALANCE` - New user starting balance (default: 0)
+- `PRIMARY_CURRENCY_ALLOW_NEGATIVE` - Allow negative balances (default: false)
+
+**Password Policy**:
+- `MIN_PASSWORD_STRENGTH` - Minimum password strength score (default: 50)
+
 **Configuration Methods**:
 ```python
 # Direct modification (for hardcoded settings)
@@ -262,10 +304,21 @@ Required environment variables (see `.env.example`):
 - `PUT /api/profile/{user_id}` - Update user profile
 - `DELETE /api/profile/{user_id}` - Delete user profile
 
+**Currency API** (`app/api/currency.py`):
+- `GET /api/currency/config` - Get currency configuration (public)
+- `GET /api/currency/balance` - Get authenticated user's balance
+- `GET /api/currency/ledger` - Get transaction history with pagination
+- `POST /api/currency/adjust` - Adjust user balance by delta (admin/root only)
+- `POST /api/currency/set` - Set user balance to exact amount (admin/root only)
+
+**Utility Endpoints** (`app/api/example.py`):
+- `GET /api/test` - Health check endpoint
+- `POST /api/contact` - Contact form submission
+
 **Request/Response Models** (`app/validation.py`):
-- `ProfileCreateRequest` - Validation for profile creation
-- `ProfileUpdateRequest` - Validation for profile updates
-- `ProfileResponse` - Standardized profile response format
+- `ProfileCreateRequest` / `ProfileUpdateRequest` / `ProfileResponse` - Profile operations
+- `CurrencyConfigResponse` / `CurrencyBalanceResponse` / `CurrencyLedgerEntryResponse` - Currency queries
+- `CurrencyAdjustmentRequest` / `CurrencySetBalanceRequest` - Currency mutations
 
 **API Security Features**:
 - Input validation and sanitization using Pydantic models
@@ -298,182 +351,8 @@ Required environment variables (see `.env.example`):
 - `RioDocumentation/` contains extensive Rio framework reference docs
 - Static assets in `app/assets/`
 - Database files in `app/data/` (consolidated into single app.db)
-- API endpoints in `app/api/`
+- API endpoints in `app/api/` (profiles, currency, auth dependencies)
 - Security utilities in `app/validation.py`
 - Permission management in `app/permissions.py`
-
----
-
- # Using Gemini CLI for Large Codebase Analysis
-
-  When analyzing large codebases or multiple files that might exceed context limits, use the Gemini CLI with its massive
-  context window. Use `gemini -p` to leverage Google Gemini's large context capacity.
-
-  ## File and Directory Inclusion Syntax
-
-  Use the `@` syntax to include files and directories in your Gemini prompts. The paths should be relative to WHERE you run the
-   gemini command:
-
-  ### Examples:
-
-  **Single file analysis:**
-  ```bash
-  gemini -p "@src/main.py Explain this file's purpose and structure"
-
-  Multiple files:
-  gemini -p "@package.json @src/index.js Analyze the dependencies used in the code"
-
-  Entire directory:
-  gemini -p "@src/ Summarize the architecture of this codebase"
-
-  Multiple directories:
-  gemini -p "@src/ @tests/ Analyze test coverage for the source code"
-
-  Current directory and subdirectories:
-  gemini -p "@./ Give me an overview of this entire project"
-
-#
- Or use --all_files flag:
-  gemini --all_files -p "Analyze the project structure and dependencies"
-
-  Implementation Verification Examples
-
-  Check if a feature is implemented:
-  gemini -p "@src/ @lib/ Has dark mode been implemented in this codebase? Show me the relevant files and functions"
-
-  Verify authentication implementation:
-  gemini -p "@src/ @middleware/ Is JWT authentication implemented? List all auth-related endpoints and middleware"
-
-  Check for specific patterns:
-  gemini -p "@src/ Are there any React hooks that handle WebSocket connections? List them with file paths"
-
-  Verify error handling:
-  gemini -p "@src/ @api/ Is proper error handling implemented for all API endpoints? Show examples of try-catch blocks"
-
-  Check for rate limiting:
-  gemini -p "@backend/ @middleware/ Is rate limiting implemented for the API? Show the implementation details"
-
-  Verify caching strategy:
-  gemini -p "@src/ @lib/ @services/ Is Redis caching implemented? List all cache-related functions and their usage"
-
-  Check for specific security measures:
-  gemini -p "@src/ @api/ Are SQL injection protections implemented? Show how user inputs are sanitized"
-
-  Verify test coverage for features:
-  gemini -p "@src/payment/ @tests/ Is the payment processing module fully tested? List all test cases"
-
-  When to Use Gemini CLI
-
-  Use gemini -p when:
-  - Analyzing entire codebases or large directories
-  - Comparing multiple large files
-  - Need to understand project-wide patterns or architecture
-  - Current context window is insufficient for the task
-  - Working with files totaling more than 100KB
-  - Verifying if specific features, patterns, or security measures are implemented
-  - Checking for the presence of certain coding patterns across the entire codebase
-
-  Important Notes
-
-  - Paths in @ syntax are relative to your current working directory when invoking gemini
-  - The CLI will include file contents directly in the context
-  - No need for --yolo flag for read-only analysis
-  - Gemini's context window can handle entire codebases that would overflow Claude's context
-  - When checking implementations, be specific about what you're looking for to get accurate results # Using Gemini CLI for Large Codebase Analysis
-
-
-  When analyzing large codebases or multiple files that might exceed context limits, use the Gemini CLI with its massive
-  context window. Use `gemini -p` to leverage Google Gemini's large context capacity.
-
-
-  ## File and Directory Inclusion Syntax
-
-
-  Use the `@` syntax to include files and directories in your Gemini prompts. The paths should be relative to WHERE you run the
-   gemini command:
-
-
-  ### Examples:
-
-
-  **Single file analysis:**
-  ```bash
-  gemini -p "@src/main.py Explain this file's purpose and structure"
-
-
-  Multiple files:
-  gemini -p "@package.json @src/index.js Analyze the dependencies used in the code"
-
-
-  Entire directory:
-  gemini -p "@src/ Summarize the architecture of this codebase"
-
-
-  Multiple directories:
-  gemini -p "@src/ @tests/ Analyze test coverage for the source code"
-
-
-  Current directory and subdirectories:
-  gemini -p "@./ Give me an overview of this entire project"
-  # Or use --all_files flag:
-  gemini --all_files -p "Analyze the project structure and dependencies"
-
-
-  Implementation Verification Examples
-
-
-  Check if a feature is implemented:
-  gemini -p "@src/ @lib/ Has dark mode been implemented in this codebase? Show me the relevant files and functions"
-
-
-  Verify authentication implementation:
-  gemini -p "@src/ @middleware/ Is JWT authentication implemented? List all auth-related endpoints and middleware"
-
-
-  Check for specific patterns:
-  gemini -p "@src/ Are there any React hooks that handle WebSocket connections? List them with file paths"
-
-
-  Verify error handling:
-  gemini -p "@src/ @api/ Is proper error handling implemented for all API endpoints? Show examples of try-catch blocks"
-
-
-  Check for rate limiting:
-  gemini -p "@backend/ @middleware/ Is rate limiting implemented for the API? Show the implementation details"
-
-
-  Verify caching strategy:
-  gemini -p "@src/ @lib/ @services/ Is Redis caching implemented? List all cache-related functions and their usage"
-
-
-  Check for specific security measures:
-  gemini -p "@src/ @api/ Are SQL injection protections implemented? Show how user inputs are sanitized"
-
-
-  Verify test coverage for features:
-  gemini -p "@src/payment/ @tests/ Is the payment processing module fully tested? List all test cases"
-
-
-  When to Use Gemini CLI
-
-
-  Use gemini -p when:
-  - Analyzing entire codebases or large directories
-  - Comparing multiple large files
-  - Need to understand project-wide patterns or architecture
-  - Current context window is insufficient for the task
-  - Working with files totaling more than 100KB
-  - Verifying if specific features, patterns, or security measures are implemented
-  - Checking for the presence of certain coding patterns across the entire codebase
-
-
-  Important Notes
-
-
-  - Paths in @ syntax are relative to your current working directory when invoking gemini
-  - The CLI will include file contents directly in the context
-  - No need for --yolo flag for read-only analysis
-  - Gemini's context window can handle entire codebases that would overflow Claude's context
-  - When checking implementations, be specific about what you're looking for to get accurate results
-
-  If you have made any changes to the rio frontend, then smoke test using `rio run --port 8XXX` from the first app directory that contains rio.toml - with a 5s timeout, and then fix errors until it runs fine.
+- Currency utilities in `app/currency.py`
+- Utility scripts in `app/scripts/` (migrations, message utils, test helpers)

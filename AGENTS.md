@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-The Rio app lives in `app/app`. `pages/` registers routeable components via `@rio.page`; `components/` contains reusable UI widgets; `scripts/` stores helpers such as HTML loaders and OTP utilities; `data/` and `assets/` house seed content and static files. Authentication and persistence glue sits in `permissions.py` and `persistence.py`. Prototype HTML/JS lives in `app/JSPages`. Reference material and deployment playbooks are in `RioDocumentation/` and `DEPLOYMENT_INSTRUCTIONS.md`. Manage dependencies through `requirements.txt`; keep the committed `venv/` aligned with that file.
+The Rio app lives in `app/app`. `pages/` registers routeable components via `@rio.page`; `components/` contains reusable UI widgets; `scripts/` stores helpers such as HTML loaders, OTP utilities, and migrations; `data/` and `assets/` house seed content and static files. Authentication and persistence glue sits in `permissions.py` and `persistence.py`. Currency/credits system uses `currency.py` with API endpoints in `api/currency.py`. Prototype HTML/JS lives in `app/JSPages`. Reference material and deployment playbooks are in `RioDocumentation/` and `DEPLOYMENT_INSTRUCTIONS.md`. Manage dependencies through `requirements.txt`.
 
 ## Build, Test, and Development Commands
 Create a clean environment with `python -m venv venv && source venv/bin/activate` (or `venv\\Scripts\\activate` on Windows) and install deps via `pip install -r requirements.txt`. From the outer `app/` directory (the first one containing `rio.toml`), run `rio run` for the auto-reloading dev server. Use `rio run --port 8000 --release` from that same directory to mirror production, especially before deployment. Utility scripts like `server_sync.py` and `split_documentation.py` help sync assets and docs when packaging.
@@ -19,3 +19,5 @@ Follow the existing concise imperative style (`remove redundant reset password p
 
 ## Security & Configuration Tips
 Load secrets from an untracked `.env` (supported via `python-dotenv`) and never commit credentials. Re-check guards whenever updating `permissions.py`, and audit persistence changes for SQL injection and session leakage. After upgrading packages, regenerate `requirements.txt` (`pip freeze > requirements.txt`) so deployment stays reproducible.
+
+**Currency System**: Virtual currency (credits/tokens) is managed through `currency.py` and `api/currency.py`. Configuration in `config.py` controls naming, decimals, initial balance, and negative balance policy. Admin-only endpoints allow balance adjustments with full audit logging in the currency ledger.

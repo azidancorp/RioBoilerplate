@@ -1,5 +1,87 @@
-Always refer closely to the documentation in the tagged pages for rio components, paying specific attention to the arguments in the constructor.
-Example: "git commit -am "message"; git push" should be output format of instructions to make a commit and push command in the terminal
-All plotly charts should have `update_layout(template='plotly_dark')` applied.
-Only change exactly what is required for the request, nothing more, nothing less.
-Do not use "children" as an argument in any rio component, place components directly.
+# Rio Boilerplate - Windsurf Agent Guidelines
+
+## Project Structure
+- Main app: `app/app/` - Pages in `pages/`, components in `components/`, scripts in `scripts/`
+- Authentication: `persistence.py` (DB ops), `data_models.py` (AppUser, UserSession), `permissions.py` (roles)
+- Database: Single SQLite `app/data/app.db` with users, sessions, profiles, password_reset_codes
+- Assets: `assets/` for static files, `data/` for CSV/DB files
+- Docs: `RioDocumentation/` - **Always cross-check Rio component constructors against these docs**
+
+## Development Commands
+```bash
+# Setup (from repo root)
+python3 -m venv venv && source venv/bin/activate  # or venv\Scripts\activate on Windows
+pip install -r requirements.txt
+
+# Run dev server (from outer app/ directory with rio.toml)
+cd app && rio run
+
+# Production-like testing
+rio run --port 8000 --release
+```
+
+## Rio Component Rules
+1. **Always refer to `RioDocumentation/` for component constructors** - verify arguments exactly
+2. **Never use "children" argument** - place child components directly in the component body
+3. **After ANY component modification**: Smoke test from outer `app/` with `rio run --port 8XXX` (5s timeout)
+4. **Plotly charts**: Always apply `update_layout(template='plotly_dark')`
+
+## Coding Style
+- **Indentation**: 4 spaces, type hints required
+- **Naming**: snake_case (modules, functions, dirs), PascalCase (Rio components), lowercase-with-hyphens (assets)
+- **Patterns**: Use dataclasses, explicit helper methods, avoid inline state mutation in builders
+- **Change principle**: Only modify exactly what's required, nothing more
+
+## Security & Validation
+- **Input validation**: Use `SecuritySanitizer` from `app/validation.py` for all user inputs
+- **Secrets**: Load from `.env` (never commit), check `.env.example` for required vars
+- **Guards**: Re-check `permissions.py` when updating auth logic, audit SQL injection risks
+- **Config**: `app/config.py` controls email validation, username login via env vars
+
+## Role Management (Centralized)
+- **Single source**: `app/permissions.py` ROLE_HIERARCHY dict defines all roles
+- **Default hierarchy**: root (1) > admin (2) > user (3) - lower number = higher privilege
+- **Helper functions**: Use `get_all_roles()`, `get_default_role()`, `can_manage_role()` - never hardcode role names
+- **Page access**: Update `PAGE_ROLE_MAPPING` in `permissions.py` when adding protected pages
+- **Wildcard**: Use `"*"` in PAGE_ROLE_MAPPING to allow all current/future roles
+
+## Authentication Flow
+1. Session tokens stored in `UserSettings` (client-side)
+2. `on_session_start()` in `app/__init__.py` validates tokens, auto-login
+3. `Persistence` class handles all DB ops, implements context manager pattern
+4. MFA: TOTP via `pyotp`, secrets in database, QR codes via `scripts/test_qr.py`
+
+## Testing Requirements
+- **Smoke test**: After component changes, run `rio run --port 8XXX` from outer `app/` (5s timeout), fix until clean
+- **Interactive flows**: Test login, MFA, persistence manually with `rio run --release`
+- **Automated**: Add tests to `app/tests/` using pytest, run with `pytest`
+- **Edge cases**: Test failed auth, expired tokens, role transitions
+
+## Database Patterns
+- **Context manager**: Always use `with Persistence() as p:` for DB ops
+- **Parameterized queries**: Never string interpolation - prevents SQL injection
+- **Profile management**: One-to-one user-profile mapping, auto-created on registration
+- **Validation**: Roles validated against ROLE_HIERARCHY, email format enforced if `REQUIRE_VALID_EMAIL=True`
+
+## API Development
+- **Location**: `app/api/` with FastAPI routers
+- **Validation**: Use Pydantic models from `app/validation.py` with auto-sanitization
+- **Security**: Input validation, SQL injection protection, XSS prevention, proper HTTP status codes
+- **Profile endpoints**: GET/POST/PUT/DELETE at `/api/profile`
+- **Currency endpoints**: GET/POST at `/api/currency/*` for balance and ledger operations
+
+## Git Workflow
+```bash
+# Concise imperative commits (example: "remove redundant reset password page")
+git commit -am "message"; git push
+```
+- Bundle one logical change per commit
+- PRs must explain impact, list tests run, link issues, include UI screenshots
+
+## Common Pitfalls to Avoid
+- Using `children` argument in Rio components
+- Hardcoding role names instead of using permission helpers
+- Skipping smoke tests after component changes
+- String interpolation in SQL queries
+- Committing secrets or credentials
+- Modifying more than necessary for the request

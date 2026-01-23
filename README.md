@@ -9,8 +9,38 @@ Production-ready Rio web application template featuring session-based authentica
 - Built-in primary currency system with configurable naming, precision, admin tooling, and ledger history.
 - Developer ergonomics: Example scripts, bundled Rio documentation, and deployment playbooks for quick onboarding.
 
+## Using as a Template
+
+There are two ways to use this boilerplate:
+
+### Option A: Clone (simple, no upstream updates)
+```bash
+git clone git@github.com:azidancorp/RioBoilerplate.git my-project
+cd my-project
+rm -rf .git && git init  # Start fresh git history
+```
+
+### Option B: Add as Remote (recommended - enables upstream updates)
+
+If you already have a git project and want to pull in this boilerplate while keeping the ability to get future updates:
+
+```bash
+# From your existing project directory
+git remote add boilerplate git@github.com:azidancorp/RioBoilerplate.git
+git fetch boilerplate
+git merge boilerplate/main --allow-unrelated-histories -m "Merge RioBoilerplate template"
+```
+
+This merges the boilerplate into your project. Later, to pull updates:
+```bash
+git fetch boilerplate
+git merge boilerplate/main
+```
+
+For detailed merge instructions and conflict resolution, see `UPSTREAM_MERGE_GUIDE.md`.
+
 ## Quick Start
-1. Clone the repository and enter the project directory.
+1. Set up the boilerplate using Option A or B above.
 2. Create and activate a virtual environment: `python -m venv venv` then `source venv/bin/activate` (or `venv\Scripts\activate` on Windows).
 3. Install dependencies: `pip install -r requirements.txt`.
 4. Copy `.env.example` to `.env` and set secrets such as `ADMIN_DELETION_PASSWORD`. Configure optional currency overrides (e.g. `RIO_PRIMARY_CURRENCY_NAME=credits`, `RIO_PRIMARY_CURRENCY_DECIMAL_PLACES=2`).

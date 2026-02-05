@@ -220,6 +220,7 @@ class SignUpForm(rio.Component):
     passwords_valid: bool = False
     password_strength: int = 0
     do_passwords_match: bool = False
+    acknowledge_weak_password: bool = False
 
     # We'll expose an event so that the parent page can toggle forms
     on_toggle_form: t.Callable[[str], None] | None = None
@@ -264,6 +265,13 @@ class SignUpForm(rio.Component):
             self.error_message = "Passwords do not match"
             self.passwords_valid = False
             self.is_email_valid = True
+            return
+
+        # Check password strength — allow weak passwords only if acknowledged
+        strength = get_password_strength(self.password)
+        if strength < config.MIN_PASSWORD_STRENGTH and not self.acknowledge_weak_password:
+            self.banner_style = "danger"
+            self.error_message = "Your password is weak. Please acknowledge this below or choose a stronger password."
             return
 
         # Check if the email is already registered
@@ -338,6 +346,7 @@ class SignUpForm(rio.Component):
         self.password = event.text
         self.password_strength = get_password_strength(self.password)
         self.do_passwords_match = self.password == self.confirm_password
+        self.acknowledge_weak_password = False
         self.force_refresh()
 
     async def update_confirm_password(self, event: rio.TextInputChangeEvent):
@@ -413,6 +422,25 @@ class SignUpForm(rio.Component):
                     style=rio.TextStyle(fill=get_password_strength_color(self.password_strength))
                 ),
                 self.password_strength_progress(),
+                *(
+                    [
+                        rio.Row(
+                            rio.Switch(
+                                is_on=self.bind().acknowledge_weak_password,
+                            ),
+                            rio.Text(
+                                "I acknowledge my password is weak",
+                                style=rio.TextStyle(
+                                    fill=rio.Color.from_rgb(1, 0.6, 0),
+                                ),
+                            ),
+                            spacing=1,
+                            align_x=0,
+                        ),
+                    ]
+                    if self.password and self.password_strength < config.MIN_PASSWORD_STRENGTH
+                    else []
+                ),
                 rio.Row(
                     rio.Button(
                         "Sign up",
@@ -449,6 +477,7 @@ class ResetPasswordForm(rio.Component):
     _is_processing: bool = False
     password_strength: int = 0
     do_passwords_match: bool = False
+    acknowledge_weak_password: bool = False
 
     # We'll expose an event so that the parent page can toggle forms
     on_toggle_form: t.Callable[[str], None] | None = None
@@ -589,11 +618,10 @@ class ResetPasswordForm(rio.Component):
             return
 
         strength = get_password_strength(self.new_password)
-        # TODO: Shift this strength gate into the persistence layer once strict policy resumes.
-        if strength < config.MIN_PASSWORD_STRENGTH:
+        if strength < config.MIN_PASSWORD_STRENGTH and not self.acknowledge_weak_password:
             self._set_banner(
                 "danger",
-                "Password is too weak. Please choose a stronger password.",
+                "Your password is weak. Please acknowledge this below or choose a stronger password.",
             )
             return
 
@@ -666,6 +694,7 @@ class ResetPasswordForm(rio.Component):
         self.new_password = event.text
         self.password_strength = get_password_strength(self.new_password)
         self.do_passwords_match = self.new_password == self.confirm_password
+        self.acknowledge_weak_password = False
         self.force_refresh()
 
     async def update_confirm_password(self, event: rio.TextInputChangeEvent):
@@ -736,6 +765,22 @@ class ResetPasswordForm(rio.Component):
                     self.password_strength_progress(),
                 ]
             )
+            if self.new_password and self.password_strength < config.MIN_PASSWORD_STRENGTH:
+                additional_inputs.append(
+                    rio.Row(
+                        rio.Switch(
+                            is_on=self.bind().acknowledge_weak_password,
+                        ),
+                        rio.Text(
+                            "I acknowledge my password is weak",
+                            style=rio.TextStyle(
+                                fill=rio.Color.from_rgb(1, 0.6, 0),
+                            ),
+                        ),
+                        spacing=1,
+                        align_x=0,
+                    )
+                )
 
         buttons: list[rio.Component] = [
             rio.Button(

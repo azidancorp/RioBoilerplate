@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import KW_ONLY, field
 from datetime import datetime, timezone
 
 import rio
@@ -9,9 +8,10 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from app.components.testimonial import Testimonial
+from app.components.center_component import CenterComponent
 from app.components.dashboard_components import DeltaCard
 from app.components.currency_summary import CurrencySummary, CurrencyOverview as CurrencySnapshot
+from app.components.responsive import ResponsiveComponent, WIDTH_FULL
 from app.persistence import Persistence
 from app.data_models import UserSession
 
@@ -52,7 +52,8 @@ class Overview(rio.Component):
 
             rio.Text("Executive Dashboard", style="heading3"),
 
-            rio.Row(
+            # Use FlowContainer for DeltaCards - auto-wraps on mobile
+            rio.FlowContainer(
 
                 DeltaCard(
                     title="Strategic Plan Execution Velocity",
@@ -102,15 +103,18 @@ class Overview(rio.Component):
                     color=rio.Color.from_hex('#1ABC9C')
                 ),
 
-                spacing=2,
+                row_spacing=2,
+                column_spacing=2,
+                justify="grow",
 
             ),
             spacing=3
         )
 
-class SalesDashboard(rio.Component):
+class SalesDashboard(ResponsiveComponent):
 
     def build(self):
+        mobile = self.is_mobile
 
         # Load the pre-generated data
         sales_data = pd.read_csv('app/data/sales_data.csv', parse_dates=['Week'])
@@ -169,12 +173,12 @@ class SalesDashboard(rio.Component):
 
         # Base sales value from the last week of current data
         base_sales = sales_data['Total Sales'].iloc[-1]
-        
+
         # Create a linear forecast for future sales (e.g., 5% annual growth)
         days = len(future_dates)
         growth_rate = 0.05  # 5% growth over 10 years
         future_sales = base_sales * (1 + growth_rate) ** (np.arange(days) / 365)
-        
+
         # Calculate upper and lower bounds for the forecast (±10%)
         future_sales_lower = future_sales * 0.9
         future_sales_upper = future_sales * 1.1
@@ -221,23 +225,32 @@ class SalesDashboard(rio.Component):
             template='plotly_dark'
         )
 
-        # Optionally, create additional charts such as Revenue vs. Expenses
-        # For brevity, we'll stick to two primary charts here
+        # Stack charts vertically on mobile, side-by-side on desktop
+        if mobile:
+            charts_layout = rio.Column(
+                rio.Plot(sales_chart, min_height=self.chart_height),
+                rio.Plot(forecast_chart, min_height=self.chart_height),
+                spacing=2,
+            )
+        else:
+            charts_layout = rio.Row(
+                rio.Plot(sales_chart, min_height=self.chart_height),
+                rio.Plot(forecast_chart, min_height=self.chart_height),
+                spacing=2,
+            )
 
         # Assemble the dashboard layout
         return rio.Column(
             rio.Text("Sales Dashboard", style="heading3"),
-            rio.Row(
-                rio.Plot(sales_chart, min_height=30),
-                rio.Plot(forecast_chart, min_height=30),
-                spacing=2,
-            ),
+            charts_layout,
             spacing=2
         )
 
 
-class ProductionReport(rio.Component):
+class ProductionReport(ResponsiveComponent):
+
     def build(self):
+        mobile = self.is_mobile
 
         # Create a DataFrame for crop harvest sources and amounts
         harvest_sources = {
@@ -363,10 +376,25 @@ HARVEST PERFORMANCE REPORT - 2023
 - Diversification needed to reduce reliance on one primary crop
         """
 
+        # Stack charts vertically on mobile, side-by-side on desktop
+        if mobile:
+            charts_layout = rio.Column(
+                rio.Plot(production_chart, min_height=self.chart_height),
+                rio.Plot(harvest_chart, min_height=self.chart_height),
+                spacing=2,
+            )
+        else:
+            charts_layout = rio.Row(
+                rio.Plot(production_chart, min_height=self.chart_height),
+                rio.Plot(harvest_chart, min_height=self.chart_height),
+                proportions=[2, 1],
+                spacing=2
+            )
+
         return rio.Column(
             rio.Text("Production Report", style="heading3"),
-            # First Row with DeltaCards
-            rio.Row(
+            # Use FlowContainer for DeltaCards - auto-wraps on mobile
+            rio.FlowContainer(
                 DeltaCard(
                     title="Total Harvest",
                     value="8,000 kg",
@@ -402,15 +430,12 @@ HARVEST PERFORMANCE REPORT - 2023
                     delta_a=1_500,
                     delta_b=400,
                 ),
-                spacing=2,
+                row_spacing=2,
+                column_spacing=2,
+                justify="grow",
             ),
-            # Second Row with Plots
-            rio.Row(
-                rio.Plot(production_chart, min_height=30),
-                rio.Plot(harvest_chart, min_height=30),
-                proportions=[2, 1],
-                spacing=2
-            ),
+            # Charts layout
+            charts_layout,
             rio.Row(
                 rio.Revealer(
                     header="Production Report - Click to reveal",
@@ -424,14 +449,14 @@ HARVEST PERFORMANCE REPORT - 2023
 
 
 
-class Board(rio.Component):
+class Board(ResponsiveComponent):
     """
     Executive Board Dashboard with various reports and metrics.
     """
     def build(self) -> rio.Component:
         return rio.Column(
             # Header Section
-            rio.Text("Mission Intelligence", style="heading2"),
+            rio.Text("Mission Intelligence", style="heading2", overflow="wrap"),
 
             # Integrated Sections
             Overview(),
@@ -439,7 +464,7 @@ class Board(rio.Component):
             ProductionReport(),
             # General Styling
             spacing=4,
-            margin=2,
+            margin=self.page_margin,
             grow_x=True,
             align_y=0,
         )
@@ -458,14 +483,13 @@ class Dashboard(rio.Component):
     """
     def build(self) -> rio.Component:
 
-        return rio.Column(
-
-            # Main Board Dashboard
-            Board(),
-
-            # General Styling
-            spacing=4,
-            margin=2,
-            grow_x=True,
-            align_y=0,
+        return CenterComponent(
+            rio.Column(
+                Board(),
+                spacing=2,
+                margin=0,
+                grow_x=True,
+                align_y=0,
+            ),
+            width_percent=WIDTH_FULL,
         )

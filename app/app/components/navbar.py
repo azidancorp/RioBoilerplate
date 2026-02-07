@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import typing as t
-from dataclasses import KW_ONLY, field
 from datetime import datetime, timezone
 
 import rio
-import app.theme as theme
 from app.persistence import Persistence
 from app.data_models import AppUser, UserSession
+from app.components.responsive import ResponsiveComponent
+from app.navigation import get_public_desktop_links, get_public_login_link
 
 
 class NavBarLink(rio.Component):
@@ -24,10 +24,13 @@ class NavBarLink(rio.Component):
         )
 
 
-class Navbar(rio.Component):
+class Navbar(ResponsiveComponent):
     """
     A navbar with a fixed position and responsive width.
     """
+
+    show_hamburger: bool = False
+    on_hamburger_press: t.Callable[[], None] | None = None
 
     # Make sure the navbar will be rebuilt when the app navigates to a different
     # page. While Rio automatically detects state changes and rebuilds
@@ -64,29 +67,6 @@ class Navbar(rio.Component):
         self.session.navigate_to("/")
 
     def build(self) -> rio.Component:
-        # NOTE: Using active_page_instances[1] assumes a two-level route (e.g., '/app/<subpage>').
-        # This is brittle for top-level pages (no index 1) and deeper nesting.
-        # If you extend routing, consider instead:
-        #   - self.session.active_page_instances[-1].url_segment  # deepest active page
-        #   - Or build the current path:
-        #       "/" + "/".join(p.url_segment for p in self.session.active_page_instances if p.url_segment)
-        #     and use equality or startswith checks for parent highlighting.
-        # Note: The computed value below isn't currently used to style navbar links.
-        try:
-            # Which page is currently active? This will be used to highlight the
-            # correct navigation button.
-            #
-            # `active_page_instances` contains `rio.ComponentPage` instances
-            # that are created during app creation. Since multiple pages
-            # can be active at a time (e.g., /foo/bar/baz), this is a list rather
-            # than just a single page.
-            active_page = self.session.active_page_instances[1]
-            active_page_url_segment = active_page.url_segment
-        except IndexError:
-            # Handle the case where there are no active sub-pages, e.g., when the
-            # user is not logged in.
-            active_page_url_segment = None
-
         # Check if the user is logged in and display the appropriate buttons
         # based on the user's status
         try:
@@ -96,10 +76,21 @@ class Navbar(rio.Component):
             current_user = None
             user_is_logged_in = False
 
+        mobile = self.is_mobile
+
         # Create the content of the navbar. First, create a row with a certain
         # spacing and margin. Use the `.add()` method to add components
         # conditionally to the row.
-        navbar_content = rio.Row(spacing=1, margin=1)
+        navbar_content = rio.Row(spacing=self.flow_spacing, margin=self.flow_spacing)
+
+        # Add hamburger menu button for mobile if enabled
+        if self.show_hamburger and self.on_hamburger_press is not None:
+            navbar_content.add(
+                rio.IconButton(
+                    icon="material/menu",
+                    on_press=self.on_hamburger_press,
+                )
+            )
 
         # Links can be used to navigate to other pages and
         # external URLs. You can pass either a simple string or
@@ -108,9 +99,7 @@ class Navbar(rio.Component):
             rio.Link(
                 rio.Text(
                     "HOME",
-                    style=rio.TextStyle(
-                        font_size=2.5,
-                    ),
+                    style="heading1",
                 ),
                 "/",
             )
@@ -120,39 +109,36 @@ class Navbar(rio.Component):
         # effectively pushing the subsequent buttons to the
         # right.
         navbar_content.add(rio.Spacer())
-        
-        # items that are always present
-        navbar_content.add(
-            NavBarLink('About', '/about')
-        )
-        navbar_content.add(
-            NavBarLink('FAQ', '/faq')
-        )
-        navbar_content.add(
-            NavBarLink('Pricing', '/pricing')
-        )
-        navbar_content.add(
-            NavBarLink('Contact', '/contact')
-        )
+
+        # On mobile, hide most nav links (they'll be in the drawer)
+        # Only show essential actions here.
+        if not mobile:
+            # items that are always present on desktop
+            for title, url in get_public_desktop_links():
+                navbar_content.add(
+                    NavBarLink(title, url)
+                )
 
         # Based on the user's status, display the appropriate buttons
         if user_is_logged_in and current_user is not None:
-            navbar_content.add(
-                rio.Card(
-                    rio.Text(
-                        current_user.primary_currency_formatted_with_label,
-                        style=rio.TextStyle(font_size=1.2),
-                    ),
-                    margin=0.5,
-                    color="hud",
+            # Only show currency on desktop (it's in sidebar on mobile)
+            if not mobile:
+                navbar_content.add(
+                    rio.Card(
+                        rio.Text(
+                            current_user.primary_currency_formatted_with_label,
+                            style="text",
+                        ),
+                        margin=0.5,
+                        color="hud",
+                    )
                 )
-            )
 
-            navbar_content.add(
-                NavBarLink('Settings', '/app/settings')
-            )
+                navbar_content.add(
+                    NavBarLink('Settings', '/app/settings')
+                )
 
-            # Logout
+            # Logout - always visible
             navbar_content.add(
                 rio.Button(
                     "Logout",
@@ -163,11 +149,12 @@ class Navbar(rio.Component):
 
         else:
             # Display the login button if the user is not logged in
+            login_title, login_url = get_public_login_link()
             navbar_content.add(
-                NavBarLink('Login/Signup', '/login')
+                NavBarLink(login_title, login_url)
             )
 
         # The navbar should appear above all other components. This is easily
         # done by using a `rio.Overlay` component.
-        
+
         return navbar_content

@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import KW_ONLY, field
-import typing as t
-
 import rio
 
 class Testimonial(rio.Component):
@@ -52,4 +49,3 @@ class Testimonial(rio.Component):
             color="primary",
             min_width=20,
         )
-

@@ -4,6 +4,7 @@ from datetime import timezone
 import rio
 
 from app.components.center_component import CenterComponent
+from app.components.responsive import WIDTH_COMFORTABLE
 from app.data_models import UserSession
 from app.persistence import Persistence, TwoFactorFailure
 
@@ -133,7 +134,7 @@ class ManageRecoveryCodes(rio.Component):
                     ),
                     align_y=0,
                 ),
-                width_percent=50,
+                width_percent=WIDTH_COMFORTABLE,
             )
 
         return CenterComponent(
@@ -144,12 +145,12 @@ class ManageRecoveryCodes(rio.Component):
                         text=self.error_message,
                         style="danger",
                         margin_top=1,
-                    ) if self.error_message else rio.Spacer(min_height=0),
+                    ) if self.error_message else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
                     rio.Banner(
                         text=self.success_message,
                         style="success",
                         margin_top=1,
-                    ) if self.success_message else rio.Spacer(min_height=0),
+                    ) if self.success_message else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
                     rio.Text(self._summary_text()),
                     rio.Text(f"Last generated: {self.last_generated_label}"),
                     rio.Text(
@@ -182,5 +183,5 @@ class ManageRecoveryCodes(rio.Component):
                 ),
                 align_y=0,
             ),
-            width_percent=50,
+            width_percent=WIDTH_COMFORTABLE,
         )

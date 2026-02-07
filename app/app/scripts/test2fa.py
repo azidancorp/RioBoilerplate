@@ -1,5 +1,4 @@
 import pyotp
-import time
 
 def generate_totp(secret: str) -> str:
     """Generate a TOTP code for the given secret."""

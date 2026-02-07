@@ -19,7 +19,7 @@ from app.data_models import (
 )
 from app.validation import SecuritySanitizer
 from app.config import config
-from app.permissions import get_default_role, get_first_user_role, validate_role, get_all_roles
+from app.permissions import get_first_user_role, validate_role, get_all_roles
 from app.currency import (
     get_currency_config,
     format_minor_amount,

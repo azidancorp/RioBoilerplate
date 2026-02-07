@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import typing as t
-from dataclasses import KW_ONLY, field
-
 import rio
 from app.components.center_component import CenterComponent
+from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
 from app.currency import get_currency_config
 
-
-
-
-class PricingPlans(rio.Component):
+class PricingPlans(ResponsiveComponent):
     """
     Pricing page showcasing a whimsical array of plans for potential customers,
     now offering both Monthly and Yearly payment cycles (with a discount).
@@ -46,6 +41,82 @@ class PricingPlans(rio.Component):
             else f"499 {currency_plural} / month"
         )
 
+        # Build pricing cards
+        sidekick_card = rio.Card(
+            rio.Column(
+                rio.Text(
+                    "Sidekick Plan",
+                    style="heading2",
+                    margin_bottom=1,
+                ),
+                rio.Text(
+                    "Ideal for small business heroes in training. "
+                    "Includes a single synergy token, a pinch of paradigm-shift, "
+                    "and unlimited pep talks via carrier pigeon.",
+                    margin_bottom=1,
+                    overflow="wrap",
+                ),
+                rio.Text(sidekick_price, margin_bottom=2),
+                rio.Button(
+                    "Conquer the Market",
+                    shape="rounded",
+                ),
+                spacing=1,
+                margin=2,
+            ),
+            margin=1,
+        )
+
+        hero_card = rio.Card(
+            rio.Column(
+                rio.Text(
+                    "Hero Plan",
+                    style="heading2",
+                    margin_bottom=1,
+                ),
+                rio.Text(
+                    "For the business champion who wants to step up. "
+                    "Boasts advanced synergy tokens, mid-range disruption, "
+                    "and 24/7 'just-in-time' hyper-support.",
+                    margin_bottom=1,
+                    overflow="wrap",
+                ),
+                rio.Text(hero_price, margin_bottom=2),
+                rio.Button(
+                    "Battle with Innovation",
+                    shape="rounded",
+                ),
+                spacing=1,
+                margin=2,
+            ),
+            margin=1,
+        )
+
+        supernova_card = rio.Card(
+            rio.Column(
+                rio.Text(
+                    "Supernova Plan",
+                    style="heading2",
+                    margin_bottom=1,
+                ),
+                rio.Text(
+                    "Unleash the pinnacle of synergy with enterprise-grade "
+                    "buzzword potential, multi-dimensional disruption, "
+                    "and an infinite supply of ninja-level solutions.",
+                    margin_bottom=1,
+                    overflow="wrap",
+                ),
+                rio.Text(supernova_price, margin_bottom=2),
+                rio.Button(
+                    "Launch into Orbit",
+                    shape="rounded",
+                ),
+                spacing=1,
+                margin=2,
+            ),
+            margin=1,
+        )
+
         return CenterComponent(
             rio.Column(
                 # Heading
@@ -69,91 +140,14 @@ class PricingPlans(rio.Component):
                     align_x=0.5,
                 ),
 
-                # Row of Cards for each plan
-                rio.Row(
-                    # Tier 1 - Sidekick
-                    rio.Card(
-                        rio.Column(
-                            rio.Text(
-                                "Sidekick Plan",
-                                style="heading2",
-                                margin_bottom=1,
-                            ),
-                            rio.Text(
-                                "Ideal for small business heroes in training. "
-                                "Includes a single synergy token, a pinch of paradigm-shift, "
-                                "and unlimited pep talks via carrier pigeon.",
-                                margin_bottom=1,
-                                overflow="wrap",
-                            ),
-                            rio.Text(sidekick_price, margin_bottom=2),
-                            rio.Button(
-                                "Conquer the Market",
-                                shape="rounded",
-                            ),
-                            spacing=1,
-                            margin=2,
-                        ),
-                        margin=1,
-                        min_width=22,
-                    ),
-
-                    # Tier 2 - Hero
-                    rio.Card(
-                        rio.Column(
-                            rio.Text(
-                                "Hero Plan",
-                                style="heading2",
-                                margin_bottom=1,
-                            ),
-                            rio.Text(
-                                "For the business champion who wants to step up. "
-                                "Boasts advanced synergy tokens, mid-range disruption, "
-                                "and 24/7 'just-in-time' hyper-support.",
-                                margin_bottom=1,
-                                overflow="wrap",
-                            ),
-                            rio.Text(hero_price, margin_bottom=2),
-                            rio.Button(
-                                "Battle with Innovation",
-                                shape="rounded",
-                            ),
-                            spacing=1,
-                            margin=2,
-                        ),
-                        margin=1,
-                        min_width=22,
-                    ),
-
-                    # Tier 3 - Supernova
-                    rio.Card(
-                        rio.Column(
-                            rio.Text(
-                                "Supernova Plan",
-                                style="heading2",
-                                margin_bottom=1,
-                            ),
-                            rio.Text(
-                                "Unleash the pinnacle of synergy with enterprise-grade "
-                                "buzzword potential, multi-dimensional disruption, "
-                                "and an infinite supply of ninja-level solutions.",
-                                margin_bottom=1,
-                                overflow="wrap",
-                            ),
-                            rio.Text(supernova_price, margin_bottom=2),
-                            rio.Button(
-                                "Launch into Orbit",
-                                shape="rounded",
-                            ),
-                            spacing=1,
-                            margin=2,
-                        ),
-                        margin=1,
-                        min_width=22,
-                    ),
-
-                    spacing=2,
-                    align_x=0.5,
+                # Use FlowContainer for pricing cards - auto-wraps on mobile
+                rio.FlowContainer(
+                    sidekick_card,
+                    hero_card,
+                    supernova_card,
+                    row_spacing=2,
+                    column_spacing=2,
+                    justify="center",
                 ),
             ),
             width_percent=100,
@@ -177,6 +171,6 @@ class PricingPage(rio.Component):
         """
         return CenterComponent(
             PricingPlans(),
-            width_percent=80,
+            width_percent=WIDTH_COMFORTABLE,
             margin_top=5,
         )

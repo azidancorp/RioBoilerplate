@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime
 
 def generate_sales_data():
     # Generate weekly dates for the year 2023

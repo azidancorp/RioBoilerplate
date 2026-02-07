@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import KW_ONLY, field
 from typing import Optional
 
 import rio
+
 
 
 
@@ -33,7 +33,7 @@ class DeltaCard(rio.Component):
 
         content = [
             rio.Text(self.title, overflow='wrap'),
-            rio.Text(self.value, style=rio.TextStyle(font_size=2))
+            rio.Text(self.value, style="heading2")
         ]
 
         if self.delta_a is not None or self.delta_b is not None:

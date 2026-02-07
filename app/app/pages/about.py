@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import KW_ONLY, field
-import typing as t
-
 import rio
+from app.components.center_component import CenterComponent
+from app.components.responsive import WIDTH_COMFORTABLE
 
 
 @rio.page(
@@ -16,8 +15,10 @@ class AboutPage(rio.Component):
     """
 
     def build(self) -> rio.Component:
-        return rio.Markdown(
-            """
+        return CenterComponent(
+            rio.Column(
+                rio.Markdown(
+                    """
 # About Us
 
 Welcome to Buzzwordz Inc! Unleashing Synergistic Paradigms for Unprecedented Excellence since the day after yesterday.
@@ -32,7 +33,7 @@ your wildest business dreams. We live, breathe, and eat operational excellence
 and groundbreaking innovation.
 
 ## Synergistic Consulting
-    
+
 Unlock your business's quantum potential with our bespoke, game-changing
 strategies. Our consulting services synergize cross-functional paradigms to
 create a holistic ecosystem of perpetual growth and exponential ROI. Did I
@@ -54,10 +55,12 @@ Phone: (123) 456-7890
 Email: info@yourwebsite.com
 
 Address: 123 Fake Street, Moon
-            """,
-            min_width=60,
-            margin_bottom=4,
-            align_x=0.5,
-            align_y=0,
-            wrap=True,
+                    """,
+                    margin_bottom=4,
+                    align_y=0,
+                    wrap=True,
+                ),
+                grow_x=True,
+            ),
+            width_percent=WIDTH_COMFORTABLE,
         )

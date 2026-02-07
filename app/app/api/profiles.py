@@ -18,7 +18,7 @@ Extension Points:
 """
 
 from fastapi import APIRouter, HTTPException, Depends, status
-from typing import Dict, List, Optional
+from typing import Dict, List
 import sqlite3
 from app.persistence import Persistence
 from app.validation import (

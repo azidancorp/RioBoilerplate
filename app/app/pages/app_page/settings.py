@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import typing as t
-from dataclasses import KW_ONLY, field
-from datetime import datetime, timezone
+from datetime import timezone
 
 import rio
 from app.persistence import Persistence, TwoFactorFailure
 from app.data_models import AppUser, UserSession, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
 from app.components.currency_summary import CurrencySummary, CurrencyOverview as CurrencySnapshot
+from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
 from app.scripts.utils import (
     get_password_strength,
     get_password_strength_color,
@@ -21,7 +20,7 @@ from app.validation import SecuritySanitizer
     name="Settings",
     url_segment="settings",
 )
-class Settings(rio.Component):
+class Settings(ResponsiveComponent):
     """
     Settings page containing various user configuration options.
     """
@@ -327,20 +326,24 @@ class Settings(rio.Component):
         self.session.navigate_to("/")
 
     def build(self) -> rio.Component:
-
         return CenterComponent(
             rio.Column(
                 rio.Text(
                     "Settings",
                     style="heading1",
                     margin_bottom=2,
+                    overflow="wrap",
                 ),
 
                 self.currency_overview and CurrencySummary(
                     overview=self.currency_overview,
                     title="Your Balance",
                 ) or rio.Card(
-                    rio.Text("Balance information unavailable", style="dim"),
+                    rio.Text(
+                        "Balance information unavailable",
+                        style="dim",
+                        overflow="wrap"
+                    ),
                     color="hud",
                 ),
 
@@ -350,6 +353,7 @@ class Settings(rio.Component):
                     style="heading2",
                     margin_top=2,
                     margin_bottom=1,
+                    overflow="wrap",
                 ),
 
                 rio.Column(
@@ -357,7 +361,7 @@ class Settings(rio.Component):
                         text=self.profile_success_message,
                         style="success",
                         margin_bottom=1,
-                    ) if self.profile_success_message else rio.Spacer(min_height=0),
+                    ) if self.profile_success_message else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
                     rio.TextInput(
                         label="Display Name",
                         text=self.bind().profile_display_name,
@@ -366,6 +370,7 @@ class Settings(rio.Component):
                     rio.Text(
                         f"Account Email: {self.account_email}",
                         margin_bottom=1,
+                        overflow="wrap",
                     ),
                     rio.MultiLineTextInput(
                         label="Bio",
@@ -387,11 +392,12 @@ class Settings(rio.Component):
                     style="heading2",
                     margin_top=2,
                     margin_bottom=1,
+                    overflow="wrap",
                 ),
 
                 rio.Column(
                     rio.Row(
-                        rio.Text("Email Notifications"),
+                        rio.Text("Email Notifications", overflow="wrap"),
                         rio.Switch(
                             is_on=self.email_notifications_enabled,
                             on_change=self._on_email_notifications_switch_pressed,
@@ -399,7 +405,7 @@ class Settings(rio.Component):
                         spacing=1,
                     ),
                     rio.Row(
-                        rio.Text("SMS Notifications"),
+                        rio.Text("SMS Notifications", overflow="wrap"),
                         rio.Switch(
                             is_on=self.sms_notifications_enabled,
                             on_change=self._on_sms_notifications_switch_pressed,
@@ -414,19 +420,22 @@ class Settings(rio.Component):
                     style="heading2",
                     margin_top=2,
                     margin_bottom=1,
+                    overflow="wrap",
                 ),
                 rio.Card(
                     rio.Column(
                         rio.Text(
                             "Change Password",
                             style="heading3",
+                            overflow="wrap",
                         ),
                         rio.Banner(
                             text=self.error_message,
                             style="danger",
                             margin_top=1,
                         ),
-                        rio.Row(
+                        # Use FlowContainer for password change form - auto-wraps on mobile
+                        rio.FlowContainer(
                             rio.TextInput(
                                 label="Current Password",
                                 text=self.bind().change_password_current_password,
@@ -453,7 +462,8 @@ class Settings(rio.Component):
                                 on_press=self._on_confirm_password_change_pressed,
                                 shape="rounded",
                             ),
-                            spacing=1,
+                            row_spacing=self.flow_spacing,
+                            column_spacing=self.flow_spacing,
                         ),
                         # Password strength visuals
                         rio.Text(
@@ -489,9 +499,9 @@ class Settings(rio.Component):
                                 text=self.recovery_code_notice,
                                 style="warning",
                                 margin_top=1,
-                            ) if self.recovery_code_notice else rio.Spacer(min_height=0),
-                            rio.Text(self.recovery_codes_summary_text()),
-                            rio.Text(f"Last generated: {self.recovery_codes_last_generated}"),
+                            ) if self.recovery_code_notice else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+                            rio.Text(self.recovery_codes_summary_text(), overflow="wrap"),
+                            rio.Text(f"Last generated: {self.recovery_codes_last_generated}", overflow="wrap"),
                             *(
                                 [
                                     rio.Link(
@@ -506,6 +516,7 @@ class Settings(rio.Component):
                                 else [
                                     rio.Text(
                                         "Enable two-factor authentication to generate recovery codes.",
+                                        overflow="wrap",
                                         margin_top=0.5,
                                     )
                                 ]
@@ -526,7 +537,8 @@ class Settings(rio.Component):
                             margin_bottom=1,
                         ),
 
-                        rio.Row(
+                        # Use FlowContainer for delete account form - auto-wraps on mobile
+                        rio.FlowContainer(
                             rio.TextInput(
                                 label="Password",
                                 text=self.bind().delete_account_password,
@@ -545,7 +557,8 @@ class Settings(rio.Component):
                                 on_press=self._on_delete_account_pressed,
                                 shape="rounded",
                             ),
-                            spacing=1,
+                            row_spacing=self.flow_spacing,
+                            column_spacing=self.flow_spacing,
                         ),
 
                         rio.Banner(
@@ -562,5 +575,5 @@ class Settings(rio.Component):
                 spacing=1,
                 margin=2,
             ),
-            width_percent=70
+            width_percent=WIDTH_COMFORTABLE,
         )

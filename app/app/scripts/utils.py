@@ -164,4 +164,27 @@ def load_from_html(html_path):
                     f'<script>\n{js_content}\n</script>'
                 )
     
+    # Inject a baseline responsive guard so embedded webviews can't force
+    # horizontal overflow in the Rio page.
+    responsive_guard = """
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+html, body {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    overflow-x: hidden;
+}
+*, *::before, *::after {
+    box-sizing: border-box;
+    max-width: 100%;
+}
+</style>
+"""
+
+    if "<head>" in html_content:
+        html_content = html_content.replace("<head>", f"<head>\n{responsive_guard}", 1)
+    else:
+        html_content = f"{responsive_guard}\n{html_content}"
+
     return html_content

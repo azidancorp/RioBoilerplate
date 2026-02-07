@@ -13,29 +13,31 @@ from app.data_models import AppUser, UserSession
 from app.permissions import can_manage_role, get_manageable_roles, get_default_role
 from app.currency import major_to_minor, format_minor_amount, attach_currency_name
 from app.validation import SecuritySanitizer
+from app.components.center_component import CenterComponent
+from app.components.responsive import ResponsiveComponent, WIDTH_FULL
 
 @rio.page(
     name="AdminPage",
     url_segment="admin",
 )
-class AdminPage(rio.Component):
+class AdminPage(ResponsiveComponent):
     """
     Admin page for managing users and their roles.
     Only accessible to users with admin or root roles.
     """
-    
+
     # Keep track of users and their current roles
     users: t.List[AppUser] = field(default_factory=list)
     selected_role: t.Dict[str, str] = field(default_factory=dict)
     current_user: AppUser | None = None
     df: pd.DataFrame | None = None
-    
+
     # User change role fields
     change_role_identifier: str = ""
     change_role_new_role: str = field(default_factory=get_default_role)
     change_role_error: str = ""
-    
-    
+
+
     # User deletion fields
     delete_user_identifier: str = ""
     delete_user_confirmation: str = ""
@@ -50,7 +52,7 @@ class AdminPage(rio.Component):
     currency_mode_is_set: bool = False  # False -> adjust delta, True -> set absolute
     currency_error: str = ""
     currency_success: str = ""
-    
+
     @rio.event.on_populate
     async def on_populate(self):
         """Load all users when the page is populated."""
@@ -98,7 +100,7 @@ class AdminPage(rio.Component):
             self.change_role_error = "Please enter an email or username"
             self.force_refresh()
             return
-            
+
         if not new_role:
             self.change_role_error = "Please enter a new role"
             self.force_refresh()
@@ -149,7 +151,7 @@ class AdminPage(rio.Component):
         except Exception as exc:
             self.change_role_error = f"Error updating role: {str(exc)}"
             return False
-        
+
     async def _on_delete_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """Handle the user deletion process from admin panel."""
         if not self.current_user:
@@ -157,19 +159,19 @@ class AdminPage(rio.Component):
             self.delete_user_success = ""
             self.force_refresh()
             return
-            
+
         if not self.delete_user_identifier or self.delete_user_identifier == "":
             self.delete_user_error = "Please enter an email or username to delete"
             self.delete_user_success = ""
             self.force_refresh()
             return
-            
+
         if self.delete_user_confirmation != f"DELETE USER {self.delete_user_identifier}":
             self.delete_user_error = f'Please type "DELETE USER {self.delete_user_identifier}" exactly to confirm deletion'
             self.delete_user_success = ""
             self.force_refresh()
             return
-            
+
         persistence = self.session[Persistence]
 
         try:
@@ -179,23 +181,23 @@ class AdminPage(rio.Component):
             self.delete_user_success = ""
             self.force_refresh()
             return
-            
+
         target_role = target_user.role
-        
+
         # Check if current user has permission to delete this user
         if not can_manage_role(self.current_user.role, target_role):
             self.delete_user_error = f"You do not have permission to delete users with role: {target_role} because your role is {self.current_user.role}"
             self.delete_user_success = ""
             self.force_refresh()
             return
-            
+
         # Validate admin deletion password
         if not self.delete_user_password or self.delete_user_password == "":
             self.delete_user_error = "Please enter the admin deletion password"
             self.delete_user_success = ""
             self.force_refresh()
             return
-            
+
         # Check admin deletion password against environment variable
         ADMIN_DELETION_PASSWORD = os.getenv('ADMIN_DELETION_PASSWORD')
         if ADMIN_DELETION_PASSWORD is None:
@@ -203,13 +205,13 @@ class AdminPage(rio.Component):
             self.delete_user_success = ""
             self.force_refresh()
             return
-            
+
         if self.delete_user_password != ADMIN_DELETION_PASSWORD:
             self.delete_user_error = "Incorrect admin deletion password"
             self.delete_user_success = ""
             self.force_refresh()
             return
-            
+
         # Store username for success message
         identifier_to_delete = self.delete_user_identifier
 
@@ -354,18 +356,41 @@ class AdminPage(rio.Component):
         self.currency_mode_is_set = event.is_on
         self.force_refresh()
 
+    def _responsive_form_layout(
+        self,
+        *children: rio.Component,
+        proportions: list[int],
+    ) -> rio.Component:
+        """Render equal-width rows on desktop and wrapping layouts on mobile."""
+        if self.is_mobile:
+            return rio.FlowContainer(
+                *children,
+                row_spacing=self.flow_spacing,
+                column_spacing=self.flow_spacing,
+            )
+
+        return rio.Row(
+            *children,
+            spacing=self.flow_spacing,
+            proportions=proportions,
+        )
+
     def build(self) -> rio.Component:
         if not self.current_user or self.df is None:
             return rio.Text("Error: Could not load user information")
-            
-        return rio.Column(
-            rio.Text(
-                "User Management",
-                style="heading1",
-                margin_bottom=2,
-            ),
-            
-            # Users table
+
+        mobile = self.is_mobile
+
+        return CenterComponent(
+            rio.Column(
+                rio.Text(
+                    "User Management",
+                    style="heading1",
+                    margin_bottom=2,
+                    overflow="wrap",
+                ),
+
+            # Users table - wrap in ScrollContainer for mobile horizontal scroll
             rio.Card(
                 rio.Column(
                     rio.Text(
@@ -373,24 +398,20 @@ class AdminPage(rio.Component):
                         style="heading2",
                         margin_bottom=1,
                     ),
-                    
-                    rio.Table(
-                        data=self.df,
-                        show_row_numbers=False
+
+                    rio.ScrollContainer(
+                        rio.Table(
+                            data=self.df,
+                            show_row_numbers=False
+                        ),
+                        scroll_x="auto",
+                        scroll_y="auto",
                     ),
-                    
+
                     margin=2,
                 ),
             ),
-            
-            # User Management
-            rio.Text(
-                "User Management",
-                style="heading2",
-                margin_top=2,
-                margin_bottom=1,
-            ),
-            
+
             rio.Text(
                 "Change Role",
                 style="heading3",
@@ -398,8 +419,7 @@ class AdminPage(rio.Component):
                 margin_bottom=1,
             ),
 
-
-            rio.Row(
+            self._responsive_form_layout(
                 rio.TextInput(
                     label="Email or Username to Change Role",
                     text=self.bind().change_role_identifier,
@@ -414,7 +434,6 @@ class AdminPage(rio.Component):
                     on_press=self._on_change_role_pressed,
                     shape="rounded",
                 ),
-                spacing=1,
                 proportions=[1, 1, 1],
             ),
 
@@ -422,7 +441,7 @@ class AdminPage(rio.Component):
                 f"about to change {self.change_role_identifier}'s role to {self.change_role_new_role}",
                 margin_top=1,
             ),
-            
+
             rio.Banner(
                 text=self.change_role_error,
                 style="danger",
@@ -437,7 +456,7 @@ class AdminPage(rio.Component):
                 margin_bottom=1,
             ),
 
-            rio.Row(
+            self._responsive_form_layout(
                 rio.TextInput(
                     label="User Email / Username / ID",
                     text=self.bind().currency_user_identifier,
@@ -452,11 +471,10 @@ class AdminPage(rio.Component):
                     text=self.bind().currency_reason,
                     on_confirm=self._on_currency_submit,
                 ),
-                spacing=1,
                 proportions=[1, 1, 1],
             ),
 
-            rio.Row(
+            self._responsive_form_layout(
                 rio.Text("Set absolute balance"),
                 rio.Switch(
                     is_on=self.currency_mode_is_set,
@@ -467,30 +485,30 @@ class AdminPage(rio.Component):
                     on_press=self._on_currency_submit,
                     shape="rounded",
                 ),
-                spacing=1,
+                proportions=[1, 1, 1],
             ),
 
             rio.Banner(
                 text=self.currency_success,
                 style="success",
                 margin_top=1,
-            ) if self.currency_success else rio.Spacer(),
+            ) if self.currency_success else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
 
             rio.Banner(
                 text=self.currency_error,
                 style="danger",
                 margin_top=1,
-            ) if self.currency_error else rio.Spacer(),
+            ) if self.currency_error else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
 
-            
+
             rio.Text(
                 "Delete User",
                 style="heading3",
                 margin_top=2,
                 margin_bottom=1,
             ),
-            
-            rio.Row(
+
+            self._responsive_form_layout(
                 rio.TextInput(
                     label="Email or Username to Delete",
                     text=self.bind().delete_user_identifier,
@@ -512,22 +530,23 @@ class AdminPage(rio.Component):
                     on_press=self._on_delete_user_pressed,
                     shape="rounded",
                 ),
-                spacing=1,
                 proportions=[1, 1, 1, 1],
             ),
-            
+
             rio.Banner(
                 text=self.delete_user_success,
                 style="success",
                 margin_top=1,
-            ) if self.delete_user_success else rio.Spacer(),
-            
+            ) if self.delete_user_success else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
             rio.Banner(
                 text=self.delete_user_error,
                 style="danger",
                 margin_top=1,
-            ) if self.delete_user_error else rio.Spacer(),
-            
-            align_x=0.5,
-            min_width=80,
+            ) if self.delete_user_error else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+                align_x=0.5,
+                margin=self.page_margin,
+            ),
+            width_percent=WIDTH_FULL,
         )

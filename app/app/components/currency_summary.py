@@ -62,7 +62,7 @@ class CurrencySummary(rio.Component):
                 rio.Text(self.title, style="heading3"),
                 rio.Text(
                     self.overview.formatted_with_label,
-                    style=rio.TextStyle(font_size=2.5),
+                    style="heading1",
                 ),
                 *subtitled_rows,
                 spacing=0.5,

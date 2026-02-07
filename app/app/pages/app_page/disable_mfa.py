@@ -5,6 +5,7 @@ import rio
 from app.data_models import UserSession
 from app.persistence import Persistence, TwoFactorFailure
 from app.components.center_component import CenterComponent
+from app.components.responsive import WIDTH_COMFORTABLE
 
 
 @rio.page(
@@ -104,6 +105,6 @@ class DisableMFA(rio.Component):
                 ),
                 align_y=0,
             ),
-            width_percent=50,
+            width_percent=WIDTH_COMFORTABLE,
             height_percent=50,
         )

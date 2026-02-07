@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import KW_ONLY, field
-import typing as t
-
 import rio
 
 class Footer(rio.Component):
@@ -17,7 +14,7 @@ class Footer(rio.Component):
                 rio.Icon("rio/logo:fill", min_width=5, min_height=5),
                 rio.Text("Buzzwordz Inc.", justify="center"),
                 rio.Text(
-                    "Hyper Dyper dWebsite",
+                    "Hyper Dyper Website",
                     style="dim",
                 ),
                 spacing=1,
@@ -27,4 +24,3 @@ class Footer(rio.Component):
             color="hud",
             corner_radius=0,
         )
-

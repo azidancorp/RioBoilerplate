@@ -18,6 +18,7 @@ from app.api.currency import (
     list_currency_ledger_route,
     set_currency_route,
 )
+from app.components.center_component import CenterComponent
 from app.components.currency_summary import CurrencySummary, CurrencyOverview
 from app.data_models import AppUser
 from app.persistence import Persistence
@@ -28,6 +29,7 @@ from app.validation import (
     CurrencyLedgerEntryResponse,
     CurrencySetBalanceRequest,
 )
+from app.components.responsive import ResponsiveComponent, WIDTH_FULL
 
 TARGET_OPTIONS: dict[str, str] = {
     "Current session user": "current",
@@ -71,12 +73,14 @@ class CurrencyStatePanel(rio.Component):
                 rio.Text(
                     f"Acting as: {self.current_user.email} ({self.current_user.role})",
                     style="heading3",
+                    overflow="wrap",
                 )
             )
             header_rows.append(
                 rio.Text(
                     f"User ID: {self.current_user.id}",
                     style="dim",
+                    overflow="wrap",
                 )
             )
         else:
@@ -177,10 +181,11 @@ class CurrencyStatePanel(rio.Component):
         response_section = rio.Card(
             rio.Column(
                 rio.Text("Last API Response", style="heading3"),
-                rio.Text(f"Endpoint: {self.last_endpoint or '—'}", style="dim"),
+                rio.Text(f"Endpoint: {self.last_endpoint or '—'}", style="dim", overflow="wrap"),
                 rio.ScrollContainer(
-                    rio.Text(self.last_response_json or "No response recorded yet"),
+                    rio.Text(self.last_response_json or "No response recorded yet", overflow="wrap"),
                     min_height=10,
+                    scroll_x="auto",
                 ),
                 spacing=0.5,
             ),
@@ -207,7 +212,7 @@ class CurrencyStatePanel(rio.Component):
     name="Test",
     url_segment="test",
 )
-class CurrencyTestHarness(rio.Component):
+class CurrencyTestHarness(ResponsiveComponent):
     config: CurrencyConfigResponse | None = None
     balance: CurrencyBalanceResponse | None = None
     ledger_entries: list[CurrencyLedgerEntryResponse] = field(default_factory=list)
@@ -655,6 +660,8 @@ class CurrencyTestHarness(rio.Component):
         return f"{user.email} ({user.role})"
 
     def build(self) -> rio.Component:
+        mobile = self.is_mobile
+
         status_banner: rio.Component
         if self.last_error:
             status_banner = rio.Banner(text=self.last_error, style="danger")
@@ -730,23 +737,33 @@ class CurrencyTestHarness(rio.Component):
             rio.Text(f"Current user: {self._current_user_label()}", style="dim"),
         )
 
+        # Use FlowContainer for button groups on mobile
         quick_actions_section: list[rio.Component] = [
             rio.Text("Quick purchase buttons", style="heading3"),
         ]
-        for row in _chunked(quick_buy_buttons, 2):
-            quick_actions_section.append(rio.Row(*row, spacing=1))
+        if mobile:
+            quick_actions_section.append(rio.FlowContainer(*quick_buy_buttons, row_spacing=0.5, column_spacing=0.5))
+        else:
+            for row in _chunked(quick_buy_buttons, 2):
+                quick_actions_section.append(rio.Row(*row, spacing=1))
 
         quick_actions_section.append(
             rio.Text("Quick spend buttons", style="heading3"),
         )
-        for row in _chunked(quick_spend_buttons, 2):
-            quick_actions_section.append(rio.Row(*row, spacing=1))
+        if mobile:
+            quick_actions_section.append(rio.FlowContainer(*quick_spend_buttons, row_spacing=0.5, column_spacing=0.5))
+        else:
+            for row in _chunked(quick_spend_buttons, 2):
+                quick_actions_section.append(rio.Row(*row, spacing=1))
 
         quick_actions_section.append(
             rio.Text("Quick balance presets", style="heading3"),
         )
-        for row in _chunked(quick_reset_buttons, 2):
-            quick_actions_section.append(rio.Row(*row, spacing=1))
+        if mobile:
+            quick_actions_section.append(rio.FlowContainer(*quick_reset_buttons, row_spacing=0.5, column_spacing=0.5))
+        else:
+            for row in _chunked(quick_reset_buttons, 2):
+                quick_actions_section.append(rio.Row(*row, spacing=1))
 
         manual_adjust_section = rio.Card(
             rio.Column(
@@ -813,7 +830,7 @@ class CurrencyTestHarness(rio.Component):
                     on_press=self._load_balance,
                     shape="rounded",
                 ),
-                rio.Row(
+                rio.FlowContainer(
                     rio.TextInput(
                         label="Ledger limit (1-500)",
                         text=self.bind().ledger_limit,
@@ -824,7 +841,8 @@ class CurrencyTestHarness(rio.Component):
                         on_press=self._load_ledger,
                         shape="rounded",
                     ),
-                    spacing=1,
+                    row_spacing=1,
+                    column_spacing=1,
                 ),
                 spacing=0.7,
             ),
@@ -845,7 +863,6 @@ class CurrencyTestHarness(rio.Component):
             manual_adjust_section,
             manual_set_section,
             spacing=1,
-            min_width=28,
         )
 
         state_panel = CurrencyStatePanel(
@@ -858,23 +875,38 @@ class CurrencyTestHarness(rio.Component):
             current_user=self._current_user_optional(),
         )
 
-        return rio.Column(
-            rio.Text("Currency QA Playground", style="heading1"),
-            rio.Text(
-                "Use these manual controls to exercise every currency API endpoint.",
-                style="dim",
-            ),
-            rio.Row(
+        # Stack panels vertically on mobile, side-by-side on desktop
+        if mobile:
+            main_layout = rio.Column(
+                control_column,
+                rio.Separator(),
+                state_panel,
+                spacing=1.5,
+            )
+        else:
+            main_layout = rio.Row(
                 control_column,
                 rio.Separator(),
                 state_panel,
                 spacing=1.5,
                 align_y=0,
                 grow_x=True,
-                proportions=[10,1,10],
+                proportions=[10, 1, 10],
+            )
+
+        return CenterComponent(
+            rio.Column(
+                rio.Text("Currency QA Playground", style="heading1", overflow="wrap"),
+                rio.Text(
+                    "Use these manual controls to exercise every currency API endpoint.",
+                    style="dim",
+                    overflow="wrap",
+                ),
+                main_layout,
+                spacing=1,
+                margin=self.page_margin,
             ),
-            spacing=1,
-            margin=2,
+            width_percent=WIDTH_FULL,
         )
 
     async def _submit_set_balance_with_amount(

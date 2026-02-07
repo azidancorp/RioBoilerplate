@@ -5,12 +5,14 @@ from fastapi import HTTPException
 
 from app.scripts.message_utils import create_contact_submission
 from app.validation import SecuritySanitizer
+from app.components.center_component import CenterComponent
+from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
 
 @rio.page(
     name="ContactPage",
     url_segment="contact",
 )
-class ContactPage(rio.Component):
+class ContactPage(ResponsiveComponent):
     """
     Contact page containing company contact information and a contact form.
     """
@@ -79,71 +81,90 @@ class ContactPage(rio.Component):
             self.is_submitting = False
 
     def build(self) -> rio.Component:
-        return rio.Column(
-            rio.Text(
-                "Contact Us",
-                style="heading1",
-                margin_bottom=2,
-            ),
-
-            # Banner for messages
-            rio.Banner(
-                text=self.error_message,
-                style=self.banner_style,
-                margin_bottom=1,
-            ),
-
-            # Contact Information Card
-            rio.Card(
-                rio.Column(
-                    rio.Text(
-                        "Get in Touch",
-                        style="heading2",
-                        margin_bottom=1,
-                    ),
-                    rio.Text(
-                        "We'd love to hear from you! Please fill out the form below or use our contact information.",
-                        margin_bottom=2,
-                    ),
-
-                    # Contact Form
-                    rio.TextInput(
-                        label="Name",
-                        margin_bottom=1,
-                        text=self.bind().name,
-                    ),
-                    rio.TextInput(
-                        label="Email",
-                        margin_bottom=1,
-                        text=self.bind().email,
-                    ),
-                    rio.MultiLineTextInput(
-                        label="Message",
-                        text=self.bind().message,
-                        min_height=6,
-                        margin_bottom=2,
-                    ),
-                    rio.Button(
-                        "Sending..." if self.is_submitting else "Send Message",
-                        shape="rounded",
-                        on_press=self.on_submit_pressed,
-                    ),
-
-                    # Company Information
-                    rio.Text(
-                        "Other Ways to Reach Us",
-                        style="heading3",
-                        margin_top=3,
-                        margin_bottom=1,
-                    ),
-                    rio.Text("Email: contact@buzzwordz.com"),
-                    rio.Text("Phone: +1 (555) 123-4567"),
-                    rio.Text("Address: 123 Innovation Drive, Silicon Valley, CA 94025"),
-
-                    spacing=1,
-                    margin=2,
+        return CenterComponent(
+            rio.Column(
+                rio.Text(
+                    "Contact Us",
+                    style="heading1",
+                    margin_bottom=2,
+                    overflow="wrap",
                 ),
+
+                # Banner for messages
+                rio.Banner(
+                    text=self.error_message,
+                    style=self.banner_style,
+                    margin_bottom=1,
+                ) if self.error_message else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+                # Contact Information Card
+                rio.Row(
+                    rio.Card(
+                        rio.Column(
+                            rio.Text(
+                                "Get in Touch",
+                                style="heading2",
+                                margin_bottom=1,
+                                overflow="wrap",
+                            ),
+                            rio.Text(
+                                "We'd love to hear from you! Please fill out the form below or use our contact information.",
+                                margin_bottom=2,
+                                overflow="wrap",
+                            ),
+
+                            # Contact Form
+                            rio.TextInput(
+                                label="Name",
+                                margin_bottom=1,
+                                text=self.bind().name,
+                                grow_x=True,
+                            ),
+                            rio.TextInput(
+                                label="Email",
+                                margin_bottom=1,
+                                text=self.bind().email,
+                                grow_x=True,
+                            ),
+                            rio.MultiLineTextInput(
+                                label="Message",
+                                text=self.bind().message,
+                                min_height=6,
+                                margin_bottom=2,
+                                grow_x=True,
+                            ),
+                            rio.Button(
+                                "Sending..." if self.is_submitting else "Send Message",
+                                shape="rounded",
+                                on_press=self.on_submit_pressed,
+                                grow_x=True,
+                            ),
+
+                            # Company Information
+                            rio.Text(
+                                "Other Ways to Reach Us",
+                                style="heading3",
+                                margin_top=3,
+                                margin_bottom=1,
+                                overflow="wrap",
+                            ),
+                            rio.Text("Email: contact@buzzwordz.com", overflow="wrap"),
+                            rio.Text("Phone: +1 (555) 123-4567", overflow="wrap"),
+                            rio.Text("Address: 123 Innovation Drive, Silicon Valley, CA 94025", overflow="wrap"),
+
+                            spacing=1,
+                            margin=2,
+                            grow_x=True,
+                            min_width=0,
+                        ),
+                        grow_x=True,
+                        min_width=0,
+                    ),
+                    grow_x=True,
+                    min_width=0,
+                ),
+                grow_x=True,
+                min_width=0,
             ),
-            align_x=0.5,
-            min_width=60,
+            width_percent=WIDTH_COMFORTABLE,
         )

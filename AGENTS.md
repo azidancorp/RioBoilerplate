@@ -1,23 +1,52 @@
-# Repository Guidelines
+# Repository Guidance (LLM Agents)
 
-## Project Structure & Module Organization
-The Rio app lives in `app/app`. `pages/` registers routeable components via `@rio.page`; `components/` contains reusable UI widgets; `scripts/` stores helpers such as HTML loaders, OTP utilities, and migrations; `data/` and `assets/` house seed content and static files. Authentication and persistence glue sits in `permissions.py` and `persistence.py`. Currency/credits system uses `currency.py` with API endpoints in `api/currency.py`. Prototype HTML/JS lives in `app/JSPages`. Reference material and deployment playbooks are in `RioDocumentation/` and `DEPLOYMENT_INSTRUCTIONS.md`. Manage dependencies through `requirements.txt`.
+This file is a map of where things live and the “house rules” that prevent breakage. Keep edits small and consistent with existing patterns.
 
-## Build, Test, and Development Commands
-Create a clean environment with `python -m venv venv && source venv/bin/activate` (or `venv\\Scripts\\activate` on Windows) and install deps via `pip install -r requirements.txt`. From the outer `app/` directory (the first one containing `rio.toml`), run `rio run` for the auto-reloading dev server. Use `rio run --port 8000 --release` from that same directory to mirror production, especially before deployment. Utility scripts like `server_sync.py` and `split_documentation.py` help sync assets and docs when packaging.
+## Where Things Live
+- Rio entrypoint + FastAPI bridge: `app/app/__init__.py`
+- Routable pages: `app/app/pages/` (public) and `app/app/pages/app_page/` (authenticated `/app/*`)
+- Reusable UI components: `app/app/components/`
+- Responsive/layout utilities: `app/app/components/responsive.py`
+- Navigation + page role mapping: `app/app/navigation.py`
+- Role hierarchy + access checks (single source of truth): `app/app/permissions.py`
+- Persistence (SQLite, sessions, 2FA, currency ledger): `app/app/persistence.py`
+- FastAPI routers + auth deps: `app/app/api/` (notably `app/app/api/auth_dependencies.py`)
+- Validation (Pydantic v2 models + sanitizers): `app/app/validation.py`
+- Currency helpers + endpoints: `app/app/currency.py`, `app/app/api/currency.py`
+- Utilities/scripts (2FA + QR tests, admin helpers): `app/app/scripts/`
+- Tests (pytest): `app/tests/`
+- Prototype HTML/JS pages: `app/JSPages/` (included in `app/rio.toml` project files)
+- Docs/playbooks: `README.md`, `DEPLOYMENT_INSTRUCTIONS.md`, `UPSTREAM_MERGE_GUIDE.md`, `RioDocumentation/`
 
-## Coding Style & Naming Conventions
-Use 4-space indentation, type hints, and dataclass-friendly patterns (`app/pages/home.py`). Modules, dirs, and functions are snake_case; Rio component classes are `PascalCase`. Keep asset filenames lowercase-with-hyphens. Document any non-obvious script with a short docstring explaining its side effects. Avoid inline state mutation inside builders—prefer explicit helper methods that update component attributes.
+## Run / Test
+- Install deps: `python -m venv venv && source venv/bin/activate && pip install -r requirements.txt`
+- Run dev server (from outer `app/` containing `rio.toml`): `cd app && rio run`
+- Release smoke test (recommended before deployment): `cd app && rio run --port 8000 --release`
+- Pytest:
+  - From repo root: `pytest`
+  - Or from `app/`: `cd app && pytest`
 
-## Testing Guidelines
-Automated coverage is light today. Add new tests under `app/tests/` (create if missing) using `pytest` with files named `test_<feature>.py`; run them with `pytest`. Exercise interactive flows by launching `rio run --release` and walking through login, persistence, and 2FA utilities (see `scripts/test2fa.py` and `scripts/test_qr.py`). Record edge cases such as failed authentication or expired tokens in your test notes.
+If you changed Rio components/pages, do a quick boot check from `app/` (where `rio.toml` lives), e.g. `cd app && timeout 5 rio run --port 8001` (adjust port as needed).
 
-If you have made any changes to the rio frontend or touched Rio components, smoke test from the outer `app/` directory (where `rio.toml` lives) using `rio run --port 8XXX` with a 5s timeout to confirm the app boots with the right arguments, then fix errors until it runs cleanly. For every component you modify or add, cross-check its constructor and usage against the references in `RioDocumentation/` to ensure it is instantiated exactly as documented.
+## Conventions
+- Python: 4-space indent, type hints, dataclasses where it fits.
+- Naming: modules/functions `snake_case`; Rio component classes `PascalCase`; assets `lowercase-with-hyphens`.
+- Rio UI: avoid hidden state mutation inside `build()`; prefer explicit helper methods updating component attributes.
+- Rio UI: don’t use `children=` kwargs in component constructors; pass child components directly.
+- Responsive UI: any component that directly calls `is_mobile()` should inherit `ResponsiveComponent` (`app/app/components/responsive.py`) so it refreshes across breakpoints.
+- Plotly: apply `update_layout(template="plotly_dark")` to Plotly charts for consistent styling.
 
-## Commit & Pull Request Guidelines
-Follow the existing concise imperative style (`remove redundant reset password page`). Each commit should bundle one logical change with related docs or data updates. PRs must explain user-facing impact, enumerate tests run (`rio run --release`, `pytest`), link issues, and attach screenshots/GIFs for UI changes. Request a maintainer review before merge.
+## Auth, Roles, APIs
+- Roles: edit `ROLE_HIERARCHY` in `app/app/permissions.py`; page access is driven by `app/app/navigation.py` (supports wildcard role `"*"`).
+- Routes: add new authenticated pages to `APP_ROUTES` and new public pages to `PUBLIC_NAV_ROUTES` in `app/app/navigation.py` (not `app/app/permissions.py`).
+- FastAPI auth: endpoints expect `Authorization: Bearer <token>`; dependencies live in `app/app/api/auth_dependencies.py`. Token originates from `UserSettings.auth_token` (Rio client storage).
+- Validation: use Pydantic v2 models from `app/app/validation.py` for API payloads; keep sanitization/constraints centralized there.
 
-## Security & Configuration Tips
-Load secrets from an untracked `.env` (supported via `python-dotenv`) and never commit credentials. Re-check guards whenever updating `permissions.py`, and audit persistence changes for SQL injection and session leakage. After upgrading packages, regenerate `requirements.txt` (`pip freeze > requirements.txt`) so deployment stays reproducible.
+## Persistence & Currency Gotchas
+- SQLite FK enforcement is enabled in `app/app/persistence.py` (`PRAGMA foreign_keys = ON`). Keep multi-step writes transactional.
+- Currency invariant: stored balance must match ledger deltas. Relevant tests/docs: `app/tests/test_currency_reconciliation.py`, `app/tests/RECONCILIATION_QUICK_START.md`.
+- 2FA: prefer the centralized verifier (`Persistence.verify_two_factor_challenge`); regression tests exist in `app/tests/test_two_factor_verification.py`.
 
-**Currency System**: Virtual currency (credits/tokens) is managed through `currency.py` and `api/currency.py`. Configuration in `config.py` controls naming, decimals, initial balance, and negative balance policy. Admin-only endpoints allow balance adjustments with full audit logging in the currency ledger.
+## Secrets / Config
+- Secrets live in untracked `.env` (loaded via `python-dotenv`); use `.env.example` as the starting point and do not commit credentials.
+- Username-login toggle: runtime reads `RIO_ALLOW_USERNAME_LOGIN` in `app/app/__init__.py` (note `.env.example` currently documents `ALLOW_USERNAME_LOGIN`).

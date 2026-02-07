@@ -26,14 +26,12 @@ class HeroSection(rio.Component):
                         rio.Text(
                             "Achieve <Desired Outcome>",
                             style=rio.TextStyle(
-                                font_size=3,
                                 font_weight='bold',
                                 fill=rio.Color.from_hex("#FFFFFF")),
                         ),
                         rio.Text(
                             "without <Pain Point>",
                             style=rio.TextStyle(
-                                font_size=3,
                                 font_weight='bold',
                                 fill=rio.Color.from_hex("#FFFFFF")),
                         ),
@@ -44,7 +42,6 @@ class HeroSection(rio.Component):
                         "Say goodbye to outdated methods and hello to success with our all-in-one platform.",
                         overflow='wrap',
                         style=rio.TextStyle(
-                            font_size=2,
                             fill=rio.Color.from_hex("#CCCCCC")),
                     ),
                     # Clear CTA
@@ -132,7 +129,7 @@ class NewWaySection(rio.Component):
                     rio.Text(
                         "Worried about the learning curve? Fear not—our 24/7 support and step-by-step guides "
                         "have you covered.",
-                        style=rio.TextStyle(font_size=0.8, italic=True),
+                        style=rio.TextStyle(italic=True),
                     ),
                     align_y=0,
                     spacing=1,
@@ -160,8 +157,7 @@ class SocialProofSection(rio.Component):
                 style='heading1'
             ),
             
-            rio.Row(
-                # Use Testimonial components here
+            rio.FlowContainer(
                 Testimonial(
                     quote="This platform has truly changed the way we do business. Absolutely remarkable!",
                     name="Jane Doe",
@@ -182,12 +178,10 @@ class SocialProofSection(rio.Component):
                     name="Bob Williams",
                     company="Startup Dynamo",
                 ),
-                Testimonial(
-                    quote="This solution has streamlined our operations beyond our wildest expectations.",
-                    name="Carol Martinez",
-                    company="Efficient Systems",
-                ),
-                spacing=1,
+
+                row_spacing=1,
+                column_spacing=1,
+                justify="center",
             ),
             # Case Studies
             rio.Column(
@@ -196,7 +190,7 @@ class SocialProofSection(rio.Component):
                     style='heading1',
                     margin_bottom=1,
                 ),
-                rio.Row(
+                rio.FlowContainer(
                     rio.Column(
                         rio.Text(
                             "Global Tech Solutions",
@@ -236,7 +230,9 @@ class SocialProofSection(rio.Component):
                         ),
                         spacing=0.5,
                     ),
-                    spacing=2,
+                    row_spacing=2,
+                    column_spacing=2,
+                    justify="center",
                 ),
                 spacing=1,
             ),
@@ -267,10 +263,10 @@ class CallToActionSection(rio.Component):
             # Exit-intent popup placeholder
             rio.Text(
                 "(Exit-Intent Popup would appear when user attempts to leave)",
-                style=rio.TextStyle(font_size=0.8, italic=True),
+                style=rio.TextStyle(italic=True),
             ),
-            
-            
+
+
             PricingPlans(),
             
             spacing=2,
@@ -282,8 +278,11 @@ class ExampleJSPage(rio.Component):
         return rio.Column(
             rio.Text("Example JS Page"),
             rio.Webview(
-                content=load_from_html("JSPages/test.html")
+                content=load_from_html("JSPages/test.html"),
+                min_width=0,
+                grow_x=True,
             ),
+            grow_x=True,
             spacing=2,
         )
 
@@ -307,5 +306,5 @@ class HomePage(rio.Component):
                 ExampleJSPage(),
                 spacing=8,
             ),
-            width_percent=80,
+            # width_percent=80,
         )

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import logging
-import typing as t
-from dataclasses import KW_ONLY, field
 
 import rio
 
-from app.data_models import AppUser, UserSession
-from app.permissions import PAGE_ROLE_MAPPING, check_access
+from app.data_models import UserSession
+from app.permissions import check_access
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +32,7 @@ def guard(event: rio.GuardEvent) -> str | None:
                 f"Access denied for user (role: {session.role}) to path: {full_path}. "
                 f"Redirecting to home."
             )
-            return f"/"
+            return "/"
 
         return None
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import typing as t
-from dataclasses import KW_ONLY, field
 
 import rio
 from fastapi import HTTPException
@@ -9,6 +8,7 @@ from fastapi import HTTPException
 from app.persistence import Persistence, TwoFactorFailure
 from app.data_models import AppUser, UserSettings, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
+from app.components.responsive import WIDTH_NARROW
 from app.scripts.utils import (
     get_password_strength,
     get_password_strength_color,
@@ -166,7 +166,7 @@ class LoginForm(rio.Component):
                     label="2FA or recovery code (if applicable)",
                     on_confirm=self.login,
                 ),
-                rio.Row(
+                rio.FlowContainer(
                     rio.Button(
                         "Login",
                         on_press=self.login,
@@ -183,7 +183,8 @@ class LoginForm(rio.Component):
                         on_press=self.on_reset_password_button_pressed,
                         shape='rounded',
                     ),
-                    spacing=2
+                    row_spacing=1,
+                    column_spacing=1,
                 ),
                 spacing=1,
                 margin=2,
@@ -432,7 +433,7 @@ class SignUpForm(rio.Component):
                     if self.password and self.password_strength < config.MIN_PASSWORD_STRENGTH
                     else []
                 ),
-                rio.Row(
+                rio.FlowContainer(
                     rio.Button(
                         "Sign up",
                         on_press=self.on_sign_up_pressed,
@@ -443,7 +444,8 @@ class SignUpForm(rio.Component):
                         on_press=self.on_back_to_login_pressed,
                         shape='rounded'
                     ),
-                    spacing=2
+                    row_spacing=1,
+                    column_spacing=1,
                 ),
                 spacing=1,
                 margin=2,
@@ -814,9 +816,10 @@ class ResetPasswordForm(rio.Component):
                     is_sensitive=True,
                 ),
                 *additional_inputs,
-                rio.Row(
+                rio.FlowContainer(
                     *buttons,
-                    spacing=2
+                    row_spacing=1,
+                    column_spacing=1,
                 ),
                 spacing=1,
                 margin=2
@@ -864,7 +867,7 @@ class LoginPage(rio.Component):
         return CenterComponent(
             # Show the chosen form
             form_to_show,
-            width_percent=30,
+            width_percent=WIDTH_NARROW,
             # height_percent=40,
             margin_top=10
         )

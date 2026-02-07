@@ -4,11 +4,11 @@ import io
 import qrcode
 import pyotp
 import rio
-from rio.component_meta import C
 
 from app.data_models import UserSession
 from app.persistence import Persistence
 from app.components.center_component import CenterComponent
+from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
 from app.validation import SecuritySanitizer
 
 
@@ -16,7 +16,7 @@ from app.validation import SecuritySanitizer
     name="Enable Two-Factor Authentication",
     url_segment="enable-mfa",
 )
-class EnableMFA(rio.Component):
+class EnableMFA(ResponsiveComponent):
     """Two-factor authentication setup page."""
 
     password: str = ""
@@ -157,7 +157,7 @@ class EnableMFA(rio.Component):
                     ),
                     align_y=0,
                 ),
-                width_percent=50,
+                width_percent=WIDTH_COMFORTABLE,
             )
 
         return CenterComponent(
@@ -170,7 +170,6 @@ class EnableMFA(rio.Component):
                         [rio.Image(
                             self.qr_code_image_bytes,
                             fill_mode="fit",
-                            min_width=20,
                             min_height=20,
                             corner_radius=2,
                         )] if self.qr_code_image_bytes else [rio.Text("Generating QR code...")]
@@ -201,5 +200,5 @@ class EnableMFA(rio.Component):
                 ),
                 align_y=0,
             ),
-            width_percent=50,
+            width_percent=WIDTH_COMFORTABLE,
         )

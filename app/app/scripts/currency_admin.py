@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
 from decimal import Decimal
 from typing import Iterable
 import uuid
@@ -15,7 +14,6 @@ from app.currency import (
     attach_currency_name,
     format_minor_amount,
     get_currency_config,
-    get_major_amount,
     major_to_minor,
 )
 from app.data_models import AppUser

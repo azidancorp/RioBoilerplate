@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import typing as t
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import os
@@ -94,4 +93,3 @@ fastapi_app = app.as_fastapi()
 fastapi_app.include_router(example_router)
 fastapi_app.include_router(profile_router)
 fastapi_app.include_router(currency_router)
-

@@ -15,6 +15,14 @@ class AppRoute:
         return self.sidebar_title is not None and self.sidebar_icon is not None
 
 
+@dataclass(frozen=True, slots=True)
+class PublicNavRoute:
+    title: str
+    path: str
+    show_in_desktop_nav: bool = True
+    show_in_mobile_drawer: bool = True
+
+
 APP_ROUTES: tuple[AppRoute, ...] = (
     AppRoute(
         path="/app/dashboard",
@@ -67,6 +75,36 @@ APP_ROUTES: tuple[AppRoute, ...] = (
 )
 
 
+PUBLIC_NAV_ROUTES: tuple[PublicNavRoute, ...] = (
+    PublicNavRoute(
+        title="Home",
+        path="/",
+        show_in_desktop_nav=False,
+    ),
+    PublicNavRoute(
+        title="About",
+        path="/about",
+    ),
+    PublicNavRoute(
+        title="FAQ",
+        path="/faq",
+    ),
+    PublicNavRoute(
+        title="Pricing",
+        path="/pricing",
+    ),
+    PublicNavRoute(
+        title="Contact",
+        path="/contact",
+    ),
+    PublicNavRoute(
+        title="Login / Signup",
+        path="/login",
+        show_in_desktop_nav=False,
+    ),
+)
+
+
 def get_page_role_mapping(routes: tuple[AppRoute, ...] = APP_ROUTES) -> dict[str, list[str]]:
     return {route.path: list(route.allowed_roles) for route in routes}
 
@@ -78,6 +116,35 @@ def get_sidebar_links(routes: tuple[AppRoute, ...] = APP_ROUTES) -> list[tuple[s
             continue
         links.append((route.sidebar_title, route.path, route.sidebar_icon))
     return links
+
+
+def get_public_desktop_links(
+    routes: tuple[PublicNavRoute, ...] = PUBLIC_NAV_ROUTES,
+) -> list[tuple[str, str]]:
+    return [
+        (route.title, route.path)
+        for route in routes
+        if route.show_in_desktop_nav
+    ]
+
+
+def get_public_mobile_drawer_links(
+    routes: tuple[PublicNavRoute, ...] = PUBLIC_NAV_ROUTES,
+) -> list[tuple[str, str]]:
+    return [
+        (route.title, route.path)
+        for route in routes
+        if route.show_in_mobile_drawer
+    ]
+
+
+def get_public_login_link(
+    routes: tuple[PublicNavRoute, ...] = PUBLIC_NAV_ROUTES,
+) -> tuple[str, str]:
+    for route in routes:
+        if route.path == "/login":
+            return (route.title, route.path)
+    raise ValueError("Missing public login route '/login'")
 
 
 def _validate_routes(routes: tuple[AppRoute, ...] = APP_ROUTES) -> None:
@@ -96,4 +163,24 @@ def _validate_routes(routes: tuple[AppRoute, ...] = APP_ROUTES) -> None:
                 )
 
 
+def _validate_public_routes(routes: tuple[PublicNavRoute, ...] = PUBLIC_NAV_ROUTES) -> None:
+    seen_paths: set[str] = set()
+    login_route_count = 0
+
+    for route in routes:
+        if not route.path.startswith("/"):
+            raise ValueError(f"Public route path must start with '/': {route.path}")
+
+        if route.path in seen_paths:
+            raise ValueError(f"Duplicate public route path: {route.path}")
+        seen_paths.add(route.path)
+
+        if route.path == "/login":
+            login_route_count += 1
+
+    if login_route_count != 1:
+        raise ValueError("Expected exactly one public login route at '/login'")
+
+
 _validate_routes()
+_validate_public_routes()

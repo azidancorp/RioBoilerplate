@@ -183,3 +183,6 @@ split_documentation.py
 
 .claude
 scraped rio docs.zip
+
+# Code review artifacts
+*_REVIEW.md

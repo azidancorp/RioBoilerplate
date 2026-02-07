@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import rio
 import app.theme as theme
+
 from app.data_models import AppUser
 from app.navigation import get_sidebar_links
 from app.permissions import check_access, get_highest_privilege_role
@@ -20,18 +21,12 @@ class SideBarLink(rio.Component):
         self.force_refresh()
 
     def build(self) -> rio.Component:
-        # Get the URL segment of the active page for comparison.
-        # NOTE: Using active_page_instances[1] assumes a two-level route like '/app/<subpage>'.
-        # This is brittle for top-level routes (no index 1) and deeper nesting.
-        # If you extend routing, consider instead:
-        #   - active_page_instances[-1].url_segment  # always deepest page
-        #   - Or build the current path: 
-        #       "/" + "/".join(p.url_segment for p in self.session.active_page_instances if p.url_segment)
-        #     then compare equality or use startswith(self.url + "/") to highlight parents on deeper routes.
-        try:
-            active_page_url_segment = self.session.active_page_instances[1].url_segment
-        except IndexError:
-            active_page_url_segment = None
+        active_segments = [
+            page.url_segment
+            for page in self.session.active_page_instances
+            if page.url_segment
+        ]
+        current_path = "/" + "/".join(active_segments) if active_segments else "/"
 
         # Default styles for inactive menu items.
         bg_color = theme.shade_color(theme.BACKGROUND_COLOR, 0.9)
@@ -39,7 +34,7 @@ class SideBarLink(rio.Component):
         text_color = theme.PRIMARY_COLOR
 
         # Apply styles for the active menu item.
-        if self.url == f'/app/{active_page_url_segment}':
+        if self.url == current_path:
             bg_color = theme.shade_color(theme.PRIMARY_COLOR, 0.9)
             icon_bg_color = theme.shade_color(theme.SECONDARY_COLOR, 0.9)
             text_color = theme.shade_color(theme.SECONDARY_COLOR, 0.3)
@@ -145,7 +140,7 @@ class Sidebar(rio.Component):
                         ),
                         rio.Text(
                             user.primary_currency_formatted_with_label,
-                            style=rio.TextStyle(font_size=1.5),
+                            style="heading3",
                             align_x=0,
                         ),
                         spacing=0.5,

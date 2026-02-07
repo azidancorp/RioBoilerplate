@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import typing as t
-from dataclasses import KW_ONLY, field
+from dataclasses import field
 from datetime import datetime, timedelta
 
 import rio
 
 from app.components.center_component import CenterComponent
+from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
 from app.persistence import Persistence
 from app.data_models import UserSession
 from app.currency import get_currency_config
@@ -75,15 +75,18 @@ class Notification(rio.Component):
                 rio.Text(
                     f"{self.type} Notification",
                     style="heading3",
+                    overflow="wrap",
                 ),
                 rio.Text(
                     self.message,
+                    overflow="wrap",
                 ),
                 rio.Text(
                     f"Timestamp: {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}",
+                    overflow="wrap",
                 ),
                 spacing=0.5,
-                margin=1,
+                margin=0.75,
             ),
             color=self.get_card_color(),
         )
@@ -93,7 +96,7 @@ class Notification(rio.Component):
     name="Notifications",
     url_segment="notifications",
 )
-class NotificationsPage(rio.Component):
+class NotificationsPage(ResponsiveComponent):
     """
     A page listing the user's notifications, with the ability to mark
     them as read or clear them entirely.
@@ -187,9 +190,9 @@ class NotificationsPage(rio.Component):
 
         return CenterComponent(
             rio.Column(
-                rio.Text("Notifications", style="heading1", margin_bottom=2),
+                rio.Text("Notifications", style="heading1", margin_bottom=1.5, overflow="wrap"),
                 rio.Banner(text=self.error_message, style="danger", margin_bottom=1),
-                rio.Row(
+                rio.FlowContainer(
                     rio.Button(
                         "Mark All as Read",
                         shape="rounded",
@@ -200,17 +203,18 @@ class NotificationsPage(rio.Component):
                         shape="rounded",
                         on_press=self.on_clear_all_notifications_pressed,
                     ),
-                    spacing=2,
+                    row_spacing=0.75,
+                    column_spacing=0.75,
                 ),
                 rio.Column(
                     *notifications if notifications else [
-                        rio.Text("No notifications to display")
+                        rio.Text("No notifications to display", overflow="wrap")
                     ],
                     spacing=1,
                     margin_top=1,
                 ),
                 spacing=1,
-                margin=1,
+                margin=2,
             ),
-            width_percent=60,
+            width_percent=WIDTH_COMFORTABLE,
         )

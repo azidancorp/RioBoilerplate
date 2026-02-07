@@ -5,6 +5,8 @@ import secrets
 import sqlite3
 import uuid
 import typing as t
+from dataclasses import dataclass
+from enum import Enum
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -24,6 +26,27 @@ from app.currency import (
     get_major_amount,
 )
 import pyotp
+
+
+class TwoFactorMethod(str, Enum):
+    NOT_REQUIRED = "not_required"
+    TOTP = "totp"
+    RECOVERY_CODE = "recovery_code"
+
+
+class TwoFactorFailure(str, Enum):
+    MISSING_CODE = "missing_code"
+    INVALID_FORMAT = "invalid_format"
+    INVALID_CODE = "invalid_code"
+
+
+@dataclass(frozen=True)
+class TwoFactorChallengeResult:
+    ok: bool
+    method: TwoFactorMethod | None = None
+    used_recovery_code: bool = False
+    failure: TwoFactorFailure | None = None
+    failure_detail: str | None = None
 
 
 # Define the UserPersistence dataclass to handle database operations
@@ -1232,24 +1255,70 @@ class Persistence:
         )
 
 
-    def verify_2fa(self, user_id: uuid.UUID, token: str) -> bool:
-        """Verify a 2FA token for a user."""
-        token = token.strip()
-        if not token:
-            return False
+    def _get_two_factor_secret(self, user_id: uuid.UUID) -> str | None:
         cursor = self._get_cursor()
-        cursor.execute(
-            "SELECT two_factor_secret FROM users WHERE id = ? AND two_factor_secret IS NOT NULL",
-            (str(user_id),)
+        cursor.execute("SELECT two_factor_secret FROM users WHERE id = ?", (str(user_id),))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return t.cast(str | None, row[0])
+
+    def verify_two_factor_challenge(
+        self,
+        user_id: uuid.UUID,
+        code: str | None,
+        *,
+        consume_recovery_code: bool = True,
+    ) -> TwoFactorChallengeResult:
+        """
+        Verify a user-supplied 2FA input against either TOTP or a recovery code.
+
+        This is the centralized 2FA verification entrypoint used by UI flows.
+        It owns:
+        - input sanitization (`SecuritySanitizer.sanitize_auth_code`)
+        - token normalization (strip hyphens)
+        - branching between TOTP vs. recovery-code verification
+        - recovery-code consumption (single-use semantics)
+        """
+        secret = self._get_two_factor_secret(user_id)
+        if not secret:
+            return TwoFactorChallengeResult(ok=True, method=TwoFactorMethod.NOT_REQUIRED)
+
+        try:
+            sanitized_code = SecuritySanitizer.sanitize_auth_code(code)
+        except Exception as exc:
+            detail = getattr(exc, "detail", None)
+            return TwoFactorChallengeResult(
+                ok=False,
+                failure=TwoFactorFailure.INVALID_FORMAT,
+                failure_detail=str(detail) if detail else "Invalid authentication code.",
+            )
+
+        if not sanitized_code:
+            return TwoFactorChallengeResult(
+                ok=False,
+                failure=TwoFactorFailure.MISSING_CODE,
+                failure_detail="Two-factor authentication code is required.",
+            )
+
+        normalized = sanitized_code.replace("-", "")
+        if normalized.isdigit():
+            totp = pyotp.TOTP(secret)
+            if totp.verify(normalized):
+                return TwoFactorChallengeResult(ok=True, method=TwoFactorMethod.TOTP)
+
+        if consume_recovery_code and self.consume_recovery_code(user_id, sanitized_code):
+            return TwoFactorChallengeResult(
+                ok=True,
+                method=TwoFactorMethod.RECOVERY_CODE,
+                used_recovery_code=True,
+            )
+
+        return TwoFactorChallengeResult(
+            ok=False,
+            failure=TwoFactorFailure.INVALID_CODE,
+            failure_detail="Invalid verification or recovery code.",
         )
-        result = cursor.fetchone()
-        
-        if not result:
-            return True  # If 2FA is not enabled, consider it verified
-            
-        secret = result[0]
-        totp = pyotp.TOTP(secret)
-        return totp.verify(token)
 
     def is_2fa_enabled(self, user_id: uuid.UUID) -> bool:
         """Check if 2FA is enabled for a user."""
@@ -1262,6 +1331,8 @@ class Persistence:
         """Enable or Disable 2FA for a user.
         Set to str if enabling, or to None if disabling
         """
+        if secret is not None:
+            secret = secret.strip() or None
         cursor = self._get_cursor()
         cursor.execute(
             "UPDATE users SET two_factor_secret = ? WHERE id = ?",
@@ -1562,25 +1633,9 @@ class Persistence:
 
         # If the user has 2FA enabled, require a valid code unless using the admin override
         if user.two_factor_enabled and not admin_override:
-            if not two_factor_code:
+            result = self.verify_two_factor_challenge(user_id, two_factor_code)
+            if not result.ok:
                 return False
-
-            try:
-                sanitized_code = SecuritySanitizer.sanitize_auth_code(two_factor_code)
-            except Exception:
-                return False
-
-            if not sanitized_code:
-                return False
-
-            normalized_code = self._normalize_recovery_code(sanitized_code)
-            totp_valid = False
-            if normalized_code.isdigit():
-                totp_valid = self.verify_2fa(user_id, normalized_code)
-
-            if not totp_valid:
-                if not self.consume_recovery_code(user_id, sanitized_code):
-                    return False
 
         cursor = self._get_cursor()
 

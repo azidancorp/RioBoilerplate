@@ -3,12 +3,10 @@ from __future__ import annotations
 import typing as t
 from dataclasses import KW_ONLY, field
 
-import pyotp
-
 import rio
 from fastapi import HTTPException
 
-from app.persistence import Persistence
+from app.persistence import Persistence, TwoFactorFailure
 from app.data_models import AppUser, UserSettings, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
 from app.scripts.utils import (
@@ -89,27 +87,20 @@ class LoginForm(rio.Component):
 
             # Check if 2FA is enabled for this user
             recovery_code_used = False
-            if user_info.two_factor_secret:
-                try:
-                    sanitized_code = SecuritySanitizer.sanitize_auth_code(self.verification_code)
-                except Exception as exc:
-                    detail = getattr(exc, "detail", "Invalid authentication code.")
-                    self.error_message = str(detail)
-                    return
-
-                if not sanitized_code:
-                    self.error_message = "2FA is enabled for this account. Please enter your verification or recovery code."
-                    return
-
-                totp_input = sanitized_code.replace("-", "")
-                totp = pyotp.TOTP(user_info.two_factor_secret)
-                if totp_input.isdigit() and totp.verify(totp_input):
-                    pass
-                elif pers.consume_recovery_code(user_info.id, sanitized_code):
-                    recovery_code_used = True
-                else:
+            if user_info.two_factor_enabled:
+                result = pers.verify_two_factor_challenge(user_info.id, self.verification_code)
+                if not result.ok:
+                    if result.failure == TwoFactorFailure.INVALID_FORMAT:
+                        self.error_message = result.failure_detail or "Invalid authentication code."
+                        return
+                    if result.failure == TwoFactorFailure.MISSING_CODE:
+                        self.error_message = (
+                            "2FA is enabled for this account. Please enter your verification or recovery code."
+                        )
+                        return
                     self.error_message = "Invalid verification or recovery code. Please try again."
                     return
+                recovery_code_used = result.used_recovery_code
 
             # The login was successful
             self.error_message = ""
@@ -640,26 +631,25 @@ class ResetPasswordForm(rio.Component):
         self.require_two_factor = bool(user.two_factor_secret)
 
         if user.two_factor_secret:
-            try:
-                sanitized_verification = SecuritySanitizer.sanitize_auth_code(self.verification_code)
-            except HTTPException as exc:
-                detail = getattr(exc, "detail", "Invalid verification code.")
-                self._set_banner("danger", str(detail))
-                return
-
-            if not sanitized_verification:
+            result = pers.verify_two_factor_challenge(user.id, self.verification_code)
+            if not result.ok:
+                if result.failure == TwoFactorFailure.INVALID_FORMAT:
+                    self._set_banner(
+                        "danger",
+                        result.failure_detail or "Invalid verification code.",
+                    )
+                    return
+                if result.failure == TwoFactorFailure.MISSING_CODE:
+                    self._set_banner(
+                        "danger",
+                        "2FA is enabled for this account. Please enter your verification or recovery code.",
+                    )
+                    return
                 self._set_banner(
                     "danger",
-                    "2FA is enabled for this account. Please enter your verification or recovery code.",
+                    "Invalid verification or recovery code.",
                 )
                 return
-
-            totp_input = sanitized_verification.replace("-", "")
-            totp = pyotp.TOTP(user.two_factor_secret)
-            if not (totp_input.isdigit() and totp.verify(totp_input)):
-                if not pers.consume_recovery_code(user.id, sanitized_verification):
-                    self._set_banner("danger", "Invalid verification or recovery code.")
-                    return
 
         consumed = await pers.consume_reset_code(sanitized_code, user.id)
         if not consumed:

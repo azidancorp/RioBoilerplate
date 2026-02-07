@@ -5,7 +5,7 @@ from dataclasses import KW_ONLY, field
 from datetime import datetime, timezone
 
 import rio
-from app.persistence import Persistence
+from app.persistence import Persistence, TwoFactorFailure
 from app.data_models import AppUser, UserSession, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
 from app.components.currency_summary import CurrencySummary, CurrencyOverview as CurrencySnapshot
@@ -191,29 +191,18 @@ class Settings(rio.Component):
                 
             # Validate and sanitize 2FA code if provided
             if user.two_factor_enabled:
-                if not self.change_password_2fa:
-                    self.error_message = "2FA code is required"
-                    return
-
-                try:
-                    sanitized_2fa = SecuritySanitizer.sanitize_auth_code(self.change_password_2fa)
-                except Exception:
-                    self.error_message = "Invalid 2FA or recovery code."
-                    return
-
-                if not sanitized_2fa:
-                    self.error_message = "Invalid 2FA or recovery code."
-                    return
-
-                totp_candidate = sanitized_2fa.replace("-", "")
-                totp_valid = False
-                if totp_candidate.isdigit():
-                    totp_valid = persistence.verify_2fa(user_session.user_id, totp_candidate)
-
-                if not totp_valid:
-                    if not persistence.consume_recovery_code(user_session.user_id, sanitized_2fa):
-                        self.error_message = "Invalid 2FA or recovery code."
+                result = persistence.verify_two_factor_challenge(
+                    user_session.user_id,
+                    self.change_password_2fa,
+                )
+                if not result.ok:
+                    if result.failure == TwoFactorFailure.MISSING_CODE:
+                        self.error_message = "2FA code is required"
                         return
+                    self.error_message = "Invalid 2FA or recovery code."
+                    return
+
+                if result.used_recovery_code:
                     try:
                         usage = self.session[RecoveryCodeUsage]
                     except KeyError:

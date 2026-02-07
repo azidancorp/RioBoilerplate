@@ -82,7 +82,7 @@ class AppUser:
     @property
     def two_factor_enabled(self) -> bool:
         """Whether two-factor authentication is enabled for this user."""
-        return self.two_factor_secret is not None
+        return bool(self.two_factor_secret)
 
     @property
     def primary_currency_balance_major(self) -> float:

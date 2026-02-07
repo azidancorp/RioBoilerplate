@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import pyotp
 import rio
 
 from app.data_models import UserSession
-from app.persistence import Persistence
+from app.persistence import Persistence, TwoFactorFailure
 from app.components.center_component import CenterComponent
-from app.validation import SecuritySanitizer
 
 
 @rio.page(
@@ -17,7 +15,7 @@ class DisableMFA(rio.Component):
     """Two-factor authentication disable page."""
 
     password: str = ""
-    two_factor_secret: str | None = None
+    two_factor_enabled: bool = False
     verification_code: str = ""
     error_message: str = ""
 
@@ -26,10 +24,10 @@ class DisableMFA(rio.Component):
         user_session = self.session[UserSession]
         persistence = self.session[Persistence]
         user = await persistence.get_user_by_id(user_session.user_id)
-        self.two_factor_secret = user.two_factor_secret
+        self.two_factor_enabled = user.two_factor_enabled
 
         # If the user does not have a secret, redirect them
-        if not self.two_factor_secret:
+        if not self.two_factor_enabled:
             self.session.navigate_to("/app/settings")
 
     async def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
@@ -51,38 +49,22 @@ class DisableMFA(rio.Component):
             self.error_message = "Invalid password. Please try again."
             self.force_refresh()
             return
-        
-        try:
-            verification_code = SecuritySanitizer.sanitize_auth_code(self.verification_code)
-        except Exception:
-            self.error_message = "Invalid 2FA or recovery code format."
+
+        result = persistence.verify_two_factor_challenge(
+            user_session.user_id,
+            self.verification_code,
+        )
+        if not result.ok:
+            if result.failure == TwoFactorFailure.INVALID_FORMAT:
+                self.error_message = result.failure_detail or "Invalid 2FA or recovery code format."
+            elif result.failure == TwoFactorFailure.MISSING_CODE:
+                self.error_message = "Please enter a 2FA code or recovery code."
+            else:
+                self.error_message = "Invalid verification or recovery code. Please try again."
             self.force_refresh()
             return
 
-        if not verification_code:
-            self.error_message = "Please enter a 2FA code or recovery code."
-            self.force_refresh()
-            return
-
-        # Verify TOTP code or recovery code
-        is_code_matching = False
-        if self.two_factor_secret:
-            totp = pyotp.TOTP(self.two_factor_secret)
-            candidate = verification_code.replace("-", "")
-            if candidate.isdigit():
-                is_code_matching = totp.verify(candidate)
-
-        if not is_code_matching:
-            is_code_matching = persistence.consume_recovery_code(
-                user_session.user_id,
-                verification_code,
-            )
-
-        if is_code_matching:
-            self.disable_2fa()
-        else:
-            self.error_message = "Invalid verification or recovery code. Please try again."
-            self.force_refresh()
+        self.disable_2fa()
 
     def disable_2fa(self):
         user_session = self.session[UserSession]

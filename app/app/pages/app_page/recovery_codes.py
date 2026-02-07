@@ -5,8 +5,7 @@ import rio
 
 from app.components.center_component import CenterComponent
 from app.data_models import UserSession
-from app.persistence import Persistence
-from app.validation import SecuritySanitizer
+from app.persistence import Persistence, TwoFactorFailure
 
 
 @rio.page(
@@ -69,28 +68,19 @@ class ManageRecoveryCodes(rio.Component):
             self.force_refresh()
             return
 
-        try:
-            sanitized_code = SecuritySanitizer.sanitize_auth_code(self.verification_code)
-        except Exception:
-            self.error_message = "Invalid 2FA or recovery code format."
-            self.force_refresh()
-            return
-
-        if not sanitized_code:
-            self.error_message = "2FA or recovery code is required."
-            self.force_refresh()
-            return
-
-        totp_candidate = sanitized_code.replace("-", "")
-        totp_valid = False
-        if totp_candidate.isdigit():
-            totp_valid = persistence.verify_2fa(user_session.user_id, totp_candidate)
-
-        if not totp_valid:
-            if not persistence.consume_recovery_code(user_session.user_id, sanitized_code):
+        result = persistence.verify_two_factor_challenge(
+            user_session.user_id,
+            self.verification_code,
+        )
+        if not result.ok:
+            if result.failure == TwoFactorFailure.INVALID_FORMAT:
+                self.error_message = result.failure_detail or "Invalid 2FA or recovery code format."
+            elif result.failure == TwoFactorFailure.MISSING_CODE:
+                self.error_message = "2FA or recovery code is required."
+            else:
                 self.error_message = "Invalid 2FA or recovery code."
-                self.force_refresh()
-                return
+            self.force_refresh()
+            return
 
         codes = persistence.generate_recovery_codes(user_session.user_id)
         self.recovery_codes = tuple(codes)

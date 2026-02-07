@@ -9,3 +9,5 @@ plotly
 pydantic[email]
 matplotlib
 requests
+pytest
+httpx

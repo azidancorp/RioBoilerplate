@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.app import fastapi_app
+from app import fastapi_app
 from app.api.auth_dependencies import get_persistence
 from app.config import config
 from app.data_models import AppUser

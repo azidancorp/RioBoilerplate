@@ -10,7 +10,7 @@ import html
 from decimal import Decimal
 from typing import Optional, Any, Dict
 from uuid import UUID
-from pydantic import BaseModel, validator, Field, model_validator
+from pydantic import BaseModel, field_validator, Field, model_validator
 from fastapi import HTTPException, status
 
 from app.config import config
@@ -60,7 +60,7 @@ class SecuritySanitizer:
         # Check length after sanitization
         if len(sanitized) > max_length:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"String too long. Maximum length is {max_length} characters."
             )
         
@@ -74,7 +74,7 @@ class SecuritySanitizer:
         for pattern in sql_patterns:
             if re.search(pattern, sanitized.lower()):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Input contains potentially dangerous content."
                 )
         
@@ -98,14 +98,14 @@ class SecuritySanitizer:
 
         if len(sanitized) > max_length:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Authentication code too long. Maximum length is {max_length} characters."
             )
 
         allowed_characters = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
         if any(char not in allowed_characters for char in sanitized):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Authentication code contains invalid characters."
             )
 
@@ -131,7 +131,7 @@ class SecuritySanitizer:
         # Basic length check
         if len(email) > MAX_EMAIL_LENGTH:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Email too long. Maximum length is {MAX_EMAIL_LENGTH} characters."
             )
         
@@ -141,7 +141,7 @@ class SecuritySanitizer:
             email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
             if not re.match(email_regex, email):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Invalid email format. Must be a valid email address."
                 )
         
@@ -153,7 +153,7 @@ class SecuritySanitizer:
         for pattern in suspicious_patterns:
             if re.search(pattern, email.lower()):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Email contains invalid characters or patterns."
                 )
         
@@ -181,14 +181,14 @@ class SecuritySanitizer:
         # Check length
         if len(phone) > MAX_PHONE_LENGTH:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Phone number too long. Maximum length is {MAX_PHONE_LENGTH} characters."
             )
         
         # Allow only digits, spaces, dashes, parentheses, and plus sign
         if not re.match(r'^[\d\s\-\(\)\+]+$', phone):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Phone number contains invalid characters. Only digits, spaces, dashes, parentheses, and plus sign are allowed."
             )
         
@@ -215,7 +215,7 @@ class SecuritySanitizer:
         # Check length
         if len(url) > MAX_URL_LENGTH:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"URL too long. Maximum length is {MAX_URL_LENGTH} characters."
             )
         
@@ -230,7 +230,7 @@ class SecuritySanitizer:
         
         if not url_pattern.match(url):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Invalid URL format. Must be a valid HTTP or HTTPS URL."
             )
         
@@ -239,7 +239,7 @@ class SecuritySanitizer:
         for protocol in dangerous_protocols:
             if url.lower().startswith(protocol):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="URL contains dangerous protocol."
                 )
         
@@ -260,34 +260,34 @@ class ProfileCreateRequest(BaseModel):
     bio: Optional[str] = Field(None, max_length=MAX_BIO_LENGTH, description="User's bio")
     avatar_url: Optional[str] = Field(None, description="URL to user's avatar image")
     
-    @validator('user_id')
+    @field_validator('user_id')
     def validate_user_id(cls, v):
         # User ID should be alphanumeric with underscores and hyphens only
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
             raise ValueError('User ID can only contain letters, numbers, underscores, and hyphens')
         return SecuritySanitizer.sanitize_string(v, 50)
     
-    @validator('full_name')
+    @field_validator('full_name')
     def validate_full_name(cls, v):
         return SecuritySanitizer.sanitize_string(v, MAX_NAME_LENGTH)
     
-    @validator('email')
+    @field_validator('email')
     def validate_email(cls, v):
         return SecuritySanitizer.validate_email_format(v)
     
-    @validator('phone')
+    @field_validator('phone')
     def validate_phone(cls, v):
         return SecuritySanitizer.validate_phone_number(v)
     
-    @validator('address')
+    @field_validator('address')
     def validate_address(cls, v):
         return SecuritySanitizer.sanitize_string(v, MAX_ADDRESS_LENGTH)
     
-    @validator('bio')
+    @field_validator('bio')
     def validate_bio(cls, v):
         return SecuritySanitizer.sanitize_string(v, MAX_BIO_LENGTH)
     
-    @validator('avatar_url')
+    @field_validator('avatar_url')
     def validate_avatar_url(cls, v):
         return SecuritySanitizer.validate_url(v)
 
@@ -302,27 +302,27 @@ class ProfileUpdateRequest(BaseModel):
     bio: Optional[str] = Field(None, max_length=MAX_BIO_LENGTH, description="New bio")
     avatar_url: Optional[str] = Field(None, description="New avatar URL")
     
-    @validator('full_name')
+    @field_validator('full_name')
     def validate_full_name(cls, v):
         return SecuritySanitizer.sanitize_string(v, MAX_NAME_LENGTH) if v is not None else None
     
-    @validator('email')
+    @field_validator('email')
     def validate_email(cls, v):
         return SecuritySanitizer.validate_email_format(v) if v is not None else None
     
-    @validator('phone')
+    @field_validator('phone')
     def validate_phone(cls, v):
         return SecuritySanitizer.validate_phone_number(v)
     
-    @validator('address')
+    @field_validator('address')
     def validate_address(cls, v):
         return SecuritySanitizer.sanitize_string(v, MAX_ADDRESS_LENGTH) if v is not None else None
     
-    @validator('bio')
+    @field_validator('bio')
     def validate_bio(cls, v):
         return SecuritySanitizer.sanitize_string(v, MAX_BIO_LENGTH) if v is not None else None
     
-    @validator('avatar_url')
+    @field_validator('avatar_url')
     def validate_avatar_url(cls, v):
         return SecuritySanitizer.validate_url(v)
 
@@ -402,7 +402,7 @@ class CurrencyAdjustmentRequest(BaseModel):
             raise ValueError("Provide either target_user_id or target_identifier")
         return self
 
-    @validator("target_identifier")
+    @field_validator("target_identifier")
     def _sanitize_identifier(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
@@ -411,13 +411,13 @@ class CurrencyAdjustmentRequest(BaseModel):
             raise ValueError("Identifier cannot be empty")
         return sanitized
 
-    @validator("reason")
+    @field_validator("reason")
     def _sanitize_reason(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         return SecuritySanitizer.sanitize_string(value, 200)
 
-    @validator("amount")
+    @field_validator("amount")
     def _validate_amount(cls, value: Decimal) -> Decimal:
         if value == 0:
             raise ValueError("Amount must be non-zero")
@@ -443,7 +443,7 @@ class CurrencySetBalanceRequest(BaseModel):
             raise ValueError("Provide either target_user_id or target_identifier")
         return self
 
-    @validator("target_identifier")
+    @field_validator("target_identifier")
     def _sanitize_identifier(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
@@ -452,13 +452,11 @@ class CurrencySetBalanceRequest(BaseModel):
             raise ValueError("Identifier cannot be empty")
         return sanitized
 
-    @validator("reason")
+    @field_validator("reason")
     def _sanitize_reason(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         return SecuritySanitizer.sanitize_string(value, 200)
-
-
 
 
 

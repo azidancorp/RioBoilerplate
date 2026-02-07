@@ -474,6 +474,7 @@ def test_large_balance_reconciliation(temp_db: Persistence):
 def test_reconciliation_across_many_transactions(temp_db: Persistence):
     """Verify reconciliation works after many small transactions."""
     config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
+    config.PRIMARY_CURRENCY_ALLOW_NEGATIVE = True
 
     async def scenario():
         user = await _create_user(temp_db, "many@example.com")

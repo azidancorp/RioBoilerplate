@@ -1,64 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import KW_ONLY, field
-import re
-import warnings
-
 import rio
 import app.theme as theme
 from app.data_models import AppUser
-from app.permissions import PAGE_ROLE_MAPPING, check_access, get_highest_privilege_role
+from app.navigation import get_sidebar_links
+from app.permissions import check_access, get_highest_privilege_role
 
 
-# Define all possible sidebar links with their paths and icons
-# This is the single source of truth for sidebar navigation
-ALL_SIDEBAR_LINKS = [
-    ("Dashboard", "/app/dashboard", "dashboard"),
-    ("Admin", "/app/admin", "admin-panel-settings"),
-    ("Test", "/app/test", "science"),
-    ("News", "/app/news", "newspaper"),
-    ("Notifications", "/app/notifications", "notifications"),
-    ("Settings", "/app/settings", "settings"),
-]
-
-EXCLUDED_FROM_SIDEBAR = {
-    "/app/enable-mfa",
-    "/app/disable-mfa",
-    "/app/recovery-codes",
-}
-
-
-def _validate_sidebar_configuration() -> None:
-    """
-    Validate that sidebar URLs and PAGE_ROLE_MAPPING are in sync.
-
-    This function runs once at module import time to catch configuration
-    mismatches during development rather than at runtime.
-    """
-    sidebar_urls = {url for _, url, _ in ALL_SIDEBAR_LINKS}
-
-    # Check if all sidebar URLs are defined in PAGE_ROLE_MAPPING
-    for _, url, _ in ALL_SIDEBAR_LINKS:
-        if url not in PAGE_ROLE_MAPPING:
-            warnings.warn(
-                f"Sidebar URL '{url}' is not defined in PAGE_ROLE_MAPPING",
-                RuntimeWarning,
-                stacklevel=2
-            )
-
-    # Check if all app URLs in PAGE_ROLE_MAPPING are defined in sidebar
-    # (excluding special pages like MFA setup that shouldn't be in sidebar)
-    for url in PAGE_ROLE_MAPPING:
-        if url.startswith("/app/") and url not in sidebar_urls and url not in EXCLUDED_FROM_SIDEBAR:
-            warnings.warn(
-                f"PAGE_ROLE_MAPPING URL '{url}' is not defined in sidebar links",
-                RuntimeWarning,
-                stacklevel=2
-            )
-
-
-# Run validation once at module import time
-_validate_sidebar_configuration()
+ALL_SIDEBAR_LINKS = get_sidebar_links()
 
 
 class SideBarLink(rio.Component):
@@ -213,7 +162,7 @@ class Sidebar(rio.Component):
         ] if user_role == get_highest_privilege_role() else [
             SideBarLink(title, url, icon)
             for title, url, icon in ALL_SIDEBAR_LINKS
-            if url in PAGE_ROLE_MAPPING and check_access(url, user_role)
+            if check_access(url, user_role)
         ]
         
         return rio.Column(

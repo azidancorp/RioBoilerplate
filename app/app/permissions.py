@@ -10,6 +10,8 @@ To customize roles for your application:
 3. Adjust the hierarchy levels (lower number = higher privilege)
 4. All other parts of the application will automatically adapt
 
+App page access + sidebar navigation live in `app.navigation`.
+
 Example custom hierarchy:
     ROLE_HIERARCHY = {
         "owner": 1,
@@ -19,6 +21,8 @@ Example custom hierarchy:
     }
 """
 
+from app.navigation import get_page_role_mapping
+
 # Role hierarchy from highest to lowest privilege
 # Lower number = higher privilege
 ROLE_HIERARCHY = {
@@ -27,17 +31,7 @@ ROLE_HIERARCHY = {
     "user": 3
 }
 
-PAGE_ROLE_MAPPING = {
-    "/app/dashboard": ["*"],
-    "/app/settings": ["*"],
-    "/app/enable-mfa": ["*"],
-    "/app/disable-mfa": ["*"],
-    "/app/recovery-codes": ["*"],
-    "/app/notifications": ["*"],
-    "/app/admin": ["root", "admin"],
-    "/app/test": ["root", "admin"],
-    "/app/news": ["root", "admin", "user"],
-}
+PAGE_ROLE_MAPPING = get_page_role_mapping()
 
 def get_role_level(role: str) -> int:
     """Get the hierarchy level of a role"""

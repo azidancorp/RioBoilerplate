@@ -83,7 +83,7 @@ app = rio.App(
     on_app_start=on_app_start,
     on_session_start=on_session_start,
     build=RootComponent,
-    theme=(theme.LIGHT_THEME, theme.DARK_THEME),
+    theme=theme.DARK_THEME,
     assets_dir=Path(__file__).parent / "assets",
 )
 

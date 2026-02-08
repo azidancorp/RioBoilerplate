@@ -469,8 +469,8 @@ class Settings(ResponsiveComponent):
                         rio.Text(
                             f"Passwords match: {self.change_password_passwords_match}",
                             style=rio.TextStyle(
-                                fill=rio.Color.from_rgb(0, 1, 0)
-                                if self.change_password_passwords_match else rio.Color.from_rgb(1, 0, 0)
+                                fill=rio.Color.from_rgb(0, 1, 0, srgb=True)
+                                if self.change_password_passwords_match else rio.Color.from_rgb(1, 0, 0, srgb=True)
                             )
                         ),
                         rio.Text(

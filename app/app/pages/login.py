@@ -404,15 +404,15 @@ class SignUpForm(rio.Component):
                 rio.Text(
                     f'Email is valid: {self.is_email_valid}',
                     style=rio.TextStyle(
-                        fill=rio.Color.from_rgb(0, 1, 0)
-                        if self.is_email_valid else rio.Color.from_rgb(1, 0, 0)
+                        fill=rio.Color.from_rgb(0, 1, 0, srgb=True)
+                        if self.is_email_valid else rio.Color.from_rgb(1, 0, 0, srgb=True)
                     )
                 ),
                 rio.Text(
                     f'Passwords match: {self.do_passwords_match}',
                     style=rio.TextStyle(
-                        fill=rio.Color.from_rgb(0, 1, 0)
-                        if self.do_passwords_match else rio.Color.from_rgb(1, 0, 0)
+                        fill=rio.Color.from_rgb(0, 1, 0, srgb=True)
+                        if self.do_passwords_match else rio.Color.from_rgb(1, 0, 0, srgb=True)
                     ),
                 ),
                 rio.Text(
@@ -430,7 +430,7 @@ class SignUpForm(rio.Component):
                             rio.Text(
                                 "I acknowledge my password is weak",
                                 style=rio.TextStyle(
-                                    fill=rio.Color.from_rgb(1, 0.6, 0),
+                                    fill=rio.Color.from_rgb(1, 0.6, 0, srgb=True),
                                 ),
                             ),
                             spacing=1,
@@ -773,7 +773,7 @@ class ResetPasswordForm(rio.Component):
                         rio.Text(
                             "I acknowledge my password is weak",
                             style=rio.TextStyle(
-                                fill=rio.Color.from_rgb(1, 0.6, 0),
+                                fill=rio.Color.from_rgb(1, 0.6, 0, srgb=True),
                             ),
                         ),
                         spacing=1,

@@ -110,7 +110,7 @@ def get_password_strength_color(score: int) -> rio.Color:
     score = max(0, min(score, 99))
     red = (99 - score) / 99
     green = score / 99
-    return rio.Color.from_rgb(red, green, 0)
+    return rio.Color.from_rgb(red, green, 0, srgb=True)
 
 def get_password_strength_status(score: int) -> str:
     """

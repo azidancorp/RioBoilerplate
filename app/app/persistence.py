@@ -1619,7 +1619,7 @@ class Persistence:
             return False
 
         # Determine whether the provided password is a valid user password or admin override
-        admin_password = os.getenv("ADMIN_DELETION_PASSWORD")
+        admin_password = config.ADMIN_DELETION_PASSWORD
         admin_override = bool(
             admin_password and secrets.compare_digest(password, admin_password)
         )

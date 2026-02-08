@@ -48,5 +48,5 @@ If you changed Rio components/pages, do a quick boot check from `app/` (where `r
 - 2FA: prefer the centralized verifier (`Persistence.verify_two_factor_challenge`); regression tests exist in `app/tests/test_two_factor_verification.py`.
 
 ## Secrets / Config
-- Secrets live in untracked `.env` (loaded via `python-dotenv`); use `.env.example` as the starting point and do not commit credentials.
-- Username-login toggle: runtime reads `RIO_ALLOW_USERNAME_LOGIN` in `app/app/__init__.py` (note `.env.example` currently documents `ALLOW_USERNAME_LOGIN`).
+- Secrets live in untracked `.env` (loaded via `python-dotenv`); use `.env.example` as the starting point.
+- App defaults live in `app/app/config.py`. Override via env vars only when necessary (add to `.env`, not `.env.example`).

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -12,6 +11,7 @@ import rio
 
 from app.persistence import Persistence
 from app.data_models import UserSettings
+from app.config import config
 import app.theme as theme
 from app.components.root_component import RootComponent
 from app.api.example import router as example_router
@@ -22,8 +22,7 @@ from app.api.currency import router as currency_router
 async def on_app_start(app: rio.App) -> None:
     # Create a persistence instance. This class hides the gritty details of
     # database interaction from the app.
-    allow_username_login = os.getenv("RIO_ALLOW_USERNAME_LOGIN", "false").lower() in {"1", "true", "yes"}
-    pers = Persistence(allow_username_login=allow_username_login)
+    pers = Persistence(allow_username_login=config.ALLOW_USERNAME_LOGIN)
 
     # Now attach it to the session. This way, the persistence instance is
     # available to all components using `self.session[persistence.Persistence]`

@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import field
 from decimal import Decimal, InvalidOperation
 import uuid
-import os
 import typing as t
 import pandas as pd
 
@@ -13,6 +12,7 @@ from app.data_models import AppUser, UserSession
 from app.permissions import can_manage_role, get_manageable_roles, get_default_role
 from app.currency import major_to_minor, format_minor_amount, attach_currency_name
 from app.validation import SecuritySanitizer
+from app.config import config
 from app.components.center_component import CenterComponent
 from app.components.responsive import ResponsiveComponent, WIDTH_FULL
 
@@ -198,15 +198,14 @@ class AdminPage(ResponsiveComponent):
             self.force_refresh()
             return
 
-        # Check admin deletion password against environment variable
-        ADMIN_DELETION_PASSWORD = os.getenv('ADMIN_DELETION_PASSWORD')
-        if ADMIN_DELETION_PASSWORD is None:
-            self.delete_user_error = "ADMIN_DELETION_PASSWORD environment variable is not set. Please configure your environment variables."
+        # Check admin deletion password against centralized config
+        if not config.ADMIN_DELETION_PASSWORD:
+            self.delete_user_error = "ADMIN_DELETION_PASSWORD is not set. Please configure your environment variables."
             self.delete_user_success = ""
             self.force_refresh()
             return
 
-        if self.delete_user_password != ADMIN_DELETION_PASSWORD:
+        if self.delete_user_password != config.ADMIN_DELETION_PASSWORD:
             self.delete_user_error = "Incorrect admin deletion password"
             self.delete_user_success = ""
             self.force_refresh()

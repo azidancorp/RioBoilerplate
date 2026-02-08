@@ -120,9 +120,6 @@ class Persistence:
         This MUST be executed on EVERY connection to prevent orphaned records.
         """
         if self.conn is None:
-            # Keep SQLite's default thread-safety check enabled. If a connection
-            # must be used across threads, fix the calling pattern instead
-            # (e.g. per-session/per-request connections or explicit locking).
             self.conn = sqlite3.connect(self.db_path)
             # Enable foreign key constraint enforcement
             # Without this, FK declarations in schema are completely ignored
@@ -137,13 +134,18 @@ class Persistence:
         
     def close(self) -> None:
         """
-        Close the database connection.
+        Close the database connection, tolerating cross-thread teardown.
         """
         if not self.conn:
             return
 
-        self.conn.close()
-        self.conn = None
+        try:
+            self.conn.close()
+        except sqlite3.ProgrammingError:
+            # Connection was created on a different thread; let GC handle it.
+            pass
+        finally:
+            self.conn = None
             
     def __del__(self) -> None:
         """

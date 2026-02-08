@@ -20,19 +20,16 @@ from app.api.currency import router as currency_router
 
 
 async def on_app_start(app: rio.App) -> None:
-    # Initialize the database schema early so first user/session doesn't pay
-    # the setup cost. Avoid attaching a single Persistence globally, because
-    # that would share one sqlite3.Connection across sessions/threads.
+    # Create a persistence instance. This class hides the gritty details of
+    # database interaction from the app.
     pers = Persistence(allow_username_login=config.ALLOW_USERNAME_LOGIN)
-    pers.close()
+
+    # Now attach it to the session. This way, the persistence instance is
+    # available to all components using `self.session[persistence.Persistence]`
+    app.default_attachments.append(pers)
 
 
 async def on_session_start(rio_session: rio.Session) -> None:
-    # Create a per-session Persistence so the underlying sqlite3.Connection is
-    # not shared across sessions/threads.
-    pers = Persistence(allow_username_login=config.ALLOW_USERNAME_LOGIN)
-    rio_session.attach(pers)
-
     # A new user has just connected. Check if they have a valid auth token.
     #
     # Any classes inheriting from `rio.UserSettings` will be automatically
@@ -40,6 +37,9 @@ async def on_session_start(rio_session: rio.Session) -> None:
     # retrieving the value here, we can check if the user has a valid auth token
     # stored.
     user_settings = rio_session[UserSettings]
+
+    # Get the persistence instance
+    pers = rio_session[Persistence]
 
     # Try to find a session with the given auth token
     try:
@@ -73,19 +73,6 @@ async def on_session_start(rio_session: rio.Session) -> None:
                 + timedelta(days=7),
             )
 
-async def on_session_close(rio_session: rio.Session) -> None:
-    # Best-effort cleanup. The session might be closing due to network loss, etc.
-    try:
-        pers = rio_session[Persistence]
-    except Exception:
-        return
-
-    try:
-        pers.close()
-    except Exception:
-        # Don't let teardown exceptions prevent session close.
-        pass
-
 
 
 
@@ -95,7 +82,6 @@ app = rio.App(
     default_attachments=[UserSettings(auth_token='')],
     on_app_start=on_app_start,
     on_session_start=on_session_start,
-    on_session_close=on_session_close,
     build=RootComponent,
     theme=(theme.LIGHT_THEME, theme.DARK_THEME),
     assets_dir=Path(__file__).parent / "assets",

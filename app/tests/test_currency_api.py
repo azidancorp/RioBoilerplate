@@ -14,20 +14,13 @@ from app.persistence import Persistence
 @pytest.fixture
 def api_test_setup(tmp_path: Path):
     db_path = tmp_path / "api.db"
+    persistence = Persistence(db_path=db_path)
 
     async def override_get_persistence():
-        # TestClient runs the ASGI app in a different thread. Use a fresh
-        # Persistence (and sqlite3.Connection) in that thread while pointing at
-        # the same database file.
-        db = Persistence(db_path=db_path)
-        try:
-            yield db
-        finally:
-            db.close()
+        yield persistence
 
     fastapi_app.dependency_overrides[get_persistence] = override_get_persistence
     client = TestClient(fastapi_app)
-    persistence = Persistence(db_path=db_path)
     try:
         yield client, persistence
     finally:

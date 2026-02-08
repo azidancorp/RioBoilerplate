@@ -259,12 +259,19 @@ class SignUpForm(rio.Component):
             self.is_email_valid = True
             return
 
-        # Check password strength — allow weak passwords only if acknowledged
+        # Check password strength
         strength = get_password_strength(self.password)
-        if strength < config.MIN_PASSWORD_STRENGTH and not self.acknowledge_weak_password:
-            self.banner_style = "danger"
-            self.error_message = "Your password is weak. Please acknowledge this below or choose a stronger password."
-            return
+        if strength < config.MIN_PASSWORD_STRENGTH:
+            if not config.ALLOW_WEAK_PASSWORDS:
+                # Weak passwords are not allowed at all
+                self.banner_style = "danger"
+                self.error_message = f"Your password is too weak. Please choose a stronger password (minimum strength: {config.MIN_PASSWORD_STRENGTH})."
+                return
+            elif not self.acknowledge_weak_password:
+                # Weak passwords allowed with acknowledgement
+                self.banner_style = "danger"
+                self.error_message = "Your password is weak. Please acknowledge this below or choose a stronger password."
+                return
 
         # Check if the email is already registered
         try:
@@ -430,7 +437,7 @@ class SignUpForm(rio.Component):
                             align_x=0,
                         ),
                     ]
-                    if self.password and self.password_strength < config.MIN_PASSWORD_STRENGTH
+                    if config.ALLOW_WEAK_PASSWORDS and self.password and self.password_strength < config.MIN_PASSWORD_STRENGTH
                     else []
                 ),
                 rio.FlowContainer(

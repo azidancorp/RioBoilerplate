@@ -51,6 +51,9 @@ class AppConfig:
     # Password Policy
     # ---------------
     MIN_PASSWORD_STRENGTH: int = 50
+    # If True, allows weak passwords with user acknowledgement.
+    # If False, prohibits signups with weak passwords entirely.
+    ALLOW_WEAK_PASSWORDS: bool = True
 
     # Admin Deletion Password
     # -----------------------
@@ -80,6 +83,7 @@ class AppConfig:
             PRIMARY_CURRENCY_INITIAL_BALANCE=int(os.getenv("PRIMARY_CURRENCY_INITIAL_BALANCE", "0")),
             PRIMARY_CURRENCY_ALLOW_NEGATIVE=os.getenv("PRIMARY_CURRENCY_ALLOW_NEGATIVE", "False").lower() == "true",
             MIN_PASSWORD_STRENGTH=int(os.getenv("MIN_PASSWORD_STRENGTH", "50")),
+            ALLOW_WEAK_PASSWORDS=os.getenv("ALLOW_WEAK_PASSWORDS", "True").lower() == "true",
             ADMIN_DELETION_PASSWORD=os.getenv("ADMIN_DELETION_PASSWORD", ""),
         )
 

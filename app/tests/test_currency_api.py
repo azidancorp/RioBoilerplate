@@ -14,18 +14,25 @@ from app.persistence import Persistence
 @pytest.fixture
 def api_test_setup(tmp_path: Path):
     db_path = tmp_path / "api.db"
-    persistence = Persistence(db_path=db_path)
+    # Setup-only instance: used in the main test thread for creating users/sessions
+    setup_persistence = Persistence(db_path=db_path)
 
+    # Per-request instance: mimics production get_persistence() which creates
+    # a fresh Persistence per request inside the ASGI worker thread
     async def override_get_persistence():
-        yield persistence
+        db = Persistence(db_path=db_path)
+        try:
+            yield db
+        finally:
+            db.close()
 
     fastapi_app.dependency_overrides[get_persistence] = override_get_persistence
     client = TestClient(fastapi_app)
     try:
-        yield client, persistence
+        yield client, setup_persistence
     finally:
         fastapi_app.dependency_overrides.clear()
-        persistence.close()
+        setup_persistence.close()
         client.close()
 
 

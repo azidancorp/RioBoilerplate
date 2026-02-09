@@ -61,15 +61,19 @@ class RootComponent(ResponsiveComponent):
             rio.Separator(),
             rio.Row(
                 # Sidebar only shown inline on desktop when logged in
-                Sidebar() if (user_is_logged_in and not mobile) else rio.Spacer(min_width=0, min_height=0, grow_x=False, grow_y=False),
+                rio.Column(
+                    Sidebar() if (user_is_logged_in and not mobile) else rio.Spacer(min_width=0, min_height=0, grow_x=False, grow_y=False),
+                    align_y=0,
+                ) if (user_is_logged_in and not mobile) else rio.Spacer(min_width=0, min_height=0, grow_x=False, grow_y=False),
                 rio.Column(
                     rio.PageView(
                         grow_y=True,
                     ),
-                    align_y=0,
+
                     grow_x=True,
+                    grow_y=True,
                 ),
-                align_y=0,
+
                 grow_x=True,
                 grow_y=True,
             ),
@@ -97,7 +101,7 @@ class RootComponent(ResponsiveComponent):
                     ),
                     rio.Separator(),
                     drawer_body,
-                    align_y=0,
+
                     grow_y=True,
                 ),
                 side="left",

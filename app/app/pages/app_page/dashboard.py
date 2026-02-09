@@ -466,7 +466,7 @@ class Board(ResponsiveComponent):
             spacing=4,
             margin=self.page_margin,
             grow_x=True,
-            align_y=0,
+            # align_y=0,  # REMOVED - allows content to expand
         )
 
 # -----------------------------
@@ -489,7 +489,7 @@ class Dashboard(rio.Component):
                 spacing=2,
                 margin=0,
                 grow_x=True,
-                align_y=0,
+                # align_y=0,  # REMOVED - allows content to expand
             ),
             width_percent=WIDTH_FULL,
         )

@@ -164,7 +164,6 @@ class Sidebar(rio.Component):
             *header_components,
             *visible_links,
             align_x=0,
-            align_y=0,
             grow_y=False,
             margin_left=1.5,
             margin_top=2,

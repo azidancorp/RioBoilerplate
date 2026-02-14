@@ -44,7 +44,7 @@ This document defines the first iteration of the single primary currency feature
 - **Config helper**: central class/utility to expose `currency_name`, `currency_name_plural`, `currency_symbol`, `decimal_places`, `initial_balance`, and derived helpers (display label, formatting).
 
 ### Configuration Flow
-- Extend `AppConfig` (and `AppConfig.from_env`) with currency fields driven by environment variables (`RIO_PRIMARY_CURRENCY_NAME`, etc.).
+- Extend `AppConfig` with currency fields. These are hardcoded defaults in `app/app/config.py`—edit the file directly to customize.
 - Add a lightweight helper module (e.g., `app/app/currency.py`) that wraps config access, handles pluralization, and formatting (using `decimal.Decimal` for display only).
 
 ### Database Changes

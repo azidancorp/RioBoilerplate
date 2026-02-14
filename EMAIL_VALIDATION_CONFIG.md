@@ -52,26 +52,6 @@ class AppConfig:
     PRIMARY_IDENTIFIER: str = "username"  # Use username as primary
 ```
 
-### Method 2: Environment Variables (Recommended)
-
-Create a `.env` file in the project root:
-
-```env
-REQUIRE_VALID_EMAIL=false
-ALLOW_USERNAME_LOGIN=true
-PRIMARY_IDENTIFIER=username
-```
-
-Then load it in your application startup (requires `python-dotenv`):
-
-```python
-from dotenv import load_dotenv
-load_dotenv()
-
-from app.config import AppConfig
-config = AppConfig.from_env()
-```
-
 ## Validation Flow
 
 ### Frontend Validation (Real-time)
@@ -195,9 +175,6 @@ Expected: ❌ Always fails (security block)
 
 ### Issue: Validation still enforced after setting to False
 **Solution**: Restart the Rio server (`rio run`) to reload the config module
-
-### Issue: Environment variables not working
-**Solution**: Ensure `python-dotenv` is installed and `load_dotenv()` is called before importing config
 
 ### Issue: Users can't sign up with valid emails
 **Solution**: Check that `REQUIRE_VALID_EMAIL = True` and the email matches the regex pattern

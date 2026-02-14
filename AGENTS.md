@@ -49,4 +49,4 @@ If you changed Rio components/pages, do a quick boot check from `app/` (where `r
 
 ## Secrets / Config
 - Secrets live in untracked `.env` (loaded via `python-dotenv`); use `.env.example` as the starting point.
-- App defaults live in `app/app/config.py`. Override via env vars only when necessary (add to `.env`, not `.env.example`).
+- App defaults live in `app/app/config.py`. Edit the file directly to customize behavior. Only true secrets (e.g., `ADMIN_DELETION_PASSWORD`) belong in `.env`.

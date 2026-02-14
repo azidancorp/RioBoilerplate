@@ -101,7 +101,7 @@ Profile Management:
 | `app/permissions.py` | Role hierarchy, `PAGE_ROLE_MAPPING`, access checks |
 | `app/persistence.py` | SQLite operations, user/session/currency CRUD |
 | `app/data_models.py` | `AppUser`, `UserSession`, `UserSettings`, `Profile`, `RecoveryCodeRecord`, `CurrencyLedgerEntry` |
-| `app/config.py` | `AppConfig` with env var support |
+| `app/config.py` | `AppConfig` - edit file directly to customize |
 | `app/validation.py` | `SecuritySanitizer`, Pydantic v2 request/response models |
 | `app/currency.py` | Currency formatting and conversion utilities |
 | `app/theme.py` | Light/dark theme definitions (HSV-based) |
@@ -115,12 +115,14 @@ Profile Management:
 
 ## Configuration (`app/config.py`)
 
-Key settings (all configurable via env vars):
-- `REQUIRE_VALID_EMAIL` (default: `true`) - strict email validation (multi-layer: frontend, form, backend, API)
-- `ALLOW_USERNAME_LOGIN` (default: `false`) - enable username-based login
+Key settings (hardcoded in `config.py`, edit file directly):
+- `REQUIRE_VALID_EMAIL` (default: `True`) - strict email validation (multi-layer: frontend, form, backend, API)
+- `ALLOW_USERNAME_LOGIN` (default: `False`) - enable username-based login
 - `PRIMARY_IDENTIFIER` (default: `"email"`) - `"email"` or `"username"`
 - `PRIMARY_CURRENCY_*` - currency name, symbol, decimal places, initial balance, allow negative
 - `MIN_PASSWORD_STRENGTH` (default: 50)
+
+Secrets (set via `.env`):
 - `ADMIN_DELETION_PASSWORD` - required for user deletion operations
 
 ## Security

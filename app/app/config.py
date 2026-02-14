@@ -73,17 +73,6 @@ class AppConfig:
         This allows runtime configuration via .env file or system environment.
         """
         return cls(
-            REQUIRE_VALID_EMAIL=os.getenv("REQUIRE_VALID_EMAIL", "True").lower() == "true",
-            ALLOW_USERNAME_LOGIN=os.getenv("ALLOW_USERNAME_LOGIN", "False").lower() == "true",
-            PRIMARY_IDENTIFIER=os.getenv("PRIMARY_IDENTIFIER", "email").lower(),
-            PRIMARY_CURRENCY_NAME=os.getenv("PRIMARY_CURRENCY_NAME", "credit"),
-            PRIMARY_CURRENCY_NAME_PLURAL=os.getenv("PRIMARY_CURRENCY_NAME_PLURAL", "credits"),
-            PRIMARY_CURRENCY_SYMBOL=os.getenv("PRIMARY_CURRENCY_SYMBOL", ""),
-            PRIMARY_CURRENCY_DECIMAL_PLACES=int(os.getenv("PRIMARY_CURRENCY_DECIMAL_PLACES", "0")),
-            PRIMARY_CURRENCY_INITIAL_BALANCE=int(os.getenv("PRIMARY_CURRENCY_INITIAL_BALANCE", "0")),
-            PRIMARY_CURRENCY_ALLOW_NEGATIVE=os.getenv("PRIMARY_CURRENCY_ALLOW_NEGATIVE", "False").lower() == "true",
-            MIN_PASSWORD_STRENGTH=int(os.getenv("MIN_PASSWORD_STRENGTH", "50")),
-            ALLOW_WEAK_PASSWORDS=os.getenv("ALLOW_WEAK_PASSWORDS", "True").lower() == "true",
             ADMIN_DELETION_PASSWORD=os.getenv("ADMIN_DELETION_PASSWORD", ""),
         )
 

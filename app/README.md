@@ -34,7 +34,5 @@ When a user logs in, two things happen:
 Any pages that shouldn't be accessible without logging in are protected using
 Rio's guard mechanism.
 
-By default, email addresses are the primary user identifiers. If you ever need
-username-based logins for a particular deployment, set the environment variable
-`RIO_ALLOW_USERNAME_LOGIN=true` before starting the app to enable a username
-fallback while keeping email as the recommended path.
+By default, email addresses are the primary user identifiers. If you need
+username-based logins, edit `app/app/config.py` and set `ALLOW_USERNAME_LOGIN = True`.

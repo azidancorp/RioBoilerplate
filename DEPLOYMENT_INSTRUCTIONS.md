@@ -191,18 +191,13 @@ cd /root/[APP_NAME]
 nano .env
 ```
 
-**Recommended `.env` additions:**
+**Required `.env` additions:**
 
 ```
 ADMIN_DELETION_PASSWORD="<strong admin password>"
-# Primary currency configuration (override defaults as needed)
-RIO_PRIMARY_CURRENCY_NAME="credit"
-RIO_PRIMARY_CURRENCY_NAME_PLURAL="credits"
-RIO_PRIMARY_CURRENCY_SYMBOL=""
-RIO_PRIMARY_CURRENCY_DECIMAL_PLACES=0
-RIO_PRIMARY_CURRENCY_INITIAL_BALANCE=0
-RIO_PRIMARY_CURRENCY_ALLOW_NEGATIVE=true
 ```
+
+> **Note:** Other configuration settings (email validation, currency names, password policy) are hardcoded in `app/app/config.py`. Edit that file directly to customize behavior.
 
 > **Note:** The bundled schema expects a fresh database. If you are upgrading an existing installation, export your data and migrate manually before redeploying.
 

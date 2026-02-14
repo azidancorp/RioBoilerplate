@@ -3,13 +3,13 @@
 Rio Boilerplate now includes a first-class, per-user currency with configurable naming, precision, and admin tools.
 
 ## Configuration
-- `RIO_PRIMARY_CURRENCY_NAME` / `_PLURAL`: singular/plural labels used across UI components and API responses.
-- `RIO_PRIMARY_CURRENCY_SYMBOL`: optional prefix (e.g. `$`).
-- `RIO_PRIMARY_CURRENCY_DECIMAL_PLACES`: stored precision (0 for whole units).
-- `RIO_PRIMARY_CURRENCY_INITIAL_BALANCE`: starting balance assigned to new accounts.
-- `RIO_PRIMARY_CURRENCY_ALLOW_NEGATIVE`: defaults to `false`; enable to allow overdrafts.
+All settings live in `app/app/config.py` and must be edited directly:
 
-All settings live in `app/app/config.py` and can be overridden via environment variables.
+- `PRIMARY_CURRENCY_NAME` / `_PLURAL`: singular/plural labels used across UI components and API responses.
+- `PRIMARY_CURRENCY_SYMBOL`: optional prefix (e.g. `$`).
+- `PRIMARY_CURRENCY_DECIMAL_PLACES`: stored precision (0 for whole units).
+- `PRIMARY_CURRENCY_INITIAL_BALANCE`: starting balance assigned to new accounts.
+- `PRIMARY_CURRENCY_ALLOW_NEGATIVE`: defaults to `False`; enable to allow overdrafts.
 
 ## Database Schema
 - `users.primary_currency_balance` stores the balance as an integer number of minor units.

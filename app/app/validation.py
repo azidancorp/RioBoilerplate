@@ -392,7 +392,10 @@ class CurrencyAdjustmentRequest(BaseModel):
         description="Email or username fallback if user ID is not provided",
         max_length=MAX_EMAIL_LENGTH,
     )
-    amount: Decimal = Field(..., description="Delta amount in major units (e.g. credits)")
+    amount: Decimal = Field(
+        ...,
+        description=f"Delta amount in major units (e.g. {config.PRIMARY_CURRENCY_NAME_PLURAL})",
+    )
     reason: Optional[str] = Field(None, max_length=200, description="Reason for audit trail")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata blob recorded in ledger")
 
@@ -457,6 +460,5 @@ class CurrencySetBalanceRequest(BaseModel):
         if value is None:
             return None
         return SecuritySanitizer.sanitize_string(value, 200)
-
 
 

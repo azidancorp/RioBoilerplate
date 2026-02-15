@@ -13,6 +13,8 @@ This file is a map of where things live and the “house rules” that prevent b
 - FastAPI routers + auth deps: `app/app/api/` (notably `app/app/api/auth_dependencies.py`)
 - Validation (Pydantic v2 models + sanitizers): `app/app/validation.py`
 - Currency helpers + endpoints: `app/app/currency.py`, `app/app/api/currency.py`
+- Currency configuration: `app/app/config.py` (`PRIMARY_CURRENCY_*` settings)
+- Currency test harness: `app/app/pages/app_page/currency_playground.py`
 - Utilities/scripts (2FA + QR tests, admin helpers): `app/app/scripts/`
 - Tests (pytest): `app/tests/`
 - Prototype HTML/JS pages: `app/JSPages/` (included in `app/rio.toml` project files)
@@ -45,7 +47,9 @@ If you changed Rio components/pages, do a quick boot check from `app/` (where `r
 ## Persistence & Currency Gotchas
 - SQLite FK enforcement is enabled in `app/app/persistence.py` (`PRAGMA foreign_keys = ON`). Keep multi-step writes transactional.
 - Currency invariant: stored balance must match ledger deltas. Relevant tests/docs: `app/tests/test_currency_reconciliation.py`, `app/tests/RECONCILIATION_QUICK_START.md`.
+- Currency storage: uses integer minor units with `Decimal` conversion. Config in `app/app/config.py` via `PRIMARY_CURRENCY_*` settings (name, symbol, decimal places, initial balance, allow negative).
 - 2FA: prefer the centralized verifier (`Persistence.verify_two_factor_challenge`); regression tests exist in `app/tests/test_two_factor_verification.py`.
+- Currency tests: `test_currency_*.py` covers API, persistence, and reconciliation tests.
 
 ## Secrets / Config
 - Secrets live in untracked `.env` (loaded via `python-dotenv`); use `.env.example` as the starting point.

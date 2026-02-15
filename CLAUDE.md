@@ -63,7 +63,7 @@ Hierarchical roles defined in `ROLE_HIERARCHY` dict (lower number = higher privi
 - Mobile: hamburger menu + drawer (Sidebar if logged in, PublicNav if not), drawer auto-closes on navigation
 
 ### Currency System (`app/currency.py`, `app/api/currency.py`)
-Configurable virtual currency (credits/tokens/points). Config in `app/config.py`. API endpoints: `GET /api/currency/{config,balance,ledger}`, `POST /api/currency/{adjust,set}` (admin only). Uses integer minor units with `Decimal` conversion. Test harness at `app/pages/app_page/test.py`.
+Configurable virtual currency (credits/tokens/points). Config in `app/config.py`. API endpoints: `GET /api/currency/{config,balance,ledger}`, `POST /api/currency/{adjust,set}` (admin only). Uses integer minor units with `Decimal` conversion. Test harness at `app/pages/app_page/currency_playground.py`.
 
 ## Database Models (`app/data_models.py`)
 
@@ -154,7 +154,7 @@ Tests in `app/tests/` (both root and `app/` have `conftest.py` for `sys.path`):
 
 **Public**: `home.py` (landing), `about.py`, `faq.py`, `pricing.py`, `contact.py`, `login.py` (login/signup/2FA)
 
-**Authenticated** (`app/pages/app_page/`): `dashboard.py`, `admin.py` (user/role/currency management), `settings.py` (profile/password/2FA/account), `news.py`, `notifications.py`, `enable_mfa.py`, `disable_mfa.py`, `recovery_codes.py`, `test.py` (currency QA harness)
+**Authenticated** (`app/pages/app_page/`): `dashboard.py`, `admin.py` (user/role/currency management), `settings.py` (profile/password/2FA/account), `news.py`, `notifications.py`, `enable_mfa.py`, `disable_mfa.py`, `recovery_codes.py`, `currency_playground.py` (currency QA harness)
 
 ## Dependencies
 

@@ -12,32 +12,30 @@ from app.data_models import UserSession
 from app.currency import get_currency_config
 
 
-# Sample notification data
-_CURRENCY_CONFIG = get_currency_config()
-_CURRENCY_PLURAL = _CURRENCY_CONFIG.name_plural
-
-SAMPLE_NOTIFICATIONS = [
-    {
-        "type": "SUCCESS",
-        "message": "Welcome to your brand new Supernova Plan! Now with added synergy and paradigm-shifting capabilities.",
-        "minutes_ago": 5
-    },
-    {
-        "type": "INFO",
-        "message": "Great news! Our nocturnal coding ninjas deployed a new feature overnight. Dive in and disrupt the status quo!",
-        "hours_ago": 2
-    },
-    {
-        "type": "WARNING",
-        "message": f"Your {_CURRENCY_PLURAL} are running low! Reach out to your account rep or consider leveling up to the Infinity Plan.",
-        "days_ago": 1
-    },
-    {
-        "type": "ERROR",
-        "message": "Oops! We encountered a glitch in the matrix while trying to harness the power of quantum synergy. Our temporal engineers are on it!",
-        "days_ago": 2
-    }
-]
+def get_sample_notifications() -> list[dict[str, str | int]]:
+    currency_plural = get_currency_config().name_plural
+    return [
+        {
+            "type": "SUCCESS",
+            "message": "Welcome to your brand new Supernova Plan! Now with added synergy and paradigm-shifting capabilities.",
+            "minutes_ago": 5,
+        },
+        {
+            "type": "INFO",
+            "message": "Great news! Our nocturnal coding ninjas deployed a new feature overnight. Dive in and disrupt the status quo!",
+            "hours_ago": 2,
+        },
+        {
+            "type": "WARNING",
+            "message": f"Your {currency_plural} are running low! Reach out to your account rep or consider leveling up to the Infinity Plan.",
+            "days_ago": 1,
+        },
+        {
+            "type": "ERROR",
+            "message": "Oops! We encountered a glitch in the matrix while trying to harness the power of quantum synergy. Our temporal engineers are on it!",
+            "days_ago": 2,
+        },
+    ]
 
 
 # Notification color definitions
@@ -121,7 +119,7 @@ class NotificationsPage(ResponsiveComponent):
             
             # For demonstration, we'll load the sample notifications:
             self.notification_data = []
-            for notif in SAMPLE_NOTIFICATIONS:
+            for notif in get_sample_notifications():
                 timestamp = now
                 if "minutes_ago" in notif:
                     timestamp -= timedelta(minutes=notif["minutes_ago"])

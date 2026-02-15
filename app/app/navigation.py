@@ -37,9 +37,9 @@ APP_ROUTES: tuple[AppRoute, ...] = (
         sidebar_icon="admin-panel-settings",
     ),
     AppRoute(
-        path="/app/test",
+        path="/app/currency-playground",
         allowed_roles=("root", "admin"),
-        sidebar_title="Test",
+        sidebar_title="Currency",
         sidebar_icon="science",
     ),
     AppRoute(

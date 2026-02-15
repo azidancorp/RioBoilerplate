@@ -18,6 +18,7 @@ from app.api.currency import (
     list_currency_ledger_route,
     set_currency_route,
 )
+from app.currency import get_currency_config
 from app.components.center_component import CenterComponent
 from app.components.currency_summary import CurrencySummary, CurrencyOverview
 from app.data_models import AppUser
@@ -37,16 +38,16 @@ TARGET_OPTIONS: dict[str, str] = {
     "Email or username lookup": "identifier",
 }
 
-QUICK_BUY_PACKAGES: tuple[tuple[str, Decimal, str], ...] = (
-    ("Buy 10 credits", Decimal("10"), "QA quick purchase"),
-    ("Buy 50 credits", Decimal("50"), "QA quick purchase"),
-    ("Buy 250 credits", Decimal("250"), "QA quick purchase"),
+QUICK_BUY_PACKAGES: tuple[tuple[Decimal, str], ...] = (
+    (Decimal("10"), "QA quick purchase"),
+    (Decimal("50"), "QA quick purchase"),
+    (Decimal("250"), "QA quick purchase"),
 )
 
-QUICK_SPEND_PACKAGES: tuple[tuple[str, Decimal, str], ...] = (
-    ("Spend 5 credits", Decimal("-5"), "QA quick spend"),
-    ("Spend 25 credits", Decimal("-25"), "QA quick spend"),
-    ("Spend 100 credits", Decimal("-100"), "QA quick spend"),
+QUICK_SPEND_PACKAGES: tuple[tuple[Decimal, str], ...] = (
+    (Decimal("-5"), "QA quick spend"),
+    (Decimal("-25"), "QA quick spend"),
+    (Decimal("-100"), "QA quick spend"),
 )
 
 
@@ -209,10 +210,10 @@ class CurrencyStatePanel(rio.Component):
 
 
 @rio.page(
-    name="Test",
-    url_segment="test",
+    name="Currency Playground",
+    url_segment="currency-playground",
 )
-class CurrencyTestHarness(ResponsiveComponent):
+class CurrencyPlaygroundPage(ResponsiveComponent):
     config: CurrencyConfigResponse | None = None
     balance: CurrencyBalanceResponse | None = None
     ledger_entries: list[CurrencyLedgerEntryResponse] = field(default_factory=list)
@@ -379,14 +380,14 @@ class CurrencyTestHarness(ResponsiveComponent):
         payload = CurrencyAdjustmentRequest(
             amount=delta,
             reason=reason,
-            metadata={"source": "currency-test-harness"},
+            metadata={"source": "currency-playground"},
             **target_kwargs,
         )
         await self._execute_adjustment(
             payload,
             current_user,
             persistence,
-            success_label=f"Adjustment applied ({payload.amount} units)",
+            success_label=f"Adjustment applied ({self._format_signed_amount_with_currency(payload.amount)})",
         )
 
     async def _submit_adjustment(
@@ -431,7 +432,7 @@ class CurrencyTestHarness(ResponsiveComponent):
             payload,
             current_user,
             persistence,
-            success_label=f"Adjusted balance by {payload.amount}",
+            success_label=f"Adjusted balance by {self._format_signed_amount_with_currency(payload.amount)}",
         )
 
     async def _submit_set_balance(
@@ -472,7 +473,7 @@ class CurrencyTestHarness(ResponsiveComponent):
             payload,
             current_user,
             persistence,
-            success_label=f"Set balance to {payload.balance}",
+            success_label=f"Set balance to {self._format_signed_amount_with_currency(payload.balance)}",
         )
 
     async def _execute_adjustment(
@@ -659,6 +660,25 @@ class CurrencyTestHarness(ResponsiveComponent):
             return "Not authenticated"
         return f"{user.email} ({user.role})"
 
+    def _currency_labels(self) -> tuple[str, str]:
+        if self.config is not None:
+            return self.config.name, self.config.name_plural
+        cfg = get_currency_config()
+        return cfg.name, cfg.name_plural
+
+    def _currency_name_for_quantity(self, quantity: Decimal) -> str:
+        singular, plural = self._currency_labels()
+        return singular if abs(quantity) == 1 else plural
+
+    def _format_signed_amount_with_currency(self, amount: Decimal) -> str:
+        sign = "-" if amount < 0 else ""
+        magnitude = abs(amount)
+        return f"{sign}{magnitude} {self._currency_name_for_quantity(magnitude)}"
+
+    def _quick_action_label(self, action: str, amount: Decimal) -> str:
+        magnitude = abs(amount)
+        return f"{action} {magnitude} {self._currency_name_for_quantity(magnitude)}"
+
     def build(self) -> rio.Component:
         mobile = self.is_mobile
 
@@ -678,20 +698,20 @@ class CurrencyTestHarness(ResponsiveComponent):
 
         quick_buy_buttons = [
             rio.Button(
-                label,
+                self._quick_action_label("Buy", amount),
                 on_press=partial(self._quick_adjust, amount, reason),
                 shape="rounded",
             )
-            for label, amount, reason in QUICK_BUY_PACKAGES
+            for amount, reason in QUICK_BUY_PACKAGES
         ]
 
         quick_spend_buttons = [
             rio.Button(
-                label,
+                self._quick_action_label("Spend", amount),
                 on_press=partial(self._quick_adjust, amount, reason),
                 shape="rounded",
             )
-            for label, amount, reason in QUICK_SPEND_PACKAGES
+            for amount, reason in QUICK_SPEND_PACKAGES
         ]
 
         quick_reset_buttons = [

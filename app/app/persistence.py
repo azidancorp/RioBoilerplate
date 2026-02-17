@@ -92,7 +92,7 @@ class Persistence:
 
     def __init__(
         self,
-        db_path: Path = Path("app", "data", "app.db"),
+        db_path: Path = Path(__file__).resolve().parent / "data" / "app.db",
         *,
         allow_username_login: bool = False,
     ) -> None:

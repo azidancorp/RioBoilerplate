@@ -54,6 +54,9 @@ class AppConfig:
     # If True, allows weak passwords with user acknowledgement.
     # If False, prohibits signups with weak passwords entirely.
     ALLOW_WEAK_PASSWORDS: bool = True
+    # Recovery codes currently use a very long TTL to behave like "backup codes"
+    # while still supporting explicit expiry checks in persistence.
+    RECOVERY_CODE_TTL_DAYS: int = 36500  # ~100 years; effectively never expires
 
     # Admin Deletion Password
     # -----------------------

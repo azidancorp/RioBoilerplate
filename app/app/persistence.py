@@ -370,14 +370,19 @@ class Persistence:
         """
         cursor = self._get_cursor()
 
+        # BREAKING CHANGE NOTE:
+        # This schema replaces per-code salts with deterministic hashes and adds
+        # `valid_until`. Existing DB files created before this change still have
+        # the old `salt` column and require manual migration/recreation.
+        # RioBoilerplate has no live production DB, so no auto-migration is added.
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS two_factor_recovery_codes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
-                code_hash BLOB NOT NULL,
-                salt BLOB NOT NULL,
+                code_hash TEXT NOT NULL,
                 created_at REAL NOT NULL,
+                valid_until REAL NOT NULL,
                 used_at REAL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
@@ -410,16 +415,11 @@ class Persistence:
         return "".join(part.strip() for part in code.upper().split("-"))
 
     @staticmethod
-    def _hash_recovery_code(code: str, salt: bytes) -> bytes:
+    def _hash_one_time_token(token: str) -> str:
         """
-        Hash a recovery code using PBKDF2 to avoid storing it in plaintext.
+        Hash a one-time token before storing or comparing it.
         """
-        return hashlib.pbkdf2_hmac(
-            "sha256",
-            code.encode("utf-8"),
-            salt,
-            100_000,
-        )
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     def generate_recovery_codes(
         self,
@@ -442,20 +442,21 @@ class Persistence:
             for _ in range(count):
                 code = self._generate_recovery_code()
                 normalized_code = self._normalize_recovery_code(code)
-                salt = secrets.token_bytes(32)
-                code_hash = self._hash_recovery_code(normalized_code, salt)
+                created_at = datetime.now(timezone.utc)
+                valid_until = created_at + timedelta(days=config.RECOVERY_CODE_TTL_DAYS)
+                code_hash = self._hash_one_time_token(normalized_code)
 
                 cursor.execute(
                     """
                     INSERT INTO two_factor_recovery_codes (
-                        user_id, code_hash, salt, created_at, used_at
+                        user_id, code_hash, created_at, valid_until, used_at
                     ) VALUES (?, ?, ?, ?, NULL)
                     """,
                     (
                         normalized_user_id,
                         code_hash,
-                        salt,
-                        datetime.now(timezone.utc).timestamp(),
+                        created_at.timestamp(),
+                        valid_until.timestamp(),
                     ),
                 )
                 new_codes.append(code)
@@ -493,19 +494,20 @@ class Persistence:
         self.conn.execute("BEGIN IMMEDIATE")
 
         try:
-            # Only fetch unused codes
+            # Only fetch unused, non-expired codes.
+            now_ts = datetime.now(timezone.utc).timestamp()
             cursor.execute(
                 """
-                SELECT id, code_hash, salt
+                SELECT id, code_hash
                 FROM two_factor_recovery_codes
-                WHERE user_id = ? AND used_at IS NULL
+                WHERE user_id = ? AND used_at IS NULL AND valid_until > ?
                 """,
-                (str(user_id),),
+                (str(user_id), now_ts),
             )
 
             rows = cursor.fetchall()
-            for code_id, stored_hash, salt in rows:
-                candidate_hash = self._hash_recovery_code(normalized_code, salt)
+            candidate_hash = self._hash_one_time_token(normalized_code)
+            for code_id, stored_hash in rows:
                 if secrets.compare_digest(stored_hash, candidate_hash):
                     # Atomic update with WHERE clause to ensure code is still unused
                     cursor.execute(

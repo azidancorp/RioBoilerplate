@@ -151,6 +151,31 @@ def load_from_html(html_path):
                     f'<style>\n{css_content}\n</style>'
                 )
     
+    # Find JSON script references (e.g. <script type="application/json" src="data.json" id="x">)
+    json_refs = re.findall(
+        r'<script\s+[^>]*type=["\']application/json["\'][^>]*src=["\'](.*?\.json)["\'][^>]*>\s*</script>',
+        html_content,
+    )
+    for json_ref in json_refs:
+        json_path = os.path.join(dir_path, json_ref)
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as json_file:
+                json_content = json_file.read()
+                # Replace src with inline content, preserving other attributes.
+                pattern = re.compile(
+                    r'(<script\s+[^>]*type=["\']application/json["\'][^>]*?)src=["\']'
+                    + re.escape(json_ref)
+                    + r'["\']([^>]*>)\s*</script>'
+                )
+                # Use a callable replacement so backslashes in JSON (e.g. \uXXXX)
+                # are inserted literally rather than interpreted as re.sub escapes.
+                html_content = pattern.sub(
+                    lambda match: (
+                        f"{match.group(1)}{match.group(2)}\n{json_content}\n</script>"
+                    ),
+                    html_content,
+                )
+
     # Find JS references
     js_refs = re.findall(r'<script.*?src=["\'](.*?\.js)["\'].*?</script>', html_content)
     for js_ref in js_refs:

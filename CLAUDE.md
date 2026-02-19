@@ -14,6 +14,7 @@ cd app && rio run --port 8XXX    # Smoke test after modifying any frontend compo
 # Verify app boots without errors within ~5 seconds
 
 pytest                           # Run tests (from root or app/ directory)
+pytest app/tests/test_smoke_pages.py -x   # Page-level smoke tests (SSR via crawler UA)
 ```
 
 ## Important Development Rules
@@ -22,7 +23,7 @@ pytest                           # Run tests (from root or app/ directory)
 - Apply `update_layout(template='plotly_dark')` to all Plotly charts
 - Never use "children" as argument in Rio components - place components directly
 - Change only what's required, nothing more
-- After modifying any Rio component, run a smoke test from the outer `app/` directory (where `rio.toml` resides) using `rio run --port 8XXX` with a 5s timeout to ensure the app boots with correct arguments
+- After modifying any Rio component, run page-level smoke tests: `pytest app/tests/test_smoke_pages.py -x`. Also run a boot check from the outer `app/` directory using `rio run --port 8XXX` with a 5s timeout to ensure the app boots with correct arguments
 - Review each component instantiation against the references in the top-level `RioDocumentation/` folder and align constructor usage exactly with what the docs specify
 - Any component calling `is_mobile()` **must** inherit from `ResponsiveComponent` (enforced by `test_responsive_inheritance.py`)
 - Add new authenticated pages to `APP_ROUTES` in `app/navigation.py` (not `permissions.py`)
@@ -124,6 +125,7 @@ Key settings (hardcoded in `config.py`, edit file directly):
 
 Secrets (set via `.env`):
 - `ADMIN_DELETION_PASSWORD` - required for user deletion operations
+- Policy: `.env` is for secrets and external service credentials only. Non-secret behavior/config toggles must be edited in `app/config.py` and should not be added to `AppConfig.from_env`.
 
 ## Security
 
@@ -148,6 +150,7 @@ Tests in `app/tests/` (both root and `app/` have `conftest.py` for `sys.path`):
 - `test_navigation.py` - navigation/permissions integration consistency
 - `test_responsive_inheritance.py` - AST-based enforcement of `ResponsiveComponent` inheritance
 - `test_two_factor_verification.py` - 2FA verification flow regression
+- `test_smoke_pages.py` - Page-level SSR smoke tests (crawler UA triggers full build pipeline)
 - `test_currency_*.py` - Currency API, persistence, and reconciliation
 
 ## Pages

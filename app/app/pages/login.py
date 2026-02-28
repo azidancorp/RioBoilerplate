@@ -70,19 +70,16 @@ class LoginForm(rio.Component):
             try:
                 user_info = await pers.get_user_by_identity(identifier=self.identifier)
             except KeyError:
-                self.error_message = "Invalid email. Please try again or create a new account."
+                self.error_message = "Invalid email or password. Please try again."
                 return
 
             if user_info.auth_provider != "password":
-                provider_name = user_info.auth_provider.title()
-                self.error_message = (
-                    f"This account is configured for {provider_name} sign-in. Please continue with that provider."
-                )
+                self.error_message = "Invalid email or password. Please try again."
                 return
 
             # Make sure their password matches
             if not user_info.verify_password(self.password):
-                self.error_message = "Invalid password. Please try again or create a new account."
+                self.error_message = "Invalid email or password. Please try again."
                 return
 
             # Check if 2FA is enabled for this user
@@ -534,24 +531,25 @@ class ResetPasswordForm(rio.Component):
 
         pers = self.session[Persistence]
 
+        _generic_reset_msg = (
+            "If an account exists with that email, we've sent a reset code. "
+            "Check your inbox and enter it below with your new password."
+        )
+
         try:
             user_info = await pers.get_user_by_identity(identifier=sanitized_email)
         except KeyError:
-            self._set_banner("danger", "No account found with that email address. Please try again.")
+            self._set_banner("success", _generic_reset_msg)
             return
 
         if user_info.auth_provider != "password":
-            provider_name = user_info.auth_provider.title()
-            self._set_banner(
-                "danger",
-                f"This account is configured for {provider_name} sign-in. Please continue with that provider.",
-            )
+            self._set_banner("success", _generic_reset_msg)
             return
 
         try:
             reset_code = await pers.create_reset_code(user_info.id)
         except Exception:
-            self._set_banner("danger", "We were unable to create a reset code. Please try again.")
+            self._set_banner("danger", "Something went wrong. Please try again.")
             return
 
         email_body = (
@@ -567,12 +565,11 @@ class ResetPasswordForm(rio.Component):
                 subject="Your Rio password reset code",
                 body=email_body,
             )
-        except HTTPException as exc:
-            detail = getattr(exc, "detail", "Failed to send reset email.")
-            self._set_banner("danger", str(detail))
+        except HTTPException:
+            self._set_banner("danger", "Something went wrong. Please try again.")
             return
         except Exception:
-            self._set_banner("danger", "Failed to send reset email. Please try again.")
+            self._set_banner("danger", "Something went wrong. Please try again.")
             return
 
         self.email = sanitized_email
@@ -582,10 +579,7 @@ class ResetPasswordForm(rio.Component):
         self.new_password = ""
         self.confirm_password = ""
         self.verification_code = ""
-        self._set_banner(
-            "success",
-            "We've emailed a reset code. Enter it below along with your new password.",
-        )
+        self._set_banner("success", _generic_reset_msg)
 
     async def _update_password(self) -> None:
         """

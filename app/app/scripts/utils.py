@@ -1,5 +1,40 @@
+import os
 import re
 import rio
+
+
+def load_markdown(filename: str) -> str:
+    """
+    Load a Markdown file from the project root directory.
+
+    Args:
+        filename: Name of the Markdown file (e.g., "PrivacyPolicy.md")
+
+    Returns:
+        The content of the Markdown file, or an error message if not found.
+    """
+    # Reject path separators and traversal sequences to prevent reading
+    # arbitrary files outside the project root.
+    if os.sep in filename or "/" in filename or "\\" in filename:
+        return "# Content Unavailable\n\nInvalid filename."
+
+    # Get the project root directory
+    # This file is at app/app/scripts/utils.py, so go up 3 levels
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+
+    md_path = os.path.join(project_root, filename)
+
+    # Resolve symlinks and verify the path stays within the project root.
+    resolved = os.path.realpath(md_path)
+    if not resolved.startswith(os.path.realpath(project_root) + os.sep):
+        return "# Content Unavailable\n\nInvalid filename."
+
+    try:
+        with open(resolved, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return f"# Content Unavailable\n\nThe requested page could not be found."
 
 def get_password_strength(password: str) -> int:
     """

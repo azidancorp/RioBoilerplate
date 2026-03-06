@@ -43,8 +43,9 @@ For detailed merge instructions and conflict resolution, see `UPSTREAM_MERGE_GUI
 1. Set up the boilerplate using Option A or B above.
 2. Create and activate a virtual environment: `python -m venv venv` then `source venv/bin/activate` (or `venv\Scripts\activate` on Windows).
 3. Install dependencies: `pip install -r requirements.txt`.
-4. Copy `.env.example` to `.env` and set secrets such as `ADMIN_DELETION_PASSWORD`. Configure optional currency overrides (e.g. `RIO_PRIMARY_CURRENCY_NAME=credits`, `RIO_PRIMARY_CURRENCY_DECIMAL_PLACES=2`).
+4. Copy `.env.example` to `.env` and set secrets such as `ADMIN_DELETION_PASSWORD`.
 5. Run the app from `app/`: `rio run`. The first registered user is promoted to the `root` role.
+6. On first run, the app creates a local SQLite database at `app/app/data/app.db`. This file is ignored by git and should remain a local runtime artifact.
 
 Access the dev server at `http://localhost:8000`. Use `rio run --port 8000 --release` to mirror production settings.
 
@@ -53,14 +54,9 @@ Access the dev server at `http://localhost:8000`. Use `rio run --port 8000 --rel
 - `rio run --port 8000 --release` – release-mode smoke test.
 
 ## Configuration
-- Environment variables live in `.env`. Common toggles: `ADMIN_DELETION_PASSWORD`, `REQUIRE_VALID_EMAIL`, `ALLOW_USERNAME_LOGIN`, `PRIMARY_IDENTIFIER`.
-- Currency controls:
-  - `RIO_PRIMARY_CURRENCY_NAME` / `_PLURAL` – label used across UI/API (defaults to `credit/credits`).
-  - `RIO_PRIMARY_CURRENCY_SYMBOL` – optional symbol prefix (e.g. `$`).
-  - `RIO_PRIMARY_CURRENCY_DECIMAL_PLACES` – stored precision (0 = whole units).
-  - `RIO_PRIMARY_CURRENCY_INITIAL_BALANCE` – starting balance for brand new users.
-  - `RIO_PRIMARY_CURRENCY_ALLOW_NEGATIVE` – defaults to `false`; set to `true` only if overdrafts are acceptable.
-- Runtime defaults live in `app/app/config.py`; adjust there for build-time overrides.
+- `.env` is for secrets only. In the stock boilerplate, the main secret is `ADMIN_DELETION_PASSWORD`.
+- Non-secret behavior stays code-configured in `app/app/config.py`. Edit that file directly for app-specific defaults such as email validation, username login, password policy, and currency naming/precision.
+- The runtime SQLite database file `app/app/data/app.db` is created locally on first run and is ignored by git.
 
 ## Currency System
 - SQLite schema stores a single minor-unit balance per user plus an audited `user_currency_ledger`.
@@ -80,7 +76,7 @@ RioBoilerplate/
 │       ├── api/               # FastAPI routers (profiles, examples)
 │       ├── assets/            # Static assets
 │       ├── components/        # Reusable Rio UI widgets
-│       ├── data/              # SQLite database and dummy data
+│       ├── data/              # Runtime SQLite DB (local/ignored) and sample data
 │       ├── pages/             # Public pages
 │       │   └── app_page/      # Protected app pages
 │       ├── scripts/           # Utilities and MFA helper scripts

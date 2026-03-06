@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
@@ -23,6 +24,13 @@ async def on_app_start(app: rio.App) -> None:
     # Create a persistence instance. This class hides the gritty details of
     # database interaction from the app.
     pers = Persistence(allow_username_login=config.ALLOW_USERNAME_LOGIN)
+
+    if pers.get_user_count() == 0:
+        print(
+            "WARNING: No users are registered yet. The first account created "
+            "will be granted the 'root' role.",
+            file=sys.stderr,
+        )
 
     # Now attach it to the session. This way, the persistence instance is
     # available to all components using `self.session[persistence.Persistence]`

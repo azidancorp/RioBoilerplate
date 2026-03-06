@@ -182,7 +182,7 @@ venv/                         100%  50MB     8.2MB/s   00:06
 - **No such file or directory**: Verify local path and create target directory if needed
 - **Connection timeout**: Check network connection and SSH configuration
 
-## Step 3.5: Configure Environment & Migrate Database
+## Step 3.5: Configure Environment
 
 ```bash
 # From the application directory
@@ -198,8 +198,7 @@ ADMIN_DELETION_PASSWORD="<strong admin password>"
 ```
 
 > **Note:** Other configuration settings (email validation, currency names, password policy) are hardcoded in `app/app/config.py`. Edit that file directly to customize behavior.
-
-> **Note:** The bundled schema expects a fresh database. If you are upgrading an existing installation, export your data and migrate manually before redeploying.
+> **Note:** The SQLite database file is created locally on first run at `app/app/data/app.db` and is not intended to be committed.
 
 ## Step 4: Test Application
 

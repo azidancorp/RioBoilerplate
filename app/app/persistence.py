@@ -369,12 +369,32 @@ class Persistence:
         Create the 'two_factor_recovery_codes' table to store hashed backup codes.
         """
         cursor = self._get_cursor()
+        cursor.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'two_factor_recovery_codes'
+            """
+        )
+        if cursor.fetchone():
+            cursor.execute("PRAGMA table_info(two_factor_recovery_codes)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+            expected_columns = {
+                "id",
+                "user_id",
+                "code_hash",
+                "created_at",
+                "valid_until",
+                "used_at",
+            }
 
-        # BREAKING CHANGE NOTE:
-        # This schema replaces per-code salts with deterministic hashes and adds
-        # `valid_until`. Existing DB files created before this change still have
-        # the old `salt` column and require manual migration/recreation.
-        # RioBoilerplate has no live production DB, so no auto-migration is added.
+            # The boilerplate treats recovery codes as disposable bootstrap data.
+            # If an old salt-based table is present, reset it in place so the app
+            # always starts with the current clean-slate schema.
+            if "salt" in existing_columns or not expected_columns.issubset(existing_columns):
+                cursor.execute("DROP TABLE two_factor_recovery_codes")
+                self.conn.commit()
+
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS two_factor_recovery_codes (
@@ -595,6 +615,17 @@ class Persistence:
             "remaining": remaining,
             "last_generated": last_generated,
         }
+
+    def get_user_count(self) -> int:
+        """
+        Return the total number of registered users.
+
+        This is primarily used during app startup to determine whether the
+        instance is still in its bootstrap state.
+        """
+        cursor = self._get_cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        return int(cursor.fetchone()[0])
 
     async def create_user(self, user: AppUser) -> None:
         """

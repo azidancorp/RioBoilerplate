@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 import time
 from pathlib import Path
 
@@ -124,3 +125,55 @@ def test_delete_user_requires_two_factor_when_enabled(temp_db: Persistence):
 
     asyncio.run(scenario())
 
+
+def test_legacy_recovery_code_table_is_reset_to_current_schema(tmp_path: Path):
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                username TEXT,
+                created_at REAL NOT NULL,
+                password_hash BLOB,
+                password_salt BLOB,
+                auth_provider TEXT NOT NULL DEFAULT 'password',
+                auth_provider_id TEXT,
+                role TEXT NOT NULL,
+                is_verified BOOLEAN NOT NULL DEFAULT 0,
+                two_factor_secret TEXT,
+                referral_code TEXT DEFAULT '',
+                email_notifications_enabled BOOLEAN NOT NULL DEFAULT 1,
+                sms_notifications_enabled BOOLEAN NOT NULL DEFAULT 0,
+                primary_currency_balance INTEGER NOT NULL DEFAULT 0,
+                primary_currency_updated_at REAL NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE two_factor_recovery_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                code_hash BLOB NOT NULL,
+                salt BLOB NOT NULL,
+                created_at REAL NOT NULL,
+                used_at REAL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    persistence = Persistence(db_path=db_path)
+    try:
+        cursor = persistence._get_cursor()
+        cursor.execute("PRAGMA table_info(two_factor_recovery_codes)")
+        columns = {row[1] for row in cursor.fetchall()}
+        assert "salt" not in columns
+        assert {"code_hash", "valid_until", "used_at"}.issubset(columns)
+    finally:
+        persistence.close()

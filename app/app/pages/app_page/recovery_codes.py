@@ -6,7 +6,8 @@ import rio
 from app.components.center_component import CenterComponent
 from app.components.responsive import WIDTH_COMFORTABLE
 from app.data_models import UserSession
-from app.persistence import Persistence, TwoFactorFailure
+from app.persistence import Persistence
+from app.persistence_auth import TwoFactorFailure
 
 
 @rio.page(

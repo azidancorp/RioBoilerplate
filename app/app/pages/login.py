@@ -5,7 +5,8 @@ import typing as t
 import rio
 from fastapi import HTTPException
 
-from app.persistence import Persistence, TwoFactorFailure
+from app.persistence import Persistence
+from app.persistence_auth import TwoFactorFailure
 from app.data_models import AppUser, UserSettings, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
 from app.components.responsive import WIDTH_NARROW

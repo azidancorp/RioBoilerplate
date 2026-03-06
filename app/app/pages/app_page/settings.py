@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import timezone
 
 import rio
-from app.persistence import Persistence, TwoFactorFailure
+from app.persistence import Persistence
+from app.persistence_auth import TwoFactorFailure
 from app.data_models import AppUser, UserSession, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
 from app.components.currency_summary import CurrencySummary, CurrencyOverview as CurrencySnapshot

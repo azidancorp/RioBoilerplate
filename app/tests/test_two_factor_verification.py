@@ -7,7 +7,8 @@ import pyotp
 import pytest
 
 from app.data_models import AppUser
-from app.persistence import Persistence, TwoFactorFailure, TwoFactorMethod
+from app.persistence import Persistence
+from app.persistence_auth import TwoFactorFailure, TwoFactorMethod
 
 
 @pytest.fixture

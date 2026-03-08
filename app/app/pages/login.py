@@ -15,7 +15,10 @@ from app.scripts.utils import (
     get_password_strength_color,
     get_password_strength_status,
 )
-from app.scripts.message_utils import send_email
+from app.scripts.message_utils import (
+    send_email_verification_email,
+    send_password_reset_email,
+)
 from app.validation import SecuritySanitizer
 from app.config import config
 
@@ -51,6 +54,8 @@ class LoginForm(rio.Component):
     password: str = ""
     verification_code: str = ""
     error_message: str = ""
+    banner_style: str = "danger"
+    pending_verification_email: str = ""
 
     _currently_logging_in: bool = False
 
@@ -71,16 +76,30 @@ class LoginForm(rio.Component):
             try:
                 user_info = await pers.get_user_by_identity(identifier=self.identifier)
             except KeyError:
+                self.pending_verification_email = ""
+                self.banner_style = "danger"
                 self.error_message = "Invalid email or password. Please try again."
                 return
 
             if user_info.auth_provider != "password":
+                self.pending_verification_email = ""
+                self.banner_style = "danger"
                 self.error_message = "Invalid email or password. Please try again."
                 return
 
             # Make sure their password matches
             if not user_info.verify_password(self.password):
+                self.pending_verification_email = ""
+                self.banner_style = "danger"
                 self.error_message = "Invalid email or password. Please try again."
+                return
+
+            if config.REQUIRE_EMAIL_VERIFICATION and not user_info.is_verified:
+                self.pending_verification_email = user_info.email
+                self.banner_style = "danger"
+                self.error_message = (
+                    "Please verify your email address before logging in. Use the resend button below if needed."
+                )
                 return
 
             # Check if 2FA is enabled for this user
@@ -88,19 +107,14 @@ class LoginForm(rio.Component):
             if user_info.two_factor_enabled:
                 result = pers.verify_two_factor_challenge(user_info.id, self.verification_code)
                 if not result.ok:
-                    if result.failure == TwoFactorFailure.INVALID_FORMAT:
-                        self.error_message = result.failure_detail or "Invalid authentication code."
-                        return
-                    if result.failure == TwoFactorFailure.MISSING_CODE:
-                        self.error_message = (
-                            "2FA is enabled for this account. Please enter your verification or recovery code."
-                        )
-                        return
-                    self.error_message = "Invalid verification or recovery code. Please try again."
+                    self.banner_style = "danger"
+                    self.error_message = result.get_error_message()
                     return
                 recovery_code_used = result.used_recovery_code
 
             # The login was successful
+            self.pending_verification_email = ""
+            self.banner_style = "danger"
             self.error_message = ""
 
             # Create and store a session
@@ -125,6 +139,55 @@ class LoginForm(rio.Component):
         finally:
             self._currently_logging_in = False
 
+    async def resend_verification_email(self, _=None) -> None:
+        """
+        Resend verification email for an account that is not yet verified.
+        """
+        target_identifier = (self.pending_verification_email or self.identifier).strip()
+        if not target_identifier:
+            self.banner_style = "danger"
+            self.error_message = "Enter your email first to resend verification."
+            return
+
+        _generic_verify_msg = (
+            "If an account exists with that email, a verification email has been sent."
+        )
+
+        pers = self.session[Persistence]
+        try:
+            user_info = await pers.get_user_by_identity(identifier=target_identifier)
+        except KeyError:
+            self.banner_style = "success"
+            self.error_message = _generic_verify_msg
+            return
+
+        if user_info.is_verified:
+            # Don't reveal verification status — use the same generic message.
+            self.banner_style = "success"
+            self.error_message = _generic_verify_msg
+            return
+
+        try:
+            token = await pers.create_email_verification_token(user_info.id)
+        except Exception:
+            self.banner_style = "success"
+            self.error_message = _generic_verify_msg
+            return
+
+        try:
+            send_email_verification_email(
+                recipient=user_info.email,
+                token=token.token,
+                valid_until=token.valid_until,
+            )
+        except Exception:
+            self.banner_style = "success"
+            self.error_message = _generic_verify_msg
+            return
+
+        self.banner_style = "success"
+        self.error_message = _generic_verify_msg
+
     def on_sign_up_button_pressed(self):
         """
         Handle sign-up button press: request the parent to show the SignUp form.
@@ -145,7 +208,7 @@ class LoginForm(rio.Component):
                 rio.Text("Login", style="heading1", justify="center"),
                 rio.Banner(
                     text=self.error_message,
-                    style="danger",
+                    style=self.banner_style,
                     margin_top=1,
                 ),
                 rio.TextInput(
@@ -180,6 +243,17 @@ class LoginForm(rio.Component):
                         "Reset Password",
                         on_press=self.on_reset_password_button_pressed,
                         shape='rounded',
+                    ),
+                    *(
+                        [
+                            rio.Button(
+                                "Resend Verification Email",
+                                on_press=self.resend_verification_email,
+                                shape='rounded',
+                            )
+                        ]
+                        if config.REQUIRE_EMAIL_VERIFICATION
+                        else []
                     ),
                     row_spacing=1,
                     column_spacing=1,
@@ -280,9 +354,7 @@ class SignUpForm(rio.Component):
             self.passwords_valid = True
             return
         except KeyError:
-            # Good news, we can create the user
-            self.banner_style = "success"
-            self.error_message = "Congratulations! You have successfully signed up. Please log in."
+            # Good news, we can create the user.
             pass
 
         # Create a new user
@@ -294,6 +366,48 @@ class SignUpForm(rio.Component):
 
         # Store the user in the database
         await pers.create_user(user_info)
+
+        if config.REQUIRE_EMAIL_VERIFICATION:
+            try:
+                token = await pers.create_email_verification_token(user_info.id)
+            except Exception:
+                self.banner_style = "danger"
+                self.error_message = (
+                    "Account created, but verification email could not be sent: "
+                    "We could not create a verification email at this time. Please try again."
+                )
+                return
+
+            try:
+                send_email_verification_email(
+                    recipient=user_info.email,
+                    token=token.token,
+                    valid_until=token.valid_until,
+                )
+            except HTTPException as exc:
+                detail = getattr(exc, "detail", "Failed to send verification email.")
+                self.banner_style = "danger"
+                self.error_message = (
+                    f"Account created, but verification email could not be sent: {detail}"
+                )
+                return
+            except Exception:
+                self.banner_style = "danger"
+                self.error_message = (
+                    "Account created, but verification email could not be sent: "
+                    "Failed to send verification email. Please try again."
+                )
+                return
+
+            self.banner_style = "success"
+            self.error_message = (
+                "Account created. We sent you a verification email. "
+                "Please verify before logging in."
+            )
+            return
+
+        self.banner_style = "success"
+        self.error_message = "Congratulations! You have successfully signed up. Please log in."
 
     def on_cancel(self) -> None:
         """
@@ -460,11 +574,11 @@ class SignUpForm(rio.Component):
 
 class ResetPasswordForm(rio.Component):
     """
-    Provides an interface for resetting the user's password with a one-time code.
+    Provides an interface for resetting the user's password with a one-time token.
     """
 
     email: str = ""
-    reset_code: str = ""
+    reset_token: str = ""
     new_password: str = ""
     confirm_password: str = ""
     verification_code: str = ""
@@ -476,9 +590,26 @@ class ResetPasswordForm(rio.Component):
     password_strength: int = 0
     do_passwords_match: bool = False
     acknowledge_weak_password: bool = False
+    prefilled_email: str = ""
+    prefilled_reset_token: str = ""
+    prefilled_message: str = ""
+    prefilled_message_style: str = "success"
 
     # We'll expose an event so that the parent page can toggle forms
     on_toggle_form: t.Callable[[str], None] | None = None
+
+    @rio.event.on_populate
+    def on_populate(self) -> None:
+        if self.prefilled_email and not self.email:
+            self.email = self.prefilled_email
+
+        if self.prefilled_reset_token:
+            self.code_sent = True
+            self.reset_token = self.prefilled_reset_token
+
+        if self.prefilled_message:
+            self.banner_style = self.prefilled_message_style
+            self.error_message = self.prefilled_message
 
     def _set_banner(self, style: str, message: str) -> None:
         self.banner_style = style
@@ -498,14 +629,14 @@ class ResetPasswordForm(rio.Component):
             if self.code_sent:
                 await self._update_password()
             else:
-                await self._send_reset_code()
+                await self._send_reset_token()
         finally:
             self._is_processing = False
             self.force_refresh()
 
     async def on_resend_code(self, _=None) -> None:
         """
-        Allow the user to regenerate a reset code if the previous one expired.
+        Allow the user to regenerate a reset token if the previous one expired.
         """
         if self._is_processing:
             return
@@ -514,14 +645,14 @@ class ResetPasswordForm(rio.Component):
         self.force_refresh()
 
         try:
-            await self._send_reset_code()
+            await self._send_reset_token()
         finally:
             self._is_processing = False
             self.force_refresh()
 
-    async def _send_reset_code(self) -> None:
+    async def _send_reset_token(self) -> None:
         """
-        Generate a reset code, persist it, and send it via email.
+        Generate a reset token, persist it, and send it via email.
         """
         try:
             sanitized_email = SecuritySanitizer.validate_email_format(self.email)
@@ -533,38 +664,33 @@ class ResetPasswordForm(rio.Component):
         pers = self.session[Persistence]
 
         _generic_reset_msg = (
-            "If an account exists with that email, we've sent a reset code. "
-            "Check your inbox and enter it below with your new password."
+            "If an account exists with that email, we've sent a reset link. "
+            "Check your inbox and enter the token below with your new password."
         )
 
         try:
             user_info = await pers.get_user_by_identity(identifier=sanitized_email)
         except KeyError:
+            # Don't reveal whether the account exists
             self._set_banner("success", _generic_reset_msg)
             return
 
         if user_info.auth_provider != "password":
+            # Don't reveal auth provider details
             self._set_banner("success", _generic_reset_msg)
             return
 
         try:
-            reset_code = await pers.create_reset_code(user_info.id)
+            reset_token = await pers.create_reset_token(user_info.id)
         except Exception:
             self._set_banner("danger", "Something went wrong. Please try again.")
             return
 
-        email_body = (
-            "Hi,\n\n"
-            f"Your password reset code is {reset_code.code}. Enter this code in the Rio app to choose a new password.\n\n"
-            f"This code expires on {reset_code.valid_until.strftime('%Y-%m-%d %H:%M %Z')}.\n\n"
-            "If you did not request this code, you can ignore this email."
-        )
-
         try:
-            send_email(
+            send_password_reset_email(
                 recipient=sanitized_email,
-                subject="Your Rio password reset code",
-                body=email_body,
+                token=reset_token.token,
+                valid_until=reset_token.valid_until,
             )
         except HTTPException:
             self._set_banner("danger", "Something went wrong. Please try again.")
@@ -576,7 +702,7 @@ class ResetPasswordForm(rio.Component):
         self.email = sanitized_email
         self.require_two_factor = bool(user_info.two_factor_secret)
         self.code_sent = True
-        self.reset_code = ""
+        self.reset_token = ""
         self.new_password = ""
         self.confirm_password = ""
         self.verification_code = ""
@@ -584,7 +710,7 @@ class ResetPasswordForm(rio.Component):
 
     async def _update_password(self) -> None:
         """
-        Validate the reset code and update the user's password.
+        Validate the reset token and update the user's password.
         """
         try:
             sanitized_email = SecuritySanitizer.validate_email_format(self.email)
@@ -594,14 +720,14 @@ class ResetPasswordForm(rio.Component):
             return
 
         try:
-            sanitized_code = SecuritySanitizer.sanitize_auth_code(self.reset_code, max_length=12)
+            sanitized_token = SecuritySanitizer.sanitize_auth_code(self.reset_token, max_length=96)
         except HTTPException as exc:
-            detail = getattr(exc, "detail", "Invalid reset code.")
+            detail = getattr(exc, "detail", "Invalid reset token.")
             self._set_banner("danger", str(detail))
             return
 
-        if not sanitized_code:
-            self._set_banner("danger", "Please enter the reset code that was emailed to you.")
+        if not sanitized_token:
+            self._set_banner("danger", "Please enter the reset token that was emailed to you.")
             return
 
         if not self.new_password:
@@ -623,13 +749,13 @@ class ResetPasswordForm(rio.Component):
         pers = self.session[Persistence]
 
         try:
-            user = await pers.get_user_by_reset_code(sanitized_code)
+            user = await pers.get_user_by_reset_token(sanitized_token)
         except KeyError:
-            self._set_banner("danger", "Invalid or expired reset code. Please request a new one.")
+            self._set_banner("danger", "Invalid or expired reset token. Please request a new one.")
             return
 
         if user.email.lower() != sanitized_email:
-            self._set_banner("danger", "Reset code does not match this email address.")
+            self._set_banner("danger", "Reset token does not match this email address.")
             return
 
         self.require_two_factor = bool(user.two_factor_secret)
@@ -637,33 +763,18 @@ class ResetPasswordForm(rio.Component):
         if user.two_factor_secret:
             result = pers.verify_two_factor_challenge(user.id, self.verification_code)
             if not result.ok:
-                if result.failure == TwoFactorFailure.INVALID_FORMAT:
-                    self._set_banner(
-                        "danger",
-                        result.failure_detail or "Invalid verification code.",
-                    )
-                    return
-                if result.failure == TwoFactorFailure.MISSING_CODE:
-                    self._set_banner(
-                        "danger",
-                        "2FA is enabled for this account. Please enter your verification or recovery code.",
-                    )
-                    return
-                self._set_banner(
-                    "danger",
-                    "Invalid verification or recovery code.",
-                )
+                self._set_banner("danger", result.get_error_message())
                 return
 
-        consumed = await pers.consume_reset_code(sanitized_code, user.id)
+        consumed = await pers.consume_reset_token(sanitized_token, user.id)
         if not consumed:
-            self._set_banner("danger", "Reset code has already been used. Please request a new one.")
+            self._set_banner("danger", "Reset token has already been used. Please request a new one.")
             return
 
         try:
             await pers.update_password(user.id, self.new_password)
         except Exception:
-            self._set_banner("danger", "Failed to update password. Please request a new code and try again.")
+            self._set_banner("danger", "Failed to update password. Please request a new token and try again.")
             return
 
         self._set_banner(
@@ -672,7 +783,7 @@ class ResetPasswordForm(rio.Component):
         )
         self.code_sent = False
         self.require_two_factor = False
-        self.reset_code = ""
+        self.reset_token = ""
         self.new_password = ""
         self.confirm_password = ""
         self.verification_code = ""
@@ -703,7 +814,7 @@ class ResetPasswordForm(rio.Component):
         )
 
     def build(self) -> rio.Component:
-        primary_label = "Update Password" if self.code_sent else "Send Reset Code"
+        primary_label = "Update Password" if self.code_sent else "Send Reset Link"
         strength = get_password_strength(self.new_password) if self.code_sent else 0
 
         additional_inputs: list[rio.Component] = []
@@ -726,8 +837,8 @@ class ResetPasswordForm(rio.Component):
                         on_confirm=self.on_primary_action,
                     ),
                     rio.TextInput(
-                        text=self.bind().reset_code,
-                        label="Email reset code",
+                        text=self.bind().reset_token,
+                        label="Email reset token",
                         on_confirm=self.on_primary_action,
                     ),
                 ]
@@ -788,7 +899,7 @@ class ResetPasswordForm(rio.Component):
         if self.code_sent:
             buttons.append(
                 rio.Button(
-                    "Resend Code",
+                    "Resend Link",
                     on_press=self.on_resend_code,
                     is_loading=self._is_processing,
                     shape='rounded',
@@ -846,12 +957,92 @@ class LoginPage(rio.Component):
     """
 
     current_form: str = "login"  # Could be 'login', 'signup', or 'reset'
+    page_message: str = ""
+    page_message_style: str = "success"
+    reset_prefilled_email: str = ""
+    reset_prefilled_token: str = ""
+    reset_prefilled_message: str = ""
+    reset_prefilled_message_style: str = "success"
+
+    def _set_page_message(self, style: str, message: str) -> None:
+        self.page_message_style = style
+        self.page_message = message
+
+    @rio.event.on_populate
+    async def on_populate(self) -> None:
+        query = self.session.active_page_url.query
+
+        verify_token_raw = str(query.get("verify_token", "")).strip()
+        reset_token_raw = str(query.get("reset_token", "")).strip()
+        reset_email_raw = str(query.get("email", "")).strip()
+
+        if verify_token_raw:
+            try:
+                verify_token = SecuritySanitizer.sanitize_auth_code(verify_token_raw, max_length=96)
+            except HTTPException:
+                verify_token = None
+
+            if not verify_token:
+                self.current_form = "login"
+                self._set_page_message("danger", "Verification link is invalid. Please request a new email.")
+                self.force_refresh()
+                return
+
+            persistence = self.session[Persistence]
+            try:
+                await persistence.consume_email_verification_token(verify_token)
+            except KeyError:
+                self.current_form = "login"
+                self._set_page_message(
+                    "danger",
+                    "Verification link is invalid or expired. Use 'Resend Verification Email' on login.",
+                )
+                self.force_refresh()
+                return
+
+            self.current_form = "login"
+            self._set_page_message("success", "Email verified successfully. You can now log in.")
+            self.force_refresh()
+            return
+
+        if reset_token_raw:
+            try:
+                reset_token = SecuritySanitizer.sanitize_auth_code(reset_token_raw, max_length=96)
+            except HTTPException:
+                reset_token = None
+
+            if not reset_token:
+                self.current_form = "reset"
+                self._set_page_message("danger", "Reset link is invalid. Request a new password reset email.")
+                self.force_refresh()
+                return
+
+            sanitized_email = ""
+            if reset_email_raw:
+                try:
+                    sanitized_email = SecuritySanitizer.validate_email_format(reset_email_raw)
+                except HTTPException:
+                    sanitized_email = ""
+
+            self.current_form = "reset"
+            self.reset_prefilled_token = reset_token
+            self.reset_prefilled_email = sanitized_email
+            self.reset_prefilled_message = "Reset link received. Enter your new password below."
+            self.reset_prefilled_message_style = "success"
+            self._set_page_message("", "")
+            self.force_refresh()
+            return
 
     def set_form(self, form_name: str):
         """
         Called by child forms to switch between login / signup / reset forms.
         """
         self.current_form = form_name
+        if form_name != "reset":
+            self.reset_prefilled_email = ""
+            self.reset_prefilled_token = ""
+            self.reset_prefilled_message = ""
+            self.reset_prefilled_message_style = "success"
         self.force_refresh()
 
     def build(self) -> rio.Component:
@@ -861,15 +1052,32 @@ class LoginPage(rio.Component):
         elif self.current_form == "signup":
             form_to_show = SignUpForm(on_toggle_form=self.set_form)
         elif self.current_form == "reset":
-            form_to_show = ResetPasswordForm(on_toggle_form=self.set_form)
+            form_to_show = ResetPasswordForm(
+                on_toggle_form=self.set_form,
+                prefilled_email=self.reset_prefilled_email,
+                prefilled_reset_token=self.reset_prefilled_token,
+                prefilled_message=self.reset_prefilled_message,
+                prefilled_message_style=self.reset_prefilled_message_style,
+            )
         else:
             # Fallback to login if something weird happens
             form_to_show = LoginForm(on_toggle_form=self.set_form)
 
+        content_children: list[rio.Component] = []
+        if self.page_message:
+            content_children.append(
+                rio.Banner(
+                    text=self.page_message,
+                    style=self.page_message_style,
+                )
+            )
+        content_children.append(form_to_show)
+
         return CenterComponent(
-            # Show the chosen form
-            form_to_show,
+            rio.Column(
+                *content_children,
+                spacing=1,
+            ),
             width_percent=WIDTH_NARROW,
-            # height_percent=40,
             margin_top=10
         )

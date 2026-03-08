@@ -19,6 +19,11 @@ class AppConfig:
     authentication, validation, and other core features.
     """
 
+    # Public App URL
+    # --------------
+    # Used when generating password-reset and email-verification links.
+    APP_URL: str = "http://localhost:8000"
+
     # Email Validation Settings
     # -------------------------
     # If True, enforces strict email validation during signup and profile updates.
@@ -47,6 +52,12 @@ class AppConfig:
     PRIMARY_CURRENCY_DECIMAL_PLACES: int = 0
     PRIMARY_CURRENCY_INITIAL_BALANCE: int = 0
     PRIMARY_CURRENCY_ALLOW_NEGATIVE: bool = False
+
+    # Email Verification / Password Reset
+    # -----------------------------------
+    REQUIRE_EMAIL_VERIFICATION: bool = False
+    EMAIL_VERIFICATION_TOKEN_TTL_MINUTES: int = 1440  # 24 hours
+    PASSWORD_RESET_TOKEN_TTL_MINUTES: int = 30
 
     # Password Policy
     # ---------------
@@ -85,3 +96,6 @@ config = AppConfig.from_env()
 
 if not config.ADMIN_DELETION_PASSWORD:
     print("WARNING: ADMIN_DELETION_PASSWORD is not set. User deletion operations will be unavailable.", file=sys.stderr)
+
+if "localhost" in config.APP_URL or "127.0.0.1" in config.APP_URL:
+    print("WARNING: APP_URL is set to a localhost address. Password-reset and email-verification links will not work in production. Update APP_URL in config.py before deploying.", file=sys.stderr)

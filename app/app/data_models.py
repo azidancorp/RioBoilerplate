@@ -166,36 +166,33 @@ class AppUser:
 
 
 @dataclass
-class PasswordResetCode:
+class ExpirableVerificationToken:
     """
-    Model for password reset codes. These are temporary codes that allow users
-    to reset their password.
+    Shared one-time token model for password-reset and email-verification flows.
     """
 
-    code: str
+    token: str
     user_id: uuid.UUID
     created_at: datetime
     valid_until: datetime
 
     @classmethod
-    def create_new_reset_code(cls, user_id: uuid.UUID) -> PasswordResetCode:
-        """
-        Create a new reset code for a user that is valid for 24 hours.
-
-        Reset codes are short-lived numeric tokens intended for one-time use.
-        """
+    def create(
+        cls,
+        user_id: uuid.UUID,
+        valid_for: timedelta,
+    ) -> ExpirableVerificationToken:
         now = datetime.now(timezone.utc)
-        numeric_code = f"{secrets.randbelow(1_000_000):06d}"
         return cls(
-            code=numeric_code,
+            token=uuid.uuid4().hex.upper(),
             user_id=user_id,
             created_at=now,
-            valid_until=now + timedelta(hours=24)
+            valid_until=now + valid_for,
         )
 
     @property
     def is_valid(self) -> bool:
-        """Whether this reset code is still valid."""
+        """Whether this token is still valid."""
         return datetime.now(timezone.utc) < self.valid_until
 
 

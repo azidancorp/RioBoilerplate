@@ -8,7 +8,7 @@ from pathlib import Path
 from app.data_models import (
     AppUser,
     UserSession,
-    PasswordResetCode,
+    ExpirableVerificationToken,
     CurrencyLedgerEntry,
 )
 from app.validation import SecuritySanitizer
@@ -63,6 +63,10 @@ class Persistence:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+    @staticmethod
+    def _hash_one_time_token(token: str) -> str:
+        return persistence_auth._hash_one_time_token(token)
 
     def _append_currency_ledger_entry(
         self,
@@ -315,17 +319,29 @@ class Persistence:
             sms_notifications_enabled=sms_notifications_enabled,
         )
 
-    async def create_reset_code(self, user_id: uuid.UUID) -> PasswordResetCode:
-        return await persistence_auth.create_reset_code(self, user_id)
+    async def create_reset_token(self, user_id: uuid.UUID) -> ExpirableVerificationToken:
+        return await persistence_auth.create_reset_token(self, user_id)
 
-    async def get_user_by_reset_code(self, code: str) -> AppUser:
-        return await persistence_auth.get_user_by_reset_code(self, code)
+    async def get_user_by_reset_token(self, token: str) -> AppUser:
+        return await persistence_auth.get_user_by_reset_token(self, token)
 
-    async def consume_reset_code(self, code: str, user_id: uuid.UUID) -> bool:
-        return await persistence_auth.consume_reset_code(self, code, user_id)
+    async def consume_reset_token(self, token: str, user_id: uuid.UUID) -> bool:
+        return await persistence_auth.consume_reset_token(self, token, user_id)
 
-    async def clear_reset_code(self, user_id: uuid.UUID) -> None:
-        await persistence_auth.clear_reset_code(self, user_id)
+    async def clear_reset_tokens(self, user_id: uuid.UUID) -> None:
+        await persistence_auth.clear_reset_tokens(self, user_id)
+
+    async def set_user_verified(self, user_id: uuid.UUID, is_verified: bool = True) -> None:
+        await persistence_auth.set_user_verified(self, user_id, is_verified)
+
+    async def create_email_verification_token(self, user_id: uuid.UUID) -> ExpirableVerificationToken:
+        return await persistence_auth.create_email_verification_token(self, user_id)
+
+    async def consume_email_verification_token(self, token: str) -> AppUser:
+        return await persistence_auth.consume_email_verification_token(self, token)
+
+    async def clear_email_verification_tokens(self, user_id: uuid.UUID) -> None:
+        await persistence_auth.clear_email_verification_tokens(self, user_id)
 
     # Cross-table delete: auth check + FK-ordered cleanup.
     async def delete_user(self, user_id: uuid.UUID, password: str, two_factor_code: str | None = None) -> bool:
@@ -353,8 +369,9 @@ class Persistence:
 
         cursor = self._get_cursor()
         uid = str(user_id)
-        for table in ("user_sessions", "password_reset_codes", "two_factor_recovery_codes", "profiles"):
+        for table in ("user_sessions", "password_reset_tokens", "two_factor_recovery_codes", "profiles"):
             cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
+        # email_verification_tokens is cleaned up by ON DELETE CASCADE.
         cursor.execute("DELETE FROM users WHERE id = ?", (uid,))
         self.conn.commit()
         return True

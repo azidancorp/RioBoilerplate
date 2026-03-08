@@ -17,7 +17,8 @@ def initialize_schema(persistence: SchemaPersistence) -> None:
     create_user_table(persistence)
     create_user_indexes(persistence)
     create_session_table(persistence)
-    create_reset_codes_table(persistence)
+    create_password_reset_tokens_table(persistence)
+    create_email_verification_tokens_table(persistence)
     create_profiles_table(persistence)
     create_recovery_codes_table(persistence)
     create_currency_ledger_table(persistence)
@@ -136,24 +137,51 @@ def create_session_table(persistence: SchemaPersistence) -> None:
     conn.commit()
 
 
-def create_reset_codes_table(persistence: SchemaPersistence) -> None:
+def create_password_reset_tokens_table(persistence: SchemaPersistence) -> None:
     """
-    Create the 'password_reset_codes' table in the database if it does not exist.
-    The table stores reset codes that allow users to reset their passwords.
+    Create the 'password_reset_tokens' table in the database if it does not exist.
+    The table stores hashed reset tokens that allow users to reset passwords.
     """
     cursor = persistence._get_cursor()
     conn = _get_connection(persistence)
 
     cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS password_reset_codes (
-            code TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            token_hash TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             created_at REAL NOT NULL,
             valid_until REAL NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """
+    )
+    conn.commit()
+
+
+def create_email_verification_tokens_table(persistence: SchemaPersistence) -> None:
+    """
+    Create the 'email_verification_tokens' table if it does not exist.
+    """
+    cursor = persistence._get_cursor()
+    conn = _get_connection(persistence)
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS email_verification_tokens (
+            token_hash TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            valid_until REAL NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user_id
+        ON email_verification_tokens(user_id)
+        """
     )
     conn.commit()
 

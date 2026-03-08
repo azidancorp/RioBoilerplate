@@ -10,10 +10,12 @@ from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import requests
 from fastapi import HTTPException, status
 
+from app.config import config
 from app.validation import SecuritySanitizer
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,58 @@ def _notify_contact_submission(submission: Dict[str, Any]) -> None:
         message=f"{subject}\n\n{body}",
         channel=os.getenv("RIO_CONTACT_NTFY_CHANNEL"),
         priority=os.getenv("RIO_CONTACT_NTFY_PRIORITY"),
+    )
+
+
+def send_email_verification_email(
+    *,
+    recipient: str,
+    token: str,
+    valid_until: datetime,
+) -> None:
+    """
+    Send account email-verification instructions.
+    """
+    app_url = (config.APP_URL or "http://localhost:8000").rstrip("/")
+    verify_link = f"{app_url}/login?verify_token={quote(token)}"
+    body = (
+        "Hi,\n\n"
+        "Please verify your account email address.\n\n"
+        f"Verification link: {verify_link}\n\n"
+        f"Verification token (if you need to paste it manually): {token}\n\n"
+        f"This link/token expires on {valid_until.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}.\n\n"
+        "If you did not create this account, you can ignore this email."
+    )
+    send_email(
+        recipient=recipient,
+        subject="Verify your Rio account email",
+        body=body,
+    )
+
+
+def send_password_reset_email(
+    *,
+    recipient: str,
+    token: str,
+    valid_until: datetime,
+) -> None:
+    """
+    Send password-reset instructions.
+    """
+    app_url = (config.APP_URL or "http://localhost:8000").rstrip("/")
+    reset_link = f"{app_url}/login?reset_token={quote(token)}&email={quote(recipient)}"
+    body = (
+        "Hi,\n\n"
+        "You requested a password reset.\n\n"
+        f"Reset link: {reset_link}\n\n"
+        f"Reset token (if you need to paste it manually): {token}\n\n"
+        f"This link/token expires on {valid_until.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}.\n\n"
+        "If you did not request this reset, you can ignore this email."
+    )
+    send_email(
+        recipient=recipient,
+        subject="Reset your Rio password",
+        body=body,
     )
 
 

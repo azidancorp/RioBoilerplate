@@ -13,7 +13,7 @@ import pyotp
 from app.config import config
 from app.data_models import (
     AppUser,
-    PasswordResetCode,
+    ExpirableVerificationToken,
     RecoveryCodeRecord,
     UserSession,
 )
@@ -39,6 +39,14 @@ class TwoFactorChallengeResult:
     used_recovery_code: bool = False
     failure: TwoFactorFailure | None = None
     failure_detail: str | None = None
+
+    def get_error_message(self) -> str:
+        """Return a user-facing error message for a failed 2FA challenge."""
+        if self.failure == TwoFactorFailure.INVALID_FORMAT:
+            return self.failure_detail or "Invalid 2FA code format."
+        if self.failure == TwoFactorFailure.MISSING_CODE:
+            return "Please enter your 2FA or recovery code."
+        return "Invalid verification or recovery code. Please try again."
 
 
 class AuthPersistence(Protocol):
@@ -569,20 +577,20 @@ async def update_password(
     await invalidate_all_sessions(persistence, user_id)
 
 
-async def create_reset_code(
+async def create_reset_token(
     persistence: AuthPersistence,
     user_id: uuid.UUID,
-) -> PasswordResetCode:
+) -> ExpirableVerificationToken:
     """
-    Create a new password reset code for a user.
+    Create a new password reset token for a user.
 
     ## Parameters
 
-    `user_id`: The UUID of the user to create a reset code for
+    `user_id`: The UUID of the user to create a reset token for
 
     ## Returns
 
-    The newly created reset code
+    The newly created reset token
 
     ## Raises
 
@@ -593,102 +601,95 @@ async def create_reset_code(
     # First verify the user exists
     await persistence.get_user_by_id(user_id)
 
-    # Remove any existing codes for this user to enforce single-use semantics
-    await clear_reset_code(persistence, user_id)
+    # Remove any existing tokens for this user to enforce single-use semantics
+    await clear_reset_tokens(persistence, user_id)
 
     cursor = persistence._get_cursor()
-    attempts = 0
+    reset_token = ExpirableVerificationToken.create(
+        user_id=user_id,
+        valid_for=timedelta(minutes=config.PASSWORD_RESET_TOKEN_TTL_MINUTES),
+    )
+    hashed_token = _hash_one_time_token(reset_token.token)
 
-    while attempts < 5:
-        attempts += 1
-        reset_code = PasswordResetCode.create_new_reset_code(user_id)
-
-        try:
-            cursor.execute(
-                """
-                INSERT INTO password_reset_codes (code, user_id, created_at, valid_until)
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    reset_code.code,
-                    str(reset_code.user_id),
-                    reset_code.created_at.timestamp(),
-                    reset_code.valid_until.timestamp(),
-                ),
-            )
-            conn.commit()
-            return reset_code
-        except sqlite3.IntegrityError:
-            conn.rollback()
-            continue
-        except Exception:
-            conn.rollback()
-            raise
-
-    raise RuntimeError("Failed to generate a unique password reset code.")
+    cursor.execute(
+        """
+        INSERT INTO password_reset_tokens (token_hash, user_id, created_at, valid_until)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            hashed_token,
+            str(reset_token.user_id),
+            reset_token.created_at.timestamp(),
+            reset_token.valid_until.timestamp(),
+        ),
+    )
+    conn.commit()
+    return reset_token
 
 
-async def get_user_by_reset_code(
+async def get_user_by_reset_token(
     persistence: AuthPersistence,
-    code: str,
+    token: str,
 ) -> AppUser:
     """
-    Find a user by their reset code. The code must be valid (not expired).
+    Find a user by their reset token. The token must be valid (not expired).
 
     ## Parameters
 
-    `code`: The reset code to look up
+    `token`: The reset token to look up
 
     ## Returns
 
-    The user associated with this reset code
+    The user associated with this reset token
 
     ## Raises
 
-    `KeyError`: If the code is invalid, expired, or the associated user doesn't exist
+    `KeyError`: If the token is invalid, expired, or the associated user doesn't exist
     """
     conn = _get_connection(persistence)
+    hashed_token = _hash_one_time_token(token)
     cursor = persistence._get_cursor()
 
-    # Get the reset code entry
+    # Get the reset token entry
     cursor.execute(
         """
         SELECT user_id, valid_until
-        FROM password_reset_codes
-        WHERE code = ?
+        FROM password_reset_tokens
+        WHERE token_hash = ?
         """,
-        (code,),
+        (hashed_token,),
     )
 
     row = cursor.fetchone()
     if not row:
-        raise KeyError(f"Invalid reset code: {code}")
+        raise KeyError(f"Invalid reset token: {token}")
 
-    # Check if the code is expired
+    # Check if the token is expired
     valid_until = datetime.fromtimestamp(row[1], tz=timezone.utc)
     if datetime.now(timezone.utc) >= valid_until:
         cursor.execute(
-            "DELETE FROM password_reset_codes WHERE code = ?",
-            (code,),
+            "DELETE FROM password_reset_tokens WHERE token_hash = ?",
+            (hashed_token,),
         )
         conn.commit()
-        raise KeyError(f"Reset code has expired: {code}")
+        raise KeyError(f"Reset token has expired: {token}")
 
     # Get and return the associated user
     return await persistence.get_user_by_id(uuid.UUID(row[0]))
 
 
-async def consume_reset_code(
+async def consume_reset_token(
     persistence: AuthPersistence,
-    code: str,
+    token: str,
     user_id: uuid.UUID,
 ) -> bool:
     """
-    Delete a password reset code after successful use.
+    Delete a password reset token after successful use.
 
-    Returns True when the code was removed; False when the code was missing.
+    Returns True when the token was removed; False when the token was missing.
     """
     conn = _get_connection(persistence)
+    hashed_token = _hash_one_time_token(token)
     cursor = persistence._get_cursor()
 
     conn.execute("BEGIN IMMEDIATE")
@@ -696,10 +697,10 @@ async def consume_reset_code(
     try:
         cursor.execute(
             """
-            DELETE FROM password_reset_codes
-            WHERE code = ? AND user_id = ?
+            DELETE FROM password_reset_tokens
+            WHERE token_hash = ? AND user_id = ?
             """,
-            (code, str(user_id)),
+            (hashed_token, str(user_id)),
         )
 
         if cursor.rowcount != 1:
@@ -713,21 +714,144 @@ async def consume_reset_code(
         raise
 
 
-async def clear_reset_code(
+async def clear_reset_tokens(
     persistence: AuthPersistence,
     user_id: uuid.UUID,
 ) -> None:
     """
-    Delete all reset codes for a user.
+    Delete all reset tokens for a user.
 
     ## Parameters
 
-    `user_id`: The UUID of the user whose reset codes to clear
+    `user_id`: The UUID of the user whose reset tokens to clear
     """
     conn = _get_connection(persistence)
     cursor = persistence._get_cursor()
     cursor.execute(
-        "DELETE FROM password_reset_codes WHERE user_id = ?",
+        "DELETE FROM password_reset_tokens WHERE user_id = ?",
+        (str(user_id),),
+    )
+    conn.commit()
+
+
+async def set_user_verified(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+    is_verified: bool = True,
+) -> None:
+    """Mark a user account as verified/unverified."""
+    conn = _get_connection(persistence)
+    await persistence.get_user_by_id(user_id)
+    cursor = persistence._get_cursor()
+    cursor.execute(
+        "UPDATE users SET is_verified = ? WHERE id = ?",
+        (1 if is_verified else 0, str(user_id)),
+    )
+    conn.commit()
+
+
+async def create_email_verification_token(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+) -> ExpirableVerificationToken:
+    """
+    Create a new email verification token for a user.
+    """
+    conn = _get_connection(persistence)
+    await persistence.get_user_by_id(user_id)
+    await clear_email_verification_tokens(persistence, user_id)
+
+    cursor = persistence._get_cursor()
+    token = ExpirableVerificationToken.create(
+        user_id=user_id,
+        valid_for=timedelta(minutes=config.EMAIL_VERIFICATION_TOKEN_TTL_MINUTES),
+    )
+    token_hash = _hash_one_time_token(token.token)
+
+    cursor.execute(
+        """
+        INSERT INTO email_verification_tokens (token_hash, user_id, created_at, valid_until)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            token_hash,
+            str(token.user_id),
+            token.created_at.timestamp(),
+            token.valid_until.timestamp(),
+        ),
+    )
+    conn.commit()
+    return token
+
+
+async def consume_email_verification_token(
+    persistence: AuthPersistence,
+    token: str,
+) -> AppUser:
+    """
+    Consume a verification token and mark the user as verified.
+    """
+    conn = _get_connection(persistence)
+    token_hash = _hash_one_time_token(token)
+    cursor = persistence._get_cursor()
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cursor.execute(
+            """
+            SELECT user_id, valid_until
+            FROM email_verification_tokens
+            WHERE token_hash = ?
+            LIMIT 1
+            """,
+            (token_hash,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            conn.rollback()
+            raise KeyError("Invalid verification token.")
+
+        user_id_str = str(row[0])
+        valid_until = datetime.fromtimestamp(row[1], tz=timezone.utc)
+        if datetime.now(timezone.utc) >= valid_until:
+            cursor.execute(
+                "DELETE FROM email_verification_tokens WHERE token_hash = ?",
+                (token_hash,),
+            )
+            conn.commit()
+            raise KeyError("Verification token has expired.")
+
+        cursor.execute(
+            "DELETE FROM email_verification_tokens WHERE token_hash = ?",
+            (token_hash,),
+        )
+        cursor.execute(
+            "DELETE FROM email_verification_tokens WHERE user_id = ?",
+            (user_id_str,),
+        )
+        cursor.execute(
+            "UPDATE users SET is_verified = 1 WHERE id = ?",
+            (user_id_str,),
+        )
+
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+    return await persistence.get_user_by_id(uuid.UUID(user_id_str))
+
+
+async def clear_email_verification_tokens(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+) -> None:
+    """Delete all email verification tokens for a user."""
+    conn = _get_connection(persistence)
+    cursor = persistence._get_cursor()
+    cursor.execute(
+        "DELETE FROM email_verification_tokens WHERE user_id = ?",
         (str(user_id),),
     )
     conn.commit()

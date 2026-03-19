@@ -173,56 +173,62 @@ def load_from_html(html_path):
     # Get the directory of the HTML file
     dir_path = os.path.dirname(html_path)
     
-    # Find CSS references
-    css_refs = re.findall(r'<link.*?href=["\'](.*?\.css)["\']', html_content)
-    for css_ref in css_refs:
-        css_path = os.path.join(dir_path, css_ref)
+    # Inline Stylesheets that live alongside the HTML asset.
+    css_pattern = re.compile(
+        r'(<link[^>]+rel=["\']stylesheet["\'][^>]+href=["\'](.*?\.css)["\'][^>]*>)',
+        re.IGNORECASE,
+    )
+    for match in list(css_pattern.finditer(html_content)):
+        full_tag, css_ref = match.groups()
+        css_path = os.path.normpath(os.path.join(dir_path, css_ref))
         if os.path.exists(css_path):
             with open(css_path, "r", encoding="utf-8") as css_file:
                 css_content = css_file.read()
-                # Replace link with inline style
-                html_content = html_content.replace(
-                    f'<link rel="stylesheet" href="{css_ref}">', 
-                    f'<style>\n{css_content}\n</style>'
-                )
+            html_content = html_content.replace(
+                full_tag,
+                f'<style>\n{css_content}\n</style>',
+            )
     
-    # Find JSON script references (e.g. <script type="application/json" src="data.json" id="x">)
+    # Inline JSON script references (e.g. <script type="application/json" src="data.json" id="x">)
     json_refs = re.findall(
         r'<script\s+[^>]*type=["\']application/json["\'][^>]*src=["\'](.*?\.json)["\'][^>]*>\s*</script>',
         html_content,
     )
     for json_ref in json_refs:
-        json_path = os.path.join(dir_path, json_ref)
+        json_path = os.path.normpath(os.path.join(dir_path, json_ref))
         if os.path.exists(json_path):
             with open(json_path, "r", encoding="utf-8") as json_file:
                 json_content = json_file.read()
-                # Replace src with inline content, preserving other attributes.
-                pattern = re.compile(
-                    r'(<script\s+[^>]*type=["\']application/json["\'][^>]*?)src=["\']'
-                    + re.escape(json_ref)
-                    + r'["\']([^>]*>)\s*</script>'
-                )
-                # Use a callable replacement so backslashes in JSON (e.g. \uXXXX)
-                # are inserted literally rather than interpreted as re.sub escapes.
-                html_content = pattern.sub(
-                    lambda match: (
-                        f"{match.group(1)}{match.group(2)}\n{json_content}\n</script>"
-                    ),
-                    html_content,
-                )
+            # Replace src with inline content, preserving other attributes.
+            pattern = re.compile(
+                r'(<script\s+[^>]*type=["\']application/json["\'][^>]*?)src=["\']'
+                + re.escape(json_ref)
+                + r'["\']([^>]*>)\s*</script>'
+            )
+            # Use a callable replacement so backslashes in JSON (e.g. \uXXXX)
+            # are inserted literally rather than interpreted as re.sub escapes.
+            html_content = pattern.sub(
+                lambda match: (
+                    f"{match.group(1)}{match.group(2)}\n{json_content}\n</script>"
+                ),
+                html_content,
+            )
 
-    # Find JS references
-    js_refs = re.findall(r'<script.*?src=["\'](.*?\.js)["\'].*?</script>', html_content)
-    for js_ref in js_refs:
-        js_path = os.path.join(dir_path, js_ref)
+    # Inline JS script tags (supports additional attributes like defer, async, type="module").
+    script_pattern = re.compile(
+        r'(<script\b[^>]*\bsrc=["\'](.*?\.js)["\'][^>]*></script>)',
+        re.IGNORECASE,
+    )
+    for match in list(script_pattern.finditer(html_content)):
+        full_tag, js_ref = match.groups()
+        js_path = os.path.normpath(os.path.join(dir_path, js_ref))
         if os.path.exists(js_path):
             with open(js_path, "r", encoding="utf-8") as js_file:
                 js_content = js_file.read()
-                # Replace script src with inline script
-                html_content = html_content.replace(
-                    f'<script src="{js_ref}"></script>', 
-                    f'<script>\n{js_content}\n</script>'
-                )
+            html_content = html_content.replace(
+                full_tag,
+                f'<script>\n{js_content}\n</script>',
+            )
     
     # Inject a baseline responsive guard so embedded webviews can't force
     # horizontal overflow in the Rio page.

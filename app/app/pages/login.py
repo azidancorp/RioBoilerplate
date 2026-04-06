@@ -594,6 +594,7 @@ class ResetPasswordForm(rio.Component):
     prefilled_reset_token: str = ""
     prefilled_message: str = ""
     prefilled_message_style: str = "success"
+    prefilled_require_two_factor: bool = False
 
     # We'll expose an event so that the parent page can toggle forms
     on_toggle_form: t.Callable[[str], None] | None = None
@@ -606,6 +607,7 @@ class ResetPasswordForm(rio.Component):
         if self.prefilled_reset_token:
             self.code_sent = True
             self.reset_token = self.prefilled_reset_token
+            self.require_two_factor = self.prefilled_require_two_factor
 
         if self.prefilled_message:
             self.banner_style = self.prefilled_message_style
@@ -963,6 +965,7 @@ class LoginPage(rio.Component):
     reset_prefilled_token: str = ""
     reset_prefilled_message: str = ""
     reset_prefilled_message_style: str = "success"
+    reset_prefilled_require_two_factor: bool = False
 
     def _set_page_message(self, style: str, message: str) -> None:
         self.page_message_style = style
@@ -1006,6 +1009,7 @@ class LoginPage(rio.Component):
             return
 
         if reset_token_raw:
+            persistence = self.session[Persistence]
             try:
                 reset_token = SecuritySanitizer.sanitize_auth_code(reset_token_raw, max_length=96)
             except HTTPException:
@@ -1029,6 +1033,13 @@ class LoginPage(rio.Component):
             self.reset_prefilled_email = sanitized_email
             self.reset_prefilled_message = "Reset link received. Enter your new password below."
             self.reset_prefilled_message_style = "success"
+            self.reset_prefilled_require_two_factor = False
+            try:
+                user = await persistence.get_user_by_reset_token(reset_token)
+            except KeyError:
+                pass
+            else:
+                self.reset_prefilled_require_two_factor = bool(user.two_factor_secret)
             self._set_page_message("", "")
             self.force_refresh()
             return
@@ -1043,6 +1054,7 @@ class LoginPage(rio.Component):
             self.reset_prefilled_token = ""
             self.reset_prefilled_message = ""
             self.reset_prefilled_message_style = "success"
+            self.reset_prefilled_require_two_factor = False
         self.force_refresh()
 
     def build(self) -> rio.Component:
@@ -1058,6 +1070,7 @@ class LoginPage(rio.Component):
                 prefilled_reset_token=self.reset_prefilled_token,
                 prefilled_message=self.reset_prefilled_message,
                 prefilled_message_style=self.reset_prefilled_message_style,
+                prefilled_require_two_factor=self.reset_prefilled_require_two_factor,
             )
         else:
             # Fallback to login if something weird happens

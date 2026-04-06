@@ -1,9 +1,11 @@
 import asyncio
+from collections import defaultdict
 from pathlib import Path
 
 import pytest
 
 from app.data_models import AppUser
+from app.pages.login import LoginPage
 from app.persistence import Persistence
 
 
@@ -21,6 +23,32 @@ async def _create_user(persistence: Persistence, email: str, password: str = "pa
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
     await persistence.create_user(user)
     return await persistence.get_user_by_id(user.id)
+
+
+class _FakeEvent:
+    def set(self) -> None:
+        pass
+
+
+class _FakeUrl:
+    def __init__(self, query: dict[str, str]):
+        self.query = query
+
+
+class _FakeSession:
+    def __init__(self, persistence: Persistence, query: dict[str, str]):
+        self.active_page_url = _FakeUrl(query)
+        self._persistence = persistence
+        self._changed_attributes = defaultdict(set)
+        self._refresh_required_event = _FakeEvent()
+
+    def __getitem__(self, key):
+        if key is Persistence:
+            return self._persistence
+        raise KeyError(key)
+
+    def _register_dirty_component(self, component) -> None:
+        pass
 
 
 def test_email_verification_token_marks_user_verified(temp_db: Persistence):
@@ -103,5 +131,38 @@ def test_expired_verification_token_is_rejected(temp_db: Persistence):
 
         refreshed_user = await temp_db.get_user_by_id(user.id)
         assert refreshed_user.is_verified is False
+
+    asyncio.run(scenario())
+
+
+def test_reset_link_prefills_two_factor_requirement(temp_db: Persistence):
+    async def scenario():
+        user = await _create_user(temp_db, "reset-2fa@example.com")
+        temp_db.set_2fa_secret(user.id, "ABCDEFGHIJKLMNOPQRSTUVWX23456789")
+        reset_token = await temp_db.create_reset_token(user.id)
+
+        page = object.__new__(LoginPage)
+        page._session_ = _FakeSession(
+            temp_db,
+            {"reset_token": reset_token.token, "email": "reset-2fa@example.com"},
+        )
+        page._properties_assigned_after_creation_ = set()
+        page.force_refresh = lambda: None
+        page.current_form = "login"
+        page.page_message = ""
+        page.page_message_style = "success"
+        page.reset_prefilled_email = ""
+        page.reset_prefilled_token = ""
+        page.reset_prefilled_message = ""
+        page.reset_prefilled_message_style = "success"
+        page.reset_prefilled_require_two_factor = False
+
+        await LoginPage.on_populate(page)
+
+        assert page.current_form == "reset"
+        assert page.reset_prefilled_email == "reset-2fa@example.com"
+        assert page.reset_prefilled_token == reset_token.token
+        assert page.reset_prefilled_require_two_factor is True
+        assert page.reset_prefilled_message == "Reset link received. Enter your new password below."
 
     asyncio.run(scenario())

@@ -10,6 +10,7 @@ import html
 from decimal import Decimal
 from typing import Optional, Any, Dict
 from uuid import UUID
+from email_validator import EmailNotValidError, validate_email
 from pydantic import BaseModel, field_validator, Field, model_validator
 from fastapi import HTTPException, status
 
@@ -114,7 +115,7 @@ class SecuritySanitizer:
     @staticmethod
     def validate_email_format(email: str, require_valid: bool | None = None) -> str:
         """
-        Additional email validation beyond Pydantic's EmailStr.
+        Validate and normalize an email address.
         
         Args:
             email: Email address to validate
@@ -124,40 +125,57 @@ class SecuritySanitizer:
         Returns:
             Validated email address
         """
-        # Use global config if not explicitly specified
+        email = str(email).strip()
+
+        # Use global config if not explicitly specified.
         if require_valid is None:
             require_valid = config.REQUIRE_VALID_EMAIL
         
-        # Basic length check
+        # Basic length check.
         if len(email) > MAX_EMAIL_LENGTH:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Email too long. Maximum length is {MAX_EMAIL_LENGTH} characters."
             )
         
-        # Only enforce email format validation if required
+        normalized_email = email.lower()
+
+        # Only enforce email format validation if required.
         if require_valid:
-            # Basic email format validation using regex
-            email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-            if not re.match(email_regex, email):
+            try:
+                email_info = validate_email(
+                    email,
+                    allow_smtputf8=False,
+                    check_deliverability=False,
+                    strict=True,
+                )
+            except EmailNotValidError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail="Invalid email format. Must be a valid email address."
+                    detail=f"Invalid email format. {str(exc)}"
+                ) from exc
+
+            if email_info.ascii_domain != email_info.domain:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Internationalized email domains are not supported."
                 )
+
+            normalized_email = email_info.normalized.lower()
         
-        # Always check for suspicious patterns (security measure)
+        # Always check for suspicious patterns (security measure).
         suspicious_patterns = [
             r'javascript:', r'data:', r'vbscript:', r'onload=', r'onerror='
         ]
         
         for pattern in suspicious_patterns:
-            if re.search(pattern, email.lower()):
+            if re.search(pattern, normalized_email):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Email contains invalid characters or patterns."
                 )
         
-        return email.lower().strip()
+        return normalized_email
     
     @staticmethod
     def validate_phone_number(phone: Optional[str]) -> Optional[str]:
@@ -460,5 +478,4 @@ class CurrencySetBalanceRequest(BaseModel):
         if value is None:
             return None
         return SecuritySanitizer.sanitize_string(value, 200)
-
 

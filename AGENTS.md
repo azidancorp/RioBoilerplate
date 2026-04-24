@@ -32,7 +32,7 @@ Rio-based web application boilerplate with user authentication, MFA, mobile-resp
   - From repo root: `pytest`
   - Or from `app/`: `cd app && pytest`
 
-If you changed Rio components/pages, do a quick boot check from `app/` (where `rio.toml` lives), e.g. `cd app && timeout 5 rio run --port 8001` (adjust port as needed).
+Do a quick boot check from `app/` (where `rio.toml` lives), e.g. `cd app && timeout 5 rio run --port 8001` (adjust port as needed).
 
 ## Development Rules
 
@@ -40,7 +40,7 @@ If you changed Rio components/pages, do a quick boot check from `app/` (where `r
 - **Apply `update_layout(template="plotly_dark")`** to all Plotly charts.
 - **Never use `children=`** as an argument in Rio components — place components directly.
 - **Change only what's required, nothing more.**
-- **After modifying any Rio component, run page-level smoke tests:** `pytest app/tests/test_smoke_pages.py -x`. Also run a boot check from the outer `app/` directory using `rio run --port 8XXX` with a 5s timeout to ensure the app boots with correct arguments.
+- **Run page-level smoke tests:** `pytest app/tests/test_smoke_pages.py -x`. Also run a boot check from the outer `app/` directory using `rio run --port 8XXX` with a 5s timeout, and trying to navigate to the page.
 - **Review each component instantiation** against the references in the top-level `RioDocumentation/` folder and align constructor usage exactly with what the docs specify.
 - **Any component calling `is_mobile()` must inherit from `ResponsiveComponent`** (enforced by `test_responsive_inheritance.py`).
 - **Add new authenticated pages to `APP_ROUTES`** in `app/navigation.py` (not `permissions.py`).

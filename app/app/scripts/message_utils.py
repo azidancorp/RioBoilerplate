@@ -133,7 +133,7 @@ def send_password_reset_email(
     Send password-reset instructions.
     """
     app_url = (config.APP_URL or "http://localhost:8000").rstrip("/")
-    reset_link = f"{app_url}/login?reset_token={quote(token)}&email={quote(recipient)}"
+    reset_link = f"{app_url}/login?reset_token={quote(token)}"
     body = (
         "Hi,\n\n"
         "You requested a password reset.\n\n"

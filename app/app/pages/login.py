@@ -977,8 +977,6 @@ class LoginPage(rio.Component):
 
         verify_token_raw = str(query.get("verify_token", "")).strip()
         reset_token_raw = str(query.get("reset_token", "")).strip()
-        reset_email_raw = str(query.get("email", "")).strip()
-
         if verify_token_raw:
             try:
                 verify_token = SecuritySanitizer.sanitize_auth_code(verify_token_raw, max_length=96)
@@ -1021,16 +1019,9 @@ class LoginPage(rio.Component):
                 self.force_refresh()
                 return
 
-            sanitized_email = ""
-            if reset_email_raw:
-                try:
-                    sanitized_email = SecuritySanitizer.validate_email_format(reset_email_raw)
-                except HTTPException:
-                    sanitized_email = ""
-
             self.current_form = "reset"
             self.reset_prefilled_token = reset_token
-            self.reset_prefilled_email = sanitized_email
+            self.reset_prefilled_email = ""
             self.reset_prefilled_message = "Reset link received. Enter your new password below."
             self.reset_prefilled_message_style = "success"
             self.reset_prefilled_require_two_factor = False
@@ -1039,6 +1030,7 @@ class LoginPage(rio.Component):
             except KeyError:
                 pass
             else:
+                self.reset_prefilled_email = user.email
                 self.reset_prefilled_require_two_factor = bool(user.two_factor_secret)
             self._set_page_message("", "")
             self.force_refresh()

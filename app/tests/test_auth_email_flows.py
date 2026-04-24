@@ -1,5 +1,6 @@
 import asyncio
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from app.data_models import AppUser
 from app.pages.login import LoginPage
 from app.persistence import Persistence
+from app.scripts import message_utils
 
 
 @pytest.fixture
@@ -144,7 +146,7 @@ def test_reset_link_prefills_two_factor_requirement(temp_db: Persistence):
         page = object.__new__(LoginPage)
         page._session_ = _FakeSession(
             temp_db,
-            {"reset_token": reset_token.token, "email": "reset-2fa@example.com"},
+            {"reset_token": reset_token.token},
         )
         page._properties_assigned_after_creation_ = set()
         page.force_refresh = lambda: None
@@ -166,3 +168,25 @@ def test_reset_link_prefills_two_factor_requirement(temp_db: Persistence):
         assert page.reset_prefilled_message == "Reset link received. Enter your new password below."
 
     asyncio.run(scenario())
+
+
+def test_password_reset_email_link_does_not_include_email(monkeypatch):
+    sent_messages = []
+
+    def fake_send_email(**kwargs):
+        sent_messages.append(kwargs)
+
+    monkeypatch.setattr(message_utils, "send_email", fake_send_email)
+    monkeypatch.setattr(message_utils.config, "APP_URL", "https://example.test")
+
+    message_utils.send_password_reset_email(
+        recipient="reset-private@example.com",
+        token="reset-token-123",
+        valid_until=datetime.now(timezone.utc),
+    )
+
+    body = sent_messages[0]["body"]
+
+    assert "https://example.test/login?reset_token=reset-token-123" in body
+    assert "email=" not in body
+    assert "reset-private%40example.com" not in body

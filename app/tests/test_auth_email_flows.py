@@ -170,6 +170,68 @@ def test_reset_link_prefills_two_factor_requirement(temp_db: Persistence):
     asyncio.run(scenario())
 
 
+def test_invalid_reset_link_shows_expired_message(temp_db: Persistence):
+    async def scenario():
+        page = object.__new__(LoginPage)
+        page._session_ = _FakeSession(
+            temp_db,
+            {"reset_token": "A" * 32},
+        )
+        page._properties_assigned_after_creation_ = set()
+        page.force_refresh = lambda: None
+        page.current_form = "login"
+        page.page_message = ""
+        page.page_message_style = "success"
+        page.reset_prefilled_email = ""
+        page.reset_prefilled_token = ""
+        page.reset_prefilled_message = ""
+        page.reset_prefilled_message_style = "success"
+        page.reset_prefilled_require_two_factor = False
+
+        await LoginPage.on_populate(page)
+
+        assert page.current_form == "reset"
+        assert page.reset_prefilled_email == ""
+        assert page.reset_prefilled_token == ""
+        assert page.reset_prefilled_require_two_factor is False
+        assert page.reset_prefilled_message == (
+            "Reset link is invalid or expired. Request a new password reset email."
+        )
+        assert page.reset_prefilled_message_style == "danger"
+
+    asyncio.run(scenario())
+
+
+def test_malformed_reset_link_shows_invalid_message(temp_db: Persistence):
+    async def scenario():
+        page = object.__new__(LoginPage)
+        page._session_ = _FakeSession(
+            temp_db,
+            {"reset_token": "<script>"},
+        )
+        page._properties_assigned_after_creation_ = set()
+        page.force_refresh = lambda: None
+        page.current_form = "login"
+        page.page_message = ""
+        page.page_message_style = "success"
+        page.reset_prefilled_email = ""
+        page.reset_prefilled_token = ""
+        page.reset_prefilled_message = ""
+        page.reset_prefilled_message_style = "success"
+        page.reset_prefilled_require_two_factor = False
+
+        await LoginPage.on_populate(page)
+
+        assert page.current_form == "reset"
+        assert page.page_message == "Reset link is invalid. Request a new password reset email."
+        assert page.page_message_style == "danger"
+        assert page.reset_prefilled_email == ""
+        assert page.reset_prefilled_token == ""
+        assert page.reset_prefilled_require_two_factor is False
+
+    asyncio.run(scenario())
+
+
 def test_password_reset_email_link_does_not_include_email(monkeypatch):
     sent_messages = []
 

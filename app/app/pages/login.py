@@ -1020,17 +1020,22 @@ class LoginPage(rio.Component):
                 return
 
             self.current_form = "reset"
-            self.reset_prefilled_token = reset_token
+            self.reset_prefilled_token = ""
             self.reset_prefilled_email = ""
-            self.reset_prefilled_message = "Reset link received. Enter your new password below."
-            self.reset_prefilled_message_style = "success"
+            self.reset_prefilled_message = (
+                "Reset link is invalid or expired. Request a new password reset email."
+            )
+            self.reset_prefilled_message_style = "danger"
             self.reset_prefilled_require_two_factor = False
             try:
                 user = await persistence.get_user_by_reset_token(reset_token)
             except KeyError:
                 pass
             else:
+                self.reset_prefilled_token = reset_token
                 self.reset_prefilled_email = user.email
+                self.reset_prefilled_message = "Reset link received. Enter your new password below."
+                self.reset_prefilled_message_style = "success"
                 self.reset_prefilled_require_two_factor = bool(user.two_factor_secret)
             self._set_page_message("", "")
             self.force_refresh()

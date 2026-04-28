@@ -1,0 +1,256 @@
+TreeView
+
+A component that displays a hierarchical tree structure.
+
+`TreeView` is a convenient way to display nested data, such as a file system
+or organizational chart. The `TreeView` component uses its items, which are
+instances of `AbstractTreeItem` (e.g., [`SimpleTreeItem`](/docs/api/simpletreeitem)). Each item can have
+children, and the tree supports expand/collapse functionality as well as
+optional single or multiple selection.
+
+**This component is experimental and may change in the future**
+
+Experimental components are included in Rio to gather feedback and
+real-world usage data. They may be removed or changed in the future. If you use
+this component you might have to update your code when you upgrade
+to a newer version of Rio.
+
+Constructor
+
+```python
+TreeView(
+    *root_items: rio.Component,
+    selection_mode: Literal['none', 'single', 'multiple'] = 'none',
+    selected_items: list[str | int] | None = None,
+    on_selection_change: rio.EventHandler[rio.TreeViewSelectionChangeEvent] = None,
+    # Inherited from `rio.Component`
+    key: str | int | None = None,
+    margin: float | None = None,
+    margin_x: float | None = None,
+    margin_y: float | None = None,
+    margin_left: float | None = None,
+    margin_top: float | None = None,
+    margin_right: float | None = None,
+    margin_bottom: float | None = None,
+    min_width: float = 0,
+    min_height: float = 0,
+    grow_x: bool = False,
+    grow_y: bool = False,
+    align_x: float | None = None,
+    align_y: float | None = None,
+)
+```
+
+root_items
+`rio.Component`
+
+The top-level items to display in the tree.
+
+selection_mode
+`Literal['none', 'single', 'multiple']`
+
+Determines the selection behavior: "none" (no selection),
+"single" (one item selectable), or "multiple" (multiple items
+selectable). Defaults to "none".
+
+selected_items
+`list[str | int] | None`
+
+A list of keys of currently selected items. Defaults to an
+empty list.
+
+on_selection_change
+`rio.EventHandler[rio.TreeViewSelectionChangeEvent]`
+
+Event handler triggered when the selection changes.
+
+key
+`str | int | None`
+
+A unique key for this component. If the key changes, the component will be destroyed
+and recreated. This is useful for components which maintain state across
+rebuilds.
+
+margin
+`float | None`
+
+The margin around this component. This is a shorthand for
+setting `margin_left`, `margin_top`, `margin_right` and `margin_bottom`
+to the same value. If multiple conflicting margins are specified the
+most specific one wins. If for example `margin` and `margin_left` are
+both specified, `margin_left` is used for the left side, while the other
+sides use `margin`. Sizes are measured in "font heights", so a margin of
+1 is the height of a single line of text.
+
+margin_x
+`float | None`
+
+The horizontal margin around this component. This is a
+shorthand for setting `margin_left` and `margin_right` to the same
+value. If multiple conflicting margins are specified the most
+specific one wins. If for example `margin_x` and `margin_left` are
+both specified, `margin_left` is used for the left side, while the
+other side uses `margin_x`. Sizes are measured in "font heights", so a
+margin of 1 is the height of a single line of text.
+
+margin_y
+`float | None`
+
+The vertical margin around this component. This is a shorthand
+for setting `margin_top` and `margin_bottom` to the same value. If
+multiple conflicting margins are specified the most specific one
+wins. If for example `margin_y` and `margin_top` are both specified,
+`margin_top` is used for the top side, while the other side uses
+`margin_y`. Sizes are measured in "font heights", so a margin of 1 is
+the height of a single line of text.
+
+margin_left
+`float | None`
+
+The left margin around this component. If multiple
+conflicting margins are specified this one will be used, since it's
+the most specific. If for example `margin_left` and `margin` are
+both specified, `margin_left` is used for the left side, while the
+other sides use `margin`. Sizes are measured in "font heights", so a
+margin of 1 is the height of a single line of text.
+
+margin_top
+`float | None`
+
+The top margin around this component. If multiple
+conflicting margins are specified this one will be used, since it's
+the most specific. If for example `margin_top` and `margin` are both
+specified, `margin_top` is used for the top side, while the other
+sides use `margin`. Sizes are measured in "font heights", so a margin
+of 1 is the height of a single line of text.
+
+margin_right
+`float | None`
+
+The right margin around this component. If multiple
+conflicting margins are specified this one will be used, since it's
+the most specific. If for example `margin_right` and `margin` are
+both specified, `margin_right` is used for the right side, while the
+other sides use `margin`. Sizes are measured in "font heights", so a
+margin of 1 is the height of a single line of text.
+
+margin_bottom
+`float | None`
+
+The bottom margin around this component. If multiple
+conflicting margins are specified this one will be used, since it's
+the most specific. If for example `margin_bottom` and `margin` are
+both specified, `margin_bottom` is used for the bottom side, while
+the other sides use `margin`. Sizes are measured in "font heights", so
+a margin of 1 is the height of a single line of text.
+
+min_width
+`float`
+
+The minimum amount of horizontal space this component should
+request during layouting. The component will never be smaller than this
+size.
+
+Please note that the space a [`Component`](/docs/api/component) receives during layouting may
+not match the request. As a general rule, for example, containers try to
+pass on all available space to children. If you really want a
+[`Component`](/docs/api/component) to only take up as much space as requested, consider
+specifying an alignment.
+
+Sizes are measured in "font heights", so a width of 1 is the same as the
+height of a single line of text.
+
+min_height
+`float`
+
+The minimum amount of vertical space this component should
+request during layouting. The component will never be smaller than this
+size.
+
+Please note that the space a [`Component`](/docs/api/component) receives during layouting may
+not match the request. As a general rule, for example, containers try to
+pass on all available space to children. If you really want a
+[`Component`](/docs/api/component) to only take up as much space as requested, consider
+specifying an alignment.
+
+Sizes are measured in "font heights", so a width of 1 is the same as the
+height of a single line of text.
+
+grow_x
+`bool`
+
+Whether this component should request all the superfluous
+horizontal space available in its parent. Containers normally divide up
+any extra space evenly between their children. However, if components
+have `grow_x`, some containers (such as [`rio.Row`](/docs/api/row)) will
+give all remaining space to those components first.
+
+grow_y
+`bool`
+
+Whether this component should request all the superfluous
+vertical space available in its parent. Containers normally divide up
+any extra space evenly between their children. However, if components
+have `grow_y`, some containers (such as [`rio.Column`](/docs/api/column)) will
+give all remaining space to those components first.
+
+align_x
+`float | None`
+
+How this component should be aligned horizontally, if it
+receives more space than it requested. This can be a number between 0
+and 1, where 0 means left-aligned, 0.5 means centered, and 1 means
+right-aligned.
+
+align_y
+`float | None`
+
+How this component should be aligned vertically, if it receives
+more space than it requested. This can be a number between 0 and 1,
+where 0 means top-aligned, 0.5 means centered, and 1 means
+bottom-aligned.
+
+## Examples
+
+This minimal example creates a simple tree with one root item and one child,
+with multiple selection enabled:
+
+```python
+rio.TreeView(
+    rio.SimpleTreeItem(
+        "Root",
+        key="root",
+        children=[rio.SimpleTreeItem("Child", key="child")],
+    ),
+    selection_mode="multiple",
+)
+```
+
+For a more complex tree with dynamic content and event handling:
+
+```python
+import functools
+
+class MyComponent(rio.Component):
+    items: list[str] = ["Item 1", "Item 2"]
+
+    def on_selection_change(
+        self, event: rio.TreeViewSelectionChangeEvent
+    ) -> None:
+        print(f"Selected items: {event.selected_items}")
+
+    def build(self) -> rio.Component:
+        root_items = [
+            rio.SimpleTreeItem(
+                text=item,
+                key=item,
+                children=[rio.SimpleTreeItem(f"Sub-{item}", key=f"sub-{item}")],
+            )
+            for item in self.items
+        ]
+        return rio.TreeView(
+            *root_items,
+            selection_mode="multiple",
+            on_selection_change=self.on_selection_change,
+        )
+```

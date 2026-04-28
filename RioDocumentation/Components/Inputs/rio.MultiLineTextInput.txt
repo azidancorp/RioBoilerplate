@@ -1,136 +1,291 @@
 MultiLineTextInput
+
 A user-editable text field.
 
-MultiLineTextInput is a text input field similar to the regular TextInput, but allows the user to enter multiple lines of text.
+`MultiLineTextInput` is a text input field similar to the regular
+[`TextInput`](/docs/api/textinput), but allows the user to enter multiple lines of text.
 
+When a user changes the value of a `MultiLineTextInput`, the `on_change`
+event isn't fired immediately. Rio will detect when the user stops typing,
+or a configurable time threshold is reached. This cuts down on needless
+processing and network traffic.
 
 Constructor
+
+```python
 MultiLineTextInput(
-    text: str = '', 
-    *, 
-    label: str = '', 
-    is_sensitive: bool = True, 
-    is_valid: bool = True, 
-    on_change: rio.EventHandler[rio.MultiLineTextInputChangeEvent] = None, 
-    on_confirm: rio.EventHandler[rio.MultiLineTextInputConfirmEvent] = None, 
-    accessibility_label: str = '', 
-    style: Literal['underlined', 'rounded'] = 'underlined', 
+    text: str = '',
+    *,
+    auto_focus: bool = False,
+    label: str = '',
+    accessibility_label: str = '',
+    is_sensitive: bool = True,
+    is_valid: bool = True,
+    auto_adjust_height: bool = True,
+    change_delay: float = 0.8,
+    on_change: rio.EventHandler[rio.MultiLineTextInputChangeEvent] = None,
+    on_confirm: rio.EventHandler[rio.MultiLineTextInputConfirmEvent] = None,
+    on_gain_focus: rio.EventHandler[rio.MultiLineTextInputFocusEvent] = None,
+    on_lose_focus: rio.EventHandler[rio.MultiLineTextInputFocusEvent] = None,
+    style: Literal['underlined', 'rounded'] = 'underlined',
     # Inherited from `rio.Component`
-    key: str | int | None = None, 
-    min_width: float = 0, 
-    min_height: float = 0, 
-    grow_x: bool = False, 
-    grow_y: bool = False, 
-    align_x: float | None = None, 
-    align_y: float | None = None, 
-    margin_left: float | None = None, 
-    margin_top: float | None = None, 
-    margin_right: float | None = None, 
-    margin_bottom: float | None = None, 
-    margin_x: float | None = None, 
-    margin_y: float | None = None, 
-    margin: float | None = None, 
+    key: str | int | None = None,
+    min_width: float = 0,
+    min_height: float = 0,
+    grow_x: bool = False,
+    grow_y: bool = False,
+    align_x: float | None = None,
+    align_y: float | None = None,
+    margin_left: float | None = None,
+    margin_top: float | None = None,
+    margin_right: float | None = None,
+    margin_bottom: float | None = None,
+    margin_x: float | None = None,
+    margin_y: float | None = None,
+    margin: float | None = None,
+    accessibility_role: Literal['alert', 'alertdialog', 'application', 'article', 'banner', 'button', 'cell', 'checkbox', 'columnheader', 'combobox', 'complementary', 'contentinfo', 'definition', 'dialog', 'directory', 'document', 'feed', 'figure', 'form', 'grid', 'gridcell', 'group', 'heading', 'img', 'link', 'list', 'listbox', 'listitem', 'log', 'main', 'marquee', 'math', 'menu', 'menubar', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'navigation', 'none', 'note', 'option', 'presentation', 'progressbar', 'radio', 'radiogroup', 'region', 'row', 'rowgroup', 'rowheader', 'scrollbar', 'search', 'searchbox', 'separator', 'slider', 'spinbutton', 'status', 'switch', 'tab', 'table', 'tablist', 'tabpanel', 'term', 'textbox', 'timer', 'toolbar', 'tooltip', 'tree', 'treegrid', 'treeitem'] | None = None,
 )
+```
+
 text
-str
+`str`
+
 The text currently entered by the user.
 
+auto_focus
+`bool`
+
+Whether this component should receive the keyboard focus when
+it is created.
+
 label
-str
+`str`
+
 A short text to display next to the text input.
 
+accessibility_label
+`str`
+
+A short text describing the text input for screen
+readers. If omitted, the `label` text is used.
+
 is_sensitive
-bool
+`bool`
+
 Whether the text input should respond to user input.
 
 is_valid
-bool
-Visually displays to the user whether the current text is valid. You can use this to signal to the user that their input needs to be changed.
+`bool`
+
+Visually displays to the user whether the current text is
+valid. You can use this to signal to the user that their input needs
+to be changed.
+
+auto_adjust_height
+`bool`
+
+Whether to automatically grow the text input to
+accommodate all the text written in it.
+
+change_delay
+`float`
+
+The maximum time the Rio may wait after user input (in
+seconds) before firing the `on_change` event. Use this to either make
+input very snappy, or save on processing overhead.
 
 on_change
-rio.EventHandler[rio.MultiLineTextInputChangeEvent]
+`rio.EventHandler[rio.MultiLineTextInputChangeEvent]`
+
 Triggered when the user changes the text.
 
 on_confirm
-rio.EventHandler[rio.MultiLineTextInputConfirmEvent]
-Triggered when the user explicitly confirms their input, such as by pressing the "Enter" key. You can use this to trigger followup actions, such as logging in or submitting a form.
+`rio.EventHandler[rio.MultiLineTextInputConfirmEvent]`
 
-accessibility_label
-str
+Triggered when the user explicitly confirms their input,
+such as by pressing the "Enter" key. You can use this to trigger
+followup actions, such as logging in or submitting a form.
+
+on_gain_focus
+`rio.EventHandler[rio.MultiLineTextInputFocusEvent]`
+
+Triggered when the user selects the number input, i.e. it
+gains focus.
+
+on_lose_focus
+`rio.EventHandler[rio.MultiLineTextInputFocusEvent]`
+
+Triggered when the user switches from the [`NumberInput`](/docs/api/numberinput) to
+another component, i.e. it loses focus.
 
 style
-Literal['underlined', 'rounded']
+`Literal['underlined', 'rounded']`
+
 Changes the visual appearance of the text input.
 
 key
-str | int | None
-A unique identifier for this component. If two components with the same key are present during reconciliation they will be considered the same component and their state will be preserved. If no key is specified, reconciliation falls back to a less precise method, by comparing the location of the component in the component tree.
+`str | int | None`
+
+A unique identifier for this component. If two components with the
+same key are present during reconciliation they will be considered
+the same component and their state will be preserved. If no key is
+specified, reconciliation falls back to a less precise method, by
+comparing the location of the component in the component tree.
 
 min_width
-float
-The minimum amount of horizontal space this component should request during layouting. The component will never be smaller than this size.
+`float`
 
-Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+The minimum amount of horizontal space this component should
+request during layouting. The component will never be smaller than this
+size.
 
-Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+Please note that the space a [`Component`](/docs/api/component) receives during layouting may
+not match the request. As a general rule, for example, containers try to
+pass on all available space to children. If you really want a
+[`Component`](/docs/api/component) to only take up as much space as requested, consider
+specifying an alignment.
+
+Sizes are measured in "font heights", so a width of 1 is the same as the
+height of a single line of text.
 
 min_height
-float
-The minimum amount of vertical space this component should request during layouting. The component will never be smaller than this size.
+`float`
 
-Please note that the space a Component receives during layouting may not match the request. As a general rule, for example, containers try to pass on all available space to children. If you really want a Component to only take up as much space as requested, consider specifying an alignment.
+The minimum amount of vertical space this component should
+request during layouting. The component will never be smaller than this
+size.
 
-Sizes are measured in "font heights", so a width of 1 is the same as the height of a single line of text.
+Please note that the space a [`Component`](/docs/api/component) receives during layouting may
+not match the request. As a general rule, for example, containers try to
+pass on all available space to children. If you really want a
+[`Component`](/docs/api/component) to only take up as much space as requested, consider
+specifying an alignment.
+
+Sizes are measured in "font heights", so a width of 1 is the same as the
+height of a single line of text.
 
 grow_x
-bool
-Whether this component should request all the superfluous horizontal space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_x, some containers (such as rio.Row) will give all remaining space to those components first.
+`bool`
+
+Whether this component should request all the superfluous
+horizontal space available in its parent. Containers normally divide up
+any extra space evenly between their children. However, if components
+have `grow_x`, some containers (such as [`rio.Row`](/docs/api/row)) will
+give all remaining space to those components first.
 
 grow_y
-bool
-Whether this component should request all the superfluous vertical space available in its parent. Containers normally divide up any extra space evenly between their children. However, if components have grow_y, some containers (such as rio.Column) will give all remaining space to those components first.
+`bool`
+
+Whether this component should request all the superfluous
+vertical space available in its parent. Containers normally divide up
+any extra space evenly between their children. However, if components
+have `grow_y`, some containers (such as [`rio.Column`](/docs/api/column)) will
+give all remaining space to those components first.
 
 align_x
-float | None
-How this component should be aligned horizontally, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means left-aligned, 0.5 means centered, and 1 means right-aligned.
+`float | None`
+
+How this component should be aligned horizontally, if it
+receives more space than it requested. This can be a number between 0
+and 1, where 0 means left-aligned, 0.5 means centered, and 1 means
+right-aligned.
 
 align_y
-float | None
-How this component should be aligned vertically, if it receives more space than it requested. This can be a number between 0 and 1, where 0 means top-aligned, 0.5 means centered, and 1 means bottom-aligned.
+`float | None`
+
+How this component should be aligned vertically, if it receives
+more space than it requested. This can be a number between 0 and 1,
+where 0 means top-aligned, 0.5 means centered, and 1 means
+bottom-aligned.
 
 margin_left
-float | None
-The left margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_left and margin are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+`float | None`
+
+The left margin around this component. If multiple
+conflicting margins are specified this one will be used, since it's
+the most specific. If for example `margin_left` and `margin` are
+both specified, `margin_left` is used for the left side, while the
+other sides use `margin`. Sizes are measured in "font heights", so a
+margin of 1 is the height of a single line of text.
 
 margin_top
-float | None
-The top margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_top and margin are both specified, margin_top is used for the top side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+`float | None`
+
+The top margin around this component. If multiple
+conflicting margins are specified this one will be used, since it's
+the most specific. If for example `margin_top` and `margin` are both
+specified, `margin_top` is used for the top side, while the other
+sides use `margin`. Sizes are measured in "font heights", so a margin
+of 1 is the height of a single line of text.
 
 margin_right
-float | None
-The right margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_right and margin are both specified, margin_right is used for the right side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+`float | None`
+
+The right margin around this component. If multiple
+conflicting margins are specified this one will be used, since it's
+the most specific. If for example `margin_right` and `margin` are
+both specified, `margin_right` is used for the right side, while the
+other sides use `margin`. Sizes are measured in "font heights", so a
+margin of 1 is the height of a single line of text.
 
 margin_bottom
-float | None
-The bottom margin around this component. If multiple conflicting margins are specified this one will be used, since it's the most specific. If for example margin_bottom and margin are both specified, margin_bottom is used for the bottom side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+`float | None`
+
+The bottom margin around this component. If multiple
+conflicting margins are specified this one will be used, since it's
+the most specific. If for example `margin_bottom` and `margin` are
+both specified, `margin_bottom` is used for the bottom side, while
+the other sides use `margin`. Sizes are measured in "font heights", so
+a margin of 1 is the height of a single line of text.
 
 margin_x
-float | None
-The horizontal margin around this component. This is a shorthand for setting margin_left and margin_right to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_x and margin_left are both specified, margin_left is used for the left side, while the other side uses margin_x. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+`float | None`
+
+The horizontal margin around this component. This is a
+shorthand for setting `margin_left` and `margin_right` to the same
+value. If multiple conflicting margins are specified the most
+specific one wins. If for example `margin_x` and `margin_left` are
+both specified, `margin_left` is used for the left side, while the
+other side uses `margin_x`. Sizes are measured in "font heights", so a
+margin of 1 is the height of a single line of text.
 
 margin_y
-float | None
-The vertical margin around this component. This is a shorthand for setting margin_top and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin_y and margin_top are both specified, margin_top is used for the top side, while the other side uses margin_y. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+`float | None`
+
+The vertical margin around this component. This is a shorthand
+for setting `margin_top` and `margin_bottom` to the same value. If
+multiple conflicting margins are specified the most specific one
+wins. If for example `margin_y` and `margin_top` are both specified,
+`margin_top` is used for the top side, while the other side uses
+`margin_y`. Sizes are measured in "font heights", so a margin of 1 is
+the height of a single line of text.
 
 margin
-float | None
-The margin around this component. This is a shorthand for setting margin_left, margin_top, margin_right and margin_bottom to the same value. If multiple conflicting margins are specified the most specific one wins. If for example margin and margin_left are both specified, margin_left is used for the left side, while the other sides use margin. Sizes are measured in "font heights", so a margin of 1 is the height of a single line of text.
+`float | None`
 
-Examples
-Here's a simple example that allows the user to enter a value and displays it back to them:
+The margin around this component. This is a shorthand for
+setting `margin_left`, `margin_top`, `margin_right` and `margin_bottom`
+to the same value. If multiple conflicting margins are specified the
+most specific one wins. If for example `margin` and `margin_left` are
+both specified, `margin_left` is used for the left side, while the other
+sides use `margin`. Sizes are measured in "font heights", so a margin of
+1 is the height of a single line of text.
 
-Python
+accessibility_role
+`Literal['alert', 'alertdialog', 'application', 'article', 'banner', 'button', 'cell', 'checkbox', 'columnheader', 'combobox', 'complementary', 'contentinfo', 'definition', 'dialog', 'directory', 'document', 'feed', 'figure', 'form', 'grid', 'gridcell', 'group', 'heading', 'img', 'link', 'list', 'listbox', 'listitem', 'log', 'main', 'marquee', 'math', 'menu', 'menubar', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'navigation', 'none', 'note', 'option', 'presentation', 'progressbar', 'radio', 'radiogroup', 'region', 'row', 'rowgroup', 'rowheader', 'scrollbar', 'search', 'searchbox', 'separator', 'slider', 'spinbutton', 'status', 'switch', 'tab', 'table', 'tablist', 'tabpanel', 'term', 'textbox', 'timer', 'toolbar', 'tooltip', 'tree', 'treegrid', 'treeitem'] | None`
 
+Describes the component's role or purpose. This can
+help screen readers and other assistive technologies to better
+understand the structure and functionality of the page. Details about
+the available roles can be found on
+[MDN](https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Reference/Roles).
+
+## Examples
+
+Here's a simple example that allows the user to enter a value and displays
+it back to them:
+
+```python
 class MyComponent(rio.Component):
     text: str = "Hello, World!"
 
@@ -145,10 +300,13 @@ class MyComponent(rio.Component):
             ),
             rio.Text(f"You've typed: {self.text}"),
         )
-Alternatively you can also attach an event handler to react to changes. This is a little more verbose, but allows you to run arbitrary code when the user changes the text:
+```
 
-Python
+Alternatively you can also attach an event handler to react to changes. This
+is a little more verbose, but allows you to run arbitrary code when the user
+changes the text:
 
+```python
 class MyComponent(rio.Component):
     text: str = "Hello, World!"
 
@@ -165,3 +323,4 @@ class MyComponent(rio.Component):
             label="Enter a Text",
             on_change=self.on_value_change,
         )
+```

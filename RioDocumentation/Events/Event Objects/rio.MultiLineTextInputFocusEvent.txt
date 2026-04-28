@@ -1,0 +1,14 @@
+MultiLineTextInputFocusEvent
+
+Holds information regarding a [`MultiLineTextInput`](/docs/api/multilinetextinput) focus event.
+
+This is a simple dataclass that stores useful information for when a
+[`MultiLineTextInput`](/docs/api/multilinetextinput) gains or loses focus. You'll typically receive this as
+argument in `on_gain_focus` and `on_lose_focus` events.
+
+Attributes
+
+text
+`str`
+
+The `text` of the [`MultiLineTextInput`](/docs/api/multilinetextinput).

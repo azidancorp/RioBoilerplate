@@ -1,0 +1,442 @@
+# Detecting Victory
+
+Our Tic-Tac-Toe game is almost complete. The only thing missing now is to detect
+when a player has won the game. We'll do this by checking if any player has
+placed their marks in a row, column, or diagonal, whenever a field is pressed.
+
+First we'll need a couple additional attributes:
+
+```python
+    # The winner of the game, if any
+    winner: t.Literal["X", "O", "draw"] | None = None
+
+    # If there is a winner, these are the indices of the fields which made them
+    # win
+    winning_indices: set[int] = set()
+```
+
+The `winner` attribute will store the player who has won the game. It can be
+`"X"`, `"O"`, `"draw"` or `None`.
+
+If a player has won, `winning_indices` will store the indices of the fields that
+form a winning line.
+
+Nothing special going on here. Let's move on to the method that will check for a
+winner:
+
+```python
+    def find_winner(self) -> None:
+        """
+        Look if there is a winner on the board, and stores it in the component's
+        state. Also updates the winning indices accordingly.
+        """
+        # Create a list of all possible winning combinations. If all of these
+        # indices have the same value, then that value is the winner.
+        winning_combinations = [
+            [0, 1, 2],  # Top row
+            [3, 4, 5],  # Middle row
+            [6, 7, 8],  # Bottom row
+            [0, 3, 6],  # Left column
+            [1, 4, 7],  # Middle column
+            [2, 5, 8],  # Right column
+            [0, 4, 8],  # Top-left to bottom-right diagonal
+            [2, 4, 6],  # Top-right to bottom-left diagonal
+        ]
+
+        # Look for winners
+        for combination in winning_combinations:
+            values = [self.fields[i] for i in combination]
+            if values.count("X") == 3:
+                self.winner = "X"
+                self.winning_indices = set(combination)
+                return
+
+            if values.count("O") == 3:
+                self.winner = "O"
+                self.winning_indices = set(combination)
+                return
+
+        # If no fields are empty, it's a draw
+        if "" not in self.fields:
+            self.winner = "draw"
+            return
+
+        # There is no winner yet
+        pass
+```
+
+This method first lists all possible winning lines. For a 3x3 grid, there are 8
+of them: 3 rows, 3 columns, and 2 diagonals.
+
+We then check each line to see if all fields contain the same mark. If they do,
+we have a winner!
+
+If there is no winner yet, but all fields are filled, the game is a draw.
+
+Finally, if neither of the above conditions are met there is no winner yet. In
+either case we store the result in the `winner` attribute.
+
+Next up we need to tweak the `on_field_press` method to call `find_winner` after
+updating the field. This ensures that we always check for a winner after a field
+is pressed.
+
+```python
+    def on_field_press(self, index: int) -> None:
+        """
+        This function reacts to presses on the fields, and updates the game
+        state accordingly.
+        """
+
+        # If the game is already over, don't do anything
+        if self.winner:
+            return
+
+        # Set the field on that index
+        self.fields[index] = self.player
+
+        # Next player
+        self.player = "X" if self.player == "O" else "O"
+
+        # See if there is a winner
+        self.find_winner()
+```
+
+Since we've added new attributes, `on_reset` needs to reset those as well.
+
+```python
+    def on_reset(self) -> None:
+        """
+        Reset the game to its initial state.
+        """
+        self.fields = [""] * 9
+        self.player = "X"
+        self.winner = None
+        self.winning_indices = set()
+```
+
+Finally, let's adjust the `build` method to display the winner, if one is found.
+Luckily, we've previously introduced a status message, so we can reuse that to
+show the winner.
+
+```python
+    def build(self) -> rio.Component:
+        # Spawn components for the fields
+        field_components: list[rio.Component] = []
+
+        for index, field in enumerate(self.fields):
+            field_components.append(
+                comps.Field(
+                    value=field,
+                    dim=self.winner is not None
+                    and index not in self.winning_indices,
+                    on_press=functools.partial(self.on_field_press, index),
+                )
+            )
+
+        # Come up with a status message
+        if self.winner in ("X", "O"):
+            message = f"{self.winner} has won!"
+        elif self.winner == "draw":
+            message = "It's a draw!"
+        else:
+            message = f"{self.player}'s turn"
+
+        # Arrange all components in a grid
+        return rio.Column(
+            rio.Text(message, style="heading1"),
+            rio.Grid(
+                field_components[0:3],
+                field_components[3:6],
+                field_components[6:9],
+                row_spacing=1,
+                column_spacing=1,
+                align_x=0.5,
+            ),
+            rio.Button(
+                "Reset",
+                icon="material/refresh",
+                style="colored-text",
+                on_press=self.on_reset,
+            ),
+            spacing=2,
+            margin=2,
+            align_x=0.5,
+            align_y=0.0,
+        )
+```
+
+We'll also tell any fields to dim themselves if they're not part of the winning
+line and the game is over. In order for this to work, our `Field` class needs
+some updates:
+
+```python
+class Field(rio.Component):
+    value: t.Literal["X", "O", ""]
+    dim: bool
+
+    on_press: rio.EventHandler[[]] = None
+
+    def build(self) -> rio.Component:
+        # If the field is empty, allow the player to press on it. Since buttons
+        # would look out of place here, cards are a nice alternative.
+        if self.value == "":
+            return rio.Card(
+                content=rio.Spacer(
+                    min_width=3,
+                    min_height=3,
+                ),
+                on_press=self.on_press,
+            )
+
+        # For fields that already contain an X or O, show the respective icon.
+        # Also vary the color based on the player.
+        if self.value == "X":
+            color = rio.Color.RED
+            icon = "material/close"
+        else:
+            color = rio.Color.BLUE
+            icon = "material/circle"
+
+        # If a player has won, and this field isn't part of the winning
+        # combination, dim it.
+        if self.dim:
+            color = color.replace(opacity=0.2)
+
+        return rio.Icon(
+            icon=icon,
+            fill=color,
+            min_width=3,
+            min_height=3,
+        )
+```
+
+The changes in `Field` are minimal. There's a new `dim` attribute, which will
+store whether the field should be less conspicuous. The `build` method makes use
+of this attribute by lowering the opacity of the icon's color if `dim` is
+`True`.
+
+And that's it! Our Tic-Tac-Toe game is now complete. You can play against a
+friend, and the game will automatically detect when someone wins or when the
+game is a draw.
+
+[Interactive example: DoDont]
+
+## Wrapping up
+
+This concludes our little introduction to Rio. We hope you enjoyed it! If you
+have any questions, feel free to ask in the [Rio
+Discord](https://discord.gg/7ejXaPwhyH).
+
+You can also check out Rio examples or visit How-Tos for more in-depth guides.
+Links below!
+
+To see the complete code for this tutorial, create a new project using the
+`Tic-Tac-Toe` template:
+
+```bash
+rio new --template Tic-Tac-Toe --nicename Tic-Tac-Toe
+```
+
+## Complete Source Code
+
+Here's the complete source for all files from this tutorial. You can view the
+contents of a file by clicking on its name.
+
+### field.py
+
+```python
+from __future__ import annotations
+
+import typing as t
+
+import rio
+
+class Field(rio.Component):
+    value: t.Literal["X", "O", ""]
+    dim: bool
+
+    on_press: rio.EventHandler[[]] = None
+
+    def build(self) -> rio.Component:
+        # If the field is empty, allow the player to press on it. Since buttons
+        # would look out of place here, cards are a nice alternative.
+        if self.value == "":
+            return rio.Card(
+                content=rio.Spacer(
+                    min_width=3,
+                    min_height=3,
+                ),
+                on_press=self.on_press,
+            )
+
+        # For fields that already contain an X or O, show the respective icon.
+        # Also vary the color based on the player.
+        if self.value == "X":
+            color = rio.Color.RED
+            icon = "material/close"
+        else:
+            color = rio.Color.BLUE
+            icon = "material/circle"
+
+        # If a player has won, and this field isn't part of the winning
+        # combination, dim it.
+        if self.dim:
+            color = color.replace(opacity=0.2)
+
+        return rio.Icon(
+            icon=icon,
+            fill=color,
+            min_width=3,
+            min_height=3,
+        )
+```
+
+### tic_tac_toe_page.py
+
+```python
+from __future__ import annotations
+
+import functools
+import typing as t
+
+import rio
+
+from .. import components as comps
+
+@rio.page(
+    name="Tic Tac Toe",
+    url_segment="",
+)
+class TicTacToePage(rio.Component):
+    # The contents of all fields. Each field can contain an X, an O, or be
+    # empty. The initial state is an empty board.
+    fields: list[t.Literal["X", "O", ""]] = [""] * 9
+
+    # The player who is currently on turn
+    player: t.Literal["X", "O"] = "X"
+
+    # The winner of the game, if any
+    winner: t.Literal["X", "O", "draw"] | None = None
+
+    # If there is a winner, these are the indices of the fields which made them
+    # win
+    winning_indices: set[int] = set()
+
+    def find_winner(self) -> None:
+        """
+        Look if there is a winner on the board, and stores it in the component's
+        state. Also updates the winning indices accordingly.
+        """
+        # Create a list of all possible winning combinations. If all of these
+        # indices have the same value, then that value is the winner.
+        winning_combinations = [
+            [0, 1, 2],  # Top row
+            [3, 4, 5],  # Middle row
+            [6, 7, 8],  # Bottom row
+            [0, 3, 6],  # Left column
+            [1, 4, 7],  # Middle column
+            [2, 5, 8],  # Right column
+            [0, 4, 8],  # Top-left to bottom-right diagonal
+            [2, 4, 6],  # Top-right to bottom-left diagonal
+        ]
+
+        # Look for winners
+        for combination in winning_combinations:
+            values = [self.fields[i] for i in combination]
+            if values.count("X") == 3:
+                self.winner = "X"
+                self.winning_indices = set(combination)
+                return
+
+            if values.count("O") == 3:
+                self.winner = "O"
+                self.winning_indices = set(combination)
+                return
+
+        # If no fields are empty, it's a draw
+        if "" not in self.fields:
+            self.winner = "draw"
+            return
+
+        # There is no winner yet
+        pass
+
+    def on_field_press(self, index: int) -> None:
+        """
+        This function reacts to presses on the fields, and updates the game
+        state accordingly.
+        """
+
+        # If the game is already over, don't do anything
+        if self.winner:
+            return
+
+        # Set the field on that index
+        self.fields[index] = self.player
+
+        # Next player
+        self.player = "X" if self.player == "O" else "O"
+
+        # See if there is a winner
+        self.find_winner()
+
+    def on_reset(self) -> None:
+        """
+        Reset the game to its initial state.
+        """
+        self.fields = [""] * 9
+        self.player = "X"
+        self.winner = None
+        self.winning_indices = set()
+
+    def build(self) -> rio.Component:
+        # Spawn components for the fields
+        field_components: list[rio.Component] = []
+
+        for index, field in enumerate(self.fields):
+            field_components.append(
+                comps.Field(
+                    value=field,
+                    dim=self.winner is not None
+                    and index not in self.winning_indices,
+                    on_press=functools.partial(self.on_field_press, index),
+                )
+            )
+
+        # Come up with a status message
+        if self.winner in ("X", "O"):
+            message = f"{self.winner} has won!"
+        elif self.winner == "draw":
+            message = "It's a draw!"
+        else:
+            message = f"{self.player}'s turn"
+
+        # Arrange all components in a grid
+        return rio.Column(
+            rio.Text(message, style="heading1"),
+            rio.Grid(
+                field_components[0:3],
+                field_components[3:6],
+                field_components[6:9],
+                row_spacing=1,
+                column_spacing=1,
+                align_x=0.5,
+            ),
+            rio.Button(
+                "Reset",
+                icon="material/refresh",
+                style="colored-text",
+                on_press=self.on_reset,
+            ),
+            spacing=2,
+            margin=2,
+            align_x=0.5,
+            align_y=0.0,
+        )
+```
+
+[Making it Interactive](https://rio.dev/docs/tutorial-tic-tac-toe/4-interactivity)
+
+[Examples](https://rio.dev/examples)
+
+[Layouting Quickstart](https://rio.dev/docs/howto/layout-guide)

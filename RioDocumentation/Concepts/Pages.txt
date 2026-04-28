@@ -1,87 +1,174 @@
-How to Guide: Multiple Pages, Routing, and Guards
-This comprehensive guide will walk you through the process of setting up multiple pages, handling routing, and using guards for access control in your Rio application. By the end of this guide, you'll have a solid understanding of how to structure your application for optimal navigation and security.
+# Multiple Pages, Routing, and Guards
 
-Rio scans the page folder for you and automatically creates the necessary routes for you. You can create nested pages by organizing your page files within folders. The folder names must match the page file names. Rio will detect the nested pages and create the necessary routes for you.
+This guide will walk you through the process of setting up multiple pages,
+handling routing, and using guards for access control in your Rio application.
+By the end of this guide, you'll have a solid understanding of how to structure
+your application for optimal navigation and security.
 
-A basic page structure in Rio looks like this:
+## Creating Pages
 
-Plain text
+Creating a page is quite similar to creating a component. You have to do 3
+things:
 
-pages
-├── home_page.py
-|
-└── about_us.py
-Creating Pages
-In Rio, each page is defined as a class that represents a component. You can create a page by decorating the class with the @rio.page decorator or explicitly specifying the ComponentPage in your App. This decorator specifies the e.g. page's name, URL segment and guards, which defines how the page will be accessed in your application. For more information, see the API docs for the @rio.page decorator.
+1. Add a new Python file to your project's `pages` folder.
+2. Define a component in that file.
+3. Decorate your component with the `@rio.page()` decorator.
 
-Example: Creating a Home Page
-The following example demonstrates how to create a Home page that serves as the root of your application. Note that the url_segment is set to an empty string, making this page accessible at the root URL (/).
+Pages are pretty much regular components, except that pages go in the `pages`
+folder instead of the `components` folder and that they're decorated with
+`@rio.page()`. Here's an example:
 
-Python
+```python
+@rio.page(
+    name="About Us",
+    url_segment="about",
+)
+class AboutUsPage(rio.Component):
+    def build(self) -> rio.Component:
+        return rio.Markdown("This page provides information about us.")
+```
 
+Rio also has a deprecated class `rio.Page` (note the uppercase "P")
+    that is easy to confuse with the `@rio.page` decorator. Make sure you're
+    using the lowercase decorator instead of the uppercase class. The class is
+    no longer used and will be removed in a future version of Rio.
+
+The `url_segment` is set to `"about"`, making the page accessible at
+`http://your.website/about`. Visiting that URL will display "This page provides
+information about us.". For more information about this decorator and its
+parameters, check out [the `@rio.page`
+documentation](/docs/api/page).
+
+Your file structure should now look similar to this:
+
+```plain
+my_project
+├── __init__.py
+├── components
+|   ├── __init__.py
+|   └── my_component.py
+└── pages
+    └── about_us.py  # <-- Here!
+```
+
+The file name doesn't matter, but the location of the file does!
+
+### Example: Creating a Home Page
+
+We've seen how to create a page that's accessible under the URL `/about`, but
+what if we want to create a home page at the root URL (`/`)? This is done by
+setting the page's `url_segment` to an empty string:
+
+```python
 @rio.page(
     name="Home",
     url_segment="",
 )
-class AboutPage(rio.Component):
+class HomePage(rio.Component):
     def build(self) -> rio.Component:
         return rio.Markdown("Welcome to your Home Page!")
-Example: Creating an About Us Page
-This example shows how to create an About Us page. The url_segment is set to "about-page", making the page accessible at /about-page.
+```
 
-Python
+Now users can navigate between the home page at `/` and the about page at
+`/about`. Each page is accessible through its unique URL segment, making routing
+simple and intuitive.
 
-@rio.page(
-    name="About Us",
-    url_segment="about-page",
-)
-class AboutPage(rio.Component):
-    def build(self) -> rio.Component:
-        return rio.Markdown("This page provides information about our company.")
-With these two pages, users can now navigate between the home page and the about page. Each page is accessible through its unique URL segment, making routing simple and intuitive.
+### Sharing Content Between Pages
 
-Explicitly Specifying the ComponentPage in the App
-In some cases, you may want to explicitly specify the ComponentPage class in your app. This is useful when you need to customize the behavior of the page class or add additional functionality.
+Oftentimes your website will have some elements that are identical on all pages,
+like a navigation bar. Adding the navigation bar to every single page would be
+tedious and error-prone.
 
-Example: Explicitly Specifying the ComponentPage
-Rio apps can consist of many pages. You might have a welcome page, a settings page, a login, and so on. ComponentPage components contain all information needed to display those pages, as well as to navigate between them.
+We can solve this problem by using a custom `build` function for our app. The
+output of the app's `build` function is visible on every page, no matter what.
+We will instruct Rio to display the navigation bar at the top, and a
+[`PageView`](/docs/api/pageview) (which will display the content
+of the current page) below.
 
-This is not just specific to websites. Apps might, for example, have a settings page, a profile page, a help page, and so on.
+```python
+from . import components as comps
 
-Pages are passed directly to the app during construction, like so:
-
-Python
-
-app = rio.App(
-    build=lambda: rio.Column(
-        rio.Text("Welcome to my app!"),
+def build() -> rio.Component:
+    return rio.Column(
+        comps.NavigationBar(),
+        # The PageView displays the content of the current page
         rio.PageView(grow_y=True),
-    ),
-    pages=[
-        rio.ComponentPage(
-            name="Home",
-            url_segment="",
-            build=lambda: rio.Markdown("Welcome to your Home Page!"),
-        ),
-        rio.ComponentPage(
-            name="About Us",
-            url_segment="about-page",
-            build=lambda: rio.Markdown("This page provides information about our company."),
-        ),
-    ],
-)
+    )
 
-app.run_in_browser()
-This will display Welcome to your Home Page! when navigating to the root URL, but This page provides information about our company. when navigating to /about-page. Note that on both pages the text Welcome to my page! is displayed above the page content. That's because it's not part of the PageView.
+app = rio.App(build=build)
+```
 
-Navigating / Routing
-Navigation is a crucial part of any web application. In Rio, there are several ways to navigate between pages: programmatically, using the rio.Link component, or via direct URL access.
+## Nested Pages
 
-Navigating to a Page Programmatically
-You can navigate to a page programmatically using the navigate_to method available in the Session object. This is useful when you need to trigger navigation as a result of some user interaction, like clicking a button.
+Creating a nested page structure is essential for organizing your application
+into sections and subsections. To create sub-pages, put them in a folder with
+the same name as the file containing the parent page. For example, let's say we
+want to create pages for the following URLs:
 
-Python
+```plain
+/
+/docs
+/docs/tutorial
+/docs/api
+```
 
+Our file hierarchy would look like this:
+
+```plain
+pages
+├── home_page.py           # URL: /
+├── docs_page.py
+└── docs_page              # (Folder)
+    ├── docs_root_page.py  # URL: /docs
+    ├── tutorial_page.py   # URL: /docs/tutorial
+    └── api_docs_page.py   # URL: /docs/api
+```
+
+You may wonder what the point of the `docs_page.py` file is. This page is active
+on every URL that starts with `/docs`. For example, if you're on
+`/docs/tutorial`, then both the `docs_page` **and** the `tutorial_page` are
+active. If you're on `/docs`, then the `docs_page` and the `docs_root_page` are
+active. That means we can use the `docs_page` to place components that we want
+to have on _all_ docs pages, like a side bar:
+
+```python
+@rio.page(url_segment="docs")
+class DocsPage(rio.Component):
+    def build(self) -> rio.Component:
+        return rio.Row(
+            comps.SideBar(),
+            # The PageView is responsible for displaying
+            # the currently active sub-page
+            rio.PageView(grow_x=True),
+        )
+```
+
+Make sure to use a `PageView` on your parent page, otherwise the child pages
+won't be displayed! But what does the `PageView` do on the URL `/docs`? It needs
+a child page to display, otherwise we'll get an error. That's where the
+`docs_root_page` comes in. Defining this page with `url_segment=""` creates a
+child page that is only active on the URL `/docs`:
+
+```python
+@rio.page(url_segment="")
+class DocsRootPage(rio.Component):
+    def build(self) -> rio.Component:
+        return rio.Markdown("You're currently on `/docs`!")
+```
+
+## Navigating / Routing
+
+Navigation is a crucial part of any web application. In Rio, there are several
+ways to navigate between pages: programmatically, using the
+[`rio.Link`](/docs/api/link) component, or via direct URL access.
+
+### Navigating to a Page Programmatically
+
+You can navigate to a page programmatically using the `navigate_to` method
+available in the `Session` object. This is useful when you need to trigger
+navigation as a result of some user interaction, like clicking a button.
+
+```python
 class MyComponent(rio.Component):
     def navigate_to_home(self):
         # Perform any pre-navigation logic here
@@ -92,96 +179,63 @@ class MyComponent(rio.Component):
             "Go to Home",
             on_click=self.navigate_to_home,
         )
-In this example, clicking the button triggers the navigate_to_home method, which directs the user to the Home page.
+```
 
-Navigating with the rio.Link Component
-For simpler cases, you can use the rio.Link component to create a link to a page:
+In this example, clicking the button triggers the `navigate_to_home` method,
+which directs the user to the Home page.
 
-Python
+### Navigating with the `rio.Link` Component
 
+For simpler cases, you can use the [`rio.Link`](/docs/api/link)
+component to create a link to a page:
+
+```python
 rio.Link("Home", "/")
-Combining Links and Buttons
-You can also use the rio.Link component to wrap other components, such as buttons, to create interactive navigation elements:
+```
 
-Python
+### Combining Links and Buttons
 
+You can also use the `rio.Link` component to wrap other components, such as
+buttons, to create interactive navigation elements:
+
+```python
 rio.Link(
     rio.Button("Home"),
     target_url="/",
 )
-This approach combines the visual appearance of a button with the functionality of a link.
+```
 
-Navigating Directly via URL
-Users can navigate directly to a specific page by entering the corresponding URL in their browser. For example, to visit the About Us page, they would go to https://my-domain.com/about-page.
+This approach combines the visual appearance of a button with the functionality
+of a link.
 
-Nested Pages
-Creating a nested page structure is essential for organizing your application into sections and subsections. Rio detects nested pages based on the folder structure in your pages directory. The folder name must match the page file name to create a hierarchy.
+### Navigating Directly via URL
 
-Example: Folder Structure for Nested Pages
-Plain text
+Users can navigate directly to a specific page by entering the corresponding URL
+in their browser. For example, to visit the About Us page we created earlier,
+they would go to `http://your.website/about`.
 
-pages
-│
-├── app_page
-│   ├── info_page.py
-│   └── about_us_page.py
-│
-├── app_page.py
-└── home_page.py
-In this structure, the app_page directory contains nested pages like info_page.py and about_us_page.py. The app_page.py file represents the main page for this section.
+## Using Guards
 
-Example: Creating a Nested App Page
-Python
+Guards are an essential feature for controlling access to certain pages in your
+application. They allow you to implement logic that checks whether a user has
+the necessary permissions to access a page.
 
-@rio.page(
-    name="App Page",
-    url_segment="app",
-)
-class AboutPage(rio.Component):
-    """
-    A sample page, which displays a humorous description of the company.
-    """
+### How Guards Work
 
-    def build(self) -> rio.Component:
-        return rio.Column(
-            rio.Markdown(
-                "This is the main page of the app section.\n\n"
-                "Explore more about our features and functionalities here."
-            ),
-            rio.PageView(),
-        )
-Example: Creating a Nested About Us Page
-Python
+A guard is a function that takes a `GuardEvent` object as an argument. Based on
+the logic within the guard, it returns a string (the `url_segment`) to redirect
+unauthorized users or `None` to grant access.
 
-@rio.page(
-    name="About Us",
-    url_segment="about-page",
-)
-class AboutPage(rio.Component):
-    """
-    A sample page, which displays a humorous description of the company.
-    """
+In more details see our
+[Authentication](/examples/authentication) example and the [API
+docs for GuardEvent](/docs/api/guardevent).
 
-    def build(self) -> rio.Component:
-        return rio.Markdown("...")
-Accessing Nested Pages
-To navigate to these nested pages, users can use URLs like: https://my-domain.com/app/about-page
+### Example: Creating a Guard
 
-This URL structure reflects the nested hierarchy, making it easier for users to understand the organization of your application.
+This example demonstrates a guard that checks if the user is logged in. If the
+user is not logged in, they are redirected to the login page.
 
-Using Guards
-Guards are an essential feature for controlling access to certain pages in your application. They allow you to implement logic that checks whether a user has the necessary permissions to access a page.
-
-How Guards Work
-A guard is a function that takes a GuardEvent object as an argument. Based on the logic within the guard, it returns a str (the url_segment) to redirect unauthorized users or None to grant access.
-
-In more details see our Authentication example and the API docs for GuardEvent.
-
-Example: Creating a Guard
-This example demonstrates a guard that checks if the user is logged in. If the user is not logged in, they are redirected to the home page.
-
-Python
-
+```python
 def guard(event: rio.GuardEvent) -> str | None:
     """
     Create a guard that checks if the user is already logged in.
@@ -191,21 +245,20 @@ def guard(event: rio.GuardEvent) -> str | None:
     `event`: The event that triggered the guard containing the `session`
         and `active_pages`.
     """
-    # Check if the user is authenticated by looking for a user session
-    try:
-        event.session[data_models.AppUser]
-
-    except KeyError:
-        # User is not logged in, no redirection needed
+    if is_logged_in(event.session):
+        # User is logged in, no redirection needed
         return None
+    else:
+        # User is not logged in, redirect to the login page
+        return '/login'
+```
 
-    # User is logged in, redirect to the home page
-    return "/app/home"
-Applying a Guard to a Page
-To protect a page with a guard, simply add the guard parameter to the @rio.page decorator:
+### Applying a Guard to a Page
 
-Python
+To protect a page with a guard, simply add the `guard` parameter to the
+`@rio.page` decorator:
 
+```python
 @rio.page(
     name="App Page",
     url_segment="app",
@@ -213,15 +266,83 @@ Python
 )
 class AppPage(rio.Component):
     def build(self) -> rio.Component:
-        return rio.Markdown("This page is protected. Only authorized users can view this content.")
-Use Cases for Guards
-Authentication: Prevent unauthenticated users from accessing specific pages.
-Authorization: Ensure users have the correct roles or permissions before accessing certain features.
-Custom Logic: Implement any custom access logic, such as time-based access restrictions or feature flags.
-Summary and Further Reading
-This guide covered the basics of creating pages, handling routing, and using guards for access control in a Rio application. To dive deeper into these topics, refer to the following resources:
+        return rio.Text("This page is protected. Only authorized users can view this content.")
+```
 
-Authentication Example
-API Documentation for GuardEvent
-API Documentation for @rio.page decorator
-By following these practices, you can build a well-structured, secure, and user-friendly application using the Rio framework.
+### Use Cases for Guards
+
+- **Authentication:** Prevent unauthenticated users from accessing specific
+    pages.
+- **Authorization:** Ensure users have the correct roles or permissions before
+    accessing certain features.
+- **Custom Logic:** Implement any custom access logic, such as time-based
+    access restrictions or feature flags.
+
+## Creating Pages dynamically
+
+Sometimes you might want to create pages dynamically, which is difficult to do
+with the `@rio.page` decorator. Rio offers two solutions for this:
+
+1. Use [pages with URL parameters](/docs/howto/route-parameters).
+2. Pass a list of pages into the `App` constructor.
+
+Here, we will focus on the 2nd option.
+
+The `App` has a `pages` parameter, which allows you to pass in a list of pages.
+There are two classes that can be used as input here:
+
+- [`rio.ComponentPage`](/docs/api/componentpage) is a regular
+    page, with a name, url segment, build function, a list of sub-pages, etc.
+- [`rio.Redirect`](/docs/api/redirect) redirects the user to a
+    different URL.
+
+Here's an example with nested pages and a redirect:
+
+```python
+app = rio.App(
+    build=lambda: rio.Column(
+        rio.Text("Welcome to my app!"),
+        rio.PageView(grow_y=True),
+    ),
+    pages=[
+        rio.ComponentPage(
+            name="Home",
+            url_segment="",
+            build=lambda: rio.Text("Welcome to your Home Page!"),
+        ),
+        rio.ComponentPage(
+            name="Blog",
+            url_segment="blog",
+            build=rio.PageView,
+            children=[
+                rio.ComponentPage(
+                    name="Welcome",
+                    url_segment="",
+                    build=lambda: rio.Text("Welcome to our blog!"),
+                ),
+                rio.Redirect(
+                    url_segment="home",
+                    target="/blog",
+                )
+            ]
+        ),
+    ],
+)
+```
+
+This will display "Welcome to your Home Page!" when navigating to the root URL,
+or "Welcome to our blog!" when navigating to `/blog`. Navigating to `/blog/home`
+will redirect to `/blog`.
+
+## Summary and Further Reading
+
+This guide covered the basics of creating pages, handling routing, and using
+guards for access control in a Rio application. To dive deeper into these
+topics, refer to the following resources:
+
+- [Authentication Example](/examples/authentication)
+- [API Documentation for `GuardEvent`](/docs/api/guardevent)
+- [API Documentation for `@rio.page` decorator](/docs/api/page)
+
+By following these practices, you can build a well-structured, secure, and
+user-friendly application using the Rio framework.

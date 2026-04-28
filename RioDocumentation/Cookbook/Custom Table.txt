@@ -1,0 +1,675 @@
+# Creating a Custom Table
+
+This chapter provides a comprehensive guide to building a custom table component
+in the Rio framework. Tables are a fundamental part of modern UI design,
+allowing users to view, sort, and filter information. While Rio includes a
+built-in [rio.Table](/docs/api/table) component for straightforward use cases, more complex
+scenarios such as multi-selection and dynamic filtering often require a custom
+solution. In this chapter, we will walk you through the process of creating a
+`CustomTable` component that not only supports multiple selections but also
+integrates filtering capabilities through several subcomponents for a robust,
+interactive user interface.
+
+## Overview
+
+The `CustomTable` component is designed to display a list of users with support
+for dynamic filtering based on various criteria such as status and location. The
+table is composed of multiple subcomponents that work together to provide a
+seamless user experience:
+
+- **StyledRectangle:** A component that displays a rectangle with text and an icon.
+  It represents an individual option that can be selected or deselected.
+
+- **PopupRectangle:** A popup component that contains a list of selectable options.
+  It is used within filter components to allow users to change filter settings.
+
+- **Filter:** A component that integrates an icon, text label, and dropdown
+  functionality. It displays a popup of options when clicked.
+
+- **FilterRow:** A row container that holds multiple Filter components, letting
+  users adjust filters for status, location, and display options.
+
+- **TableHeader:** Displays the header of the table, including selected display
+  options. It helps define which columns are visible.
+
+- **TableRow:** Represents a single row in the table, containing data such as user
+  ID, name, email, location, and status.
+
+- **UserTable:** Combines the header and multiple table rows into a complete table
+  structure.
+
+- **CustomTable:** The overall component that integrates a title, a filter row, and
+  the user table. It manages the filtering logic and selection states across the
+  table.
+
+By the end of this chapter, you'll have a comprehensive understanding of how to
+build these components and how they seamlessly work together to create an
+engaging user experience. This foundation will empower you to implement the
+provided example and extend it further with your own creative ideas—the only
+limit is your imagination!
+
+Let's see how the final component looks like:
+
+[Image](https://rio.dev/rio/assets/temp/f-dda82b7898e4f7119bd054af2f195af4e7a3c0c27dfef5fce94035de31affa96)
+
+## Core Components
+
+### StyledRectangle
+
+The `StyledRectangle` component is responsible for displaying an individual
+option with a text label and an optional check icon. When an option is selected,
+the check icon appears, providing clear visual feedback to the user. It supports
+click events through its event handler, making it an interactive element of the
+UI.
+
+PopupRectangle
+
+This component serves as the container for a list of options presented in a
+popup. It uses a column layout to stack multiple StyledRectangle instances. The
+PopupRectangle ensures that the popup is styled consistently with the theme,
+including background color, stroke, and corner radius. It also handles pointer
+events to manage option selection.
+
+Filter and FilterRow
+
+The Filter component combines an icon, text label, and a dropdown arrow. It
+wraps its content in a clickable rectangle that toggles the visibility of a
+popup containing filter options (via PopupRectangle). The FilterRow organizes
+several Filter components horizontally, allowing users to filter table data by
+status, location, or display options. This row acts as the control panel for
+refining the table's content. It's basically a Custom Dropdown component.
+
+### TableHeader and TableRow
+
+The `TableHeader` displays the table's column headers based on selected display
+options. It dynamically adjusts the header content, ensuring that only the
+chosen columns (e.g., ID, name, email) are visible. The `TableRow` component
+renders individual user data entries. It uses a combination of text, checkboxes,
+and icons to present a user's details in a row format, and it adapts its layout
+based on the selected display options.
+
+### UserTable and CustomTable
+
+The `UserTable` component combines the header and individual rows into a
+coherent table layout. It iterates over a list of users and renders a `TableRow`
+for each one. Finally, the CustomTable component serves as the entry point for
+the page. It integrates a title, the filter row, and the user table within a
+scrollable container, managing the state and filtering logic to display only the
+relevant user data based on selected options.
+
+### Complete Code of the Custom Table Component
+
+```
+import rio
+import functools
+import dataclasses
+
+from .. import components as comps
+from .. import constants, data_models
+
+class StyledRectangle(rio.Component):
+    """
+    A custom component to display a rectangle with text and an icon.
+
+    The option can be selected and deselected.
+
+    ## Attributes:
+
+    `name`: The name of the option.
+
+    `is_selected`: A boolean indicating whether the option is selected.
+    """
+
+    name: str
+    is_selected: bool = False
+
+    on_press: rio.EventHandler[[]] = None
+
+    async def _on_press(self, _: rio.PointerEvent) -> None:
+        await self.call_event_handler(self.on_press)
+
+    def build(self) -> rio.Component:
+
+        content = rio.Row(margin=0.5, spacing=0.5, min_height=1.2)
+
+        content.add(
+            rio.Text(
+                self.name,
+                selectable=False,
+                style=rio.TextStyle(font_weight="bold", font_size=0.9),
+            ),
+        )
+        if self.is_selected:
+            content.add(rio.Spacer())
+            content.add(
+                rio.Icon(
+                    "material/check",
+                    fill=self.session.theme.primary_color,
+                    align_y=0.5,
+                    min_width=1.2,
+                    min_height=1.2,
+                ),
+            )
+
+        return rio.PointerEventListener(
+            rio.Rectangle(
+                content=content,
+                fill=rio.Color.TRANSPARENT,
+                hover_fill=self.session.theme.background_color,
+                corner_radius=self.session.theme.corner_radius_small,
+                transition_time=0.1,
+                cursor='pointer',
+            ),
+            on_press=self._on_press,
+        )
+
+class PopupRectangle(rio.Component):
+    options: list[data_models.Option]
+
+    on_change_option: rio.EventHandler[[data_models.Option]] = None
+
+    def on_press(self, _: rio.PointerEvent) -> None:
+        pass
+
+    async def _on_change_option(self, option: data_models.Option) -> None:
+        await self.call_event_handler(self.on_change_option, option)
+        self.force_refresh()  # TODO: check if needed
+
+    def build(self) -> rio.Component:
+        content = rio.Column(margin=0.5, spacing=0.5)
+
+        for option in self.options:
+            content.add(
+                StyledRectangle(
+                    name=option.name,
+                    is_selected=option.is_selected,
+                    on_press=functools.partial(self._on_change_option, option),
+                ),
+            )
+
+        # Styling the popup
+        return rio.PointerEventListener(
+            rio.Rectangle(
+                content=content,
+                fill=self.session.theme.neutral_color,
+                stroke_width=0.1,
+                stroke_color=self.session.theme.neutral_color.brighter(0.2),
+                corner_radius=self.session.theme.corner_radius_small,
+                transition_time=0.1,
+                align_x=0.5,
+                min_width=7.5,
+            ),
+            on_press=self.on_press,
+        )
+
+class Filter(rio.Component):
+    text: str
+    icon: str
+    popup_content: list[data_models.Option]
+    text_fill: rio.Color = rio.Color.GRAY.darker(0.1)
+    is_open: bool = False
+
+    on_change_option: rio.EventHandler[[data_models.Option]] = None
+
+    async def _on_change_option(self, option: data_models.Option) -> None:
+        await self.call_event_handler(self.on_change_option, option)
+
+    def on_press(self, _: rio.PointerEvent) -> None:
+        self.is_open = not self.is_open
+
+    def build(self) -> rio.Component:
+        return rio.Popup(
+            anchor=rio.PointerEventListener(
+                rio.Rectangle(
+                    content=rio.Row(
+                        rio.Icon(
+                            self.icon,
+                            fill=rio.Color.GRAY.darker(0.1),
+                            align_y=0.5,
+                            min_width=1.2,
+                            min_height=1.2,
+                        ),
+                        rio.Text(
+                            self.text,
+                            selectable=False,
+                            style=rio.TextStyle(
+                                fill=self.text_fill,
+                                font_size=0.9,
+                            ),
+                        ),
+                        rio.Icon(
+                            "material/keyboard_arrow_down",
+                            fill=rio.Color.GRAY.darker(0.1),
+                            align_y=0.5,
+                        ),
+                        spacing=0.5,
+                        margin_x=0.5,
+                        margin_y=0.2,
+                        align_x=0,
+                        align_y=0.5,
+                    ),
+                    fill=self.session.theme.background_color,
+                    stroke_color=rio.Color.GRAY.darker(0.1),
+                    hover_stroke_color=self.session.theme.primary_color,
+                    stroke_width=0.1,
+                    corner_radius=self.session.theme.corner_radius_small,
+                ),
+                on_press=self.on_press,
+            ),
+            content=PopupRectangle(
+                self.popup_content, on_change_option=self._on_change_option
+            ),
+            is_open=self.is_open,
+            position="bottom",
+            user_closable=True,
+        )
+
+class FilterRow(rio.Component):
+    status_options: list[data_models.Option]
+    location_options: list[data_models.Option]
+    display_options: list[data_models.Option]
+
+    on_change_status: rio.EventHandler[[data_models.Option]] = None
+
+    async def on_change_option(self, option: data_models.Option) -> None:
+        await self.call_event_handler(self.on_change_status, option)
+
+    def build(self) -> rio.Component:
+        return rio.Column(
+            rio.Row(
+                Filter(
+                    text="Status",
+                    icon="material/check_circle",
+                    popup_content=self.status_options,
+                    on_change_option=self.on_change_option,
+                ),
+                Filter(
+                    text="Location",
+                    icon="material/location_on",
+                    popup_content=self.location_options,
+                    on_change_option=self.on_change_option,
+                ),
+                rio.Spacer(),
+                Filter(
+                    text="Display",
+                    icon="material/tune",
+                    text_fill=self.session.theme.text_style.fill,  # type:ignore
+                    popup_content=self.display_options,
+                    on_change_option=self.on_change_option,
+                ),
+                spacing=0.5,
+                align_y=0.5,
+                margin_x=1,
+                margin_y=0.5,
+            ),
+            rio.Separator(
+                color=self.session.theme.neutral_color,
+                align_y=1,
+            ),
+            align_y=0,
+        )
+
+class TableHeader(rio.Component):
+    """
+    Custom component to display the header of the table.
+
+    The header consists of a row with the selected display options.
+
+    ## Attributes:
+
+    `selected_display_options`: A list of strings representing the selected
+    display options.
+    """
+
+    selected_display_options: list[str]
+
+    def build(self) -> rio.Component:
+        # Build the row based on the selected display options
+        content_row = rio.Row(margin_y=1)
+        content_row_proportions = [0.4]
+
+        content_row.add(rio.Checkbox())
+
+        if "#" in self.selected_display_options:
+            content_row.add(
+                rio.Text(
+                    "#",
+                    style=rio.TextStyle(
+                        font_size=0.9,
+                        font_weight="bold",
+                    ),
+                ),
+            )
+            content_row_proportions.append(0.4)
+
+        if "Name" in self.selected_display_options:
+            content_row.add(
+                rio.Text(
+                    "Name",
+                    style=rio.TextStyle(
+                        font_size=0.9,
+                        font_weight="bold",
+                    ),
+                ),
+            )
+            content_row_proportions.append(1)
+
+        if "Email" in self.selected_display_options:
+            content_row.add(
+                rio.Text(
+                    "Email",
+                    style=rio.TextStyle(
+                        font_size=0.9,
+                        font_weight="bold",
+                    ),
+                ),
+            )
+            content_row_proportions.append(1)
+
+        if "Location" in self.selected_display_options:
+            content_row.add(
+                rio.Text(
+                    "Location",
+                    style=rio.TextStyle(
+                        font_size=0.9,
+                        font_weight="bold",
+                    ),
+                ),
+            )
+            content_row_proportions.append(1)
+
+        if "Status" in self.selected_display_options:
+            content_row.add(
+                rio.Text(
+                    "Status",
+                    style=rio.TextStyle(
+                        font_size=0.9,
+                        font_weight="bold",
+                    ),
+                ),
+            )
+            content_row_proportions.append(1)
+
+        content_row.proportions = content_row_proportions
+
+        return rio.Column(
+            content_row,
+            rio.Separator(color=self.session.theme.neutral_color),
+        )
+
+class TableRow(rio.Component):
+    """
+    Custom component to display a row of the table.
+
+    The row consists of a checkbox and the user's ID, name, email, location, and
+    status based on the selected display options.
+
+    ## Attributes:
+
+    `id_number`: The ID number of the user.
+
+    `name`: The name of the user.
+
+    `email`: The email of the user.
+
+    `location`: The location of the user.
+
+    `status`: The status of the user.
+
+    `image`: The image of the user.
+
+    `selected_display_options`: A list of strings representing the selected
+    display options.
+    """
+
+    id_number: int
+    name: str
+    email: str
+    location: str
+    status: str
+    image: str
+    selected_display_options: list[str]
+
+    def build(self) -> rio.Component:
+        # Build the row based on the selected display options
+        content_row = rio.Row(margin_y=1)
+        content_row_proportions = [0.4]
+
+        content_row.add(rio.Checkbox())
+
+        if "#" in self.selected_display_options:
+            content_row.add(
+                rio.Text(
+                    str(self.id_number),
+                    style=rio.TextStyle(
+                        font_size=0.9,
+                        fill=self.session.theme.text_style.fill.darker(  # type:ignore
+                            0.35
+                        ),
+                    ),
+                ),
+            )
+            content_row_proportions.append(0.4)
+
+        if "Name" in self.selected_display_options:
+            content_row.add(
+                rio.Row(
+                    rio.Rectangle(
+                        fill=rio.ImageFill(self.session.assets / self.image),
+                        corner_radius=999999,
+                        align_x=0,
+                        align_y=0.5,
+                        min_height=1.5,
+                        min_width=1.5,
+                    ),
+                    rio.Text(
+                        self.name,
+                        style=rio.TextStyle(
+                            font_size=0.9,
+                        ),
+                    ),
+                    spacing=0.5,
+                    align_x=0,
+                ),
+            )
+            content_row_proportions.append(1)
+
+        if "Email" in self.selected_display_options:
+            content_row.add(
+                rio.Text(
+                    self.email,
+                    style=rio.TextStyle(
+                        font_size=0.9,
+                        fill=self.session.theme.text_style.fill.darker(  # type:ignore
+                            0.35
+                        ),
+                    ),
+                )
+            )
+            content_row_proportions.append(1)
+
+        if "Location" in self.selected_display_options:
+            content_row.add(
+                rio.Text(
+                    self.location,
+                    style=rio.TextStyle(
+                        font_size=0.9,
+                        fill=self.session.theme.text_style.fill.darker(  # type:ignore
+                            0.35
+                        ),
+                    ),
+                ),
+            )
+            content_row_proportions.append(1)
+
+        if "Status" in self.selected_display_options:
+            content_row.add(
+                comps.ColoredRectangle(
+                    content=self.status, color=self.session.theme.success_color
+                ),
+            )
+            content_row_proportions.append(1)
+
+        # Set the proportions of the content row
+        content_row.proportions = content_row_proportions
+
+        return rio.Rectangle(
+            content=rio.Column(
+                content_row,
+                rio.Separator(color=self.session.theme.neutral_color),
+            ),
+            fill=self.session.theme.background_color,
+            hover_fill=self.session.theme.background_color.brighter(
+                0.05
+            ),  # TODO: make this hover_fill color for all components
+            transition_time=0.1,
+        )
+
+class UserTable(rio.Component):
+    """
+    Custom component to display a table of users.
+
+    The table consists of a header and multiple rows, each representing a user
+    entry. Displaying the user's ID, name, email, location, and status based on
+    the selected display options.
+
+    ## Attributes:
+
+    `users`: Each user is represented as a data_models.User instance.
+
+    `display_options`: A list of data_models.Option instances representing the
+    selected display options.
+    """
+
+    users: list[data_models.User]
+    selected_display_options: list[str]
+
+    def build(self) -> rio.Component:
+        content = rio.Column()
+        content.add(TableHeader(selected_display_options=self.selected_display_options))
+
+        for user in self.users:
+            content.add(
+                TableRow(
+                    id_number=user.id_number,
+                    name=user.name,
+                    email=user.email,
+                    location=user.location,
+                    status=user.status,
+                    image=user.image,
+                    selected_display_options=self.selected_display_options,
+                )
+            )
+
+        return content
+
+class CustomTable(rio.Component):
+    """
+    Custom component to display the users page.
+
+    The page consists of a title, a filter row, and a user table. The user table
+    displays the users based on the selected statuses and locations.
+
+    ## Attributes:
+
+    `users`: A list of users.
+
+    `status_options`: A list of status options.
+
+    `location_options`: A list of location options.
+
+    `display_options`: A list of display options.
+    """
+    users: list[data_models.User] = dataclasses.field(
+        default_factory=lambda: constants.USERS
+    )
+    status_options: list[data_models.Option] = dataclasses.field(
+        default_factory=lambda: constants.STATUS_OPTIONS
+    )
+    location_options: list[data_models.Option] = dataclasses.field(
+        default_factory=lambda: constants.LOCATION_OPTIONS
+    )
+    display_options: list[data_models.Option] = dataclasses.field(
+        default_factory=lambda: constants.DISPLAY_OPTIONS
+    )
+
+    def on_change_selection(self, option: data_models.Option) -> None:
+        """
+        Change the selection of the option.
+        """
+        option.is_selected = not option.is_selected
+        self.force_refresh()
+
+    def get_selected_display_options(self) -> list[str]:
+        """
+        Get the selected display options.
+        """
+        return [option.name for option in self.display_options if option.is_selected]
+
+    def filter_users(self) -> list[data_models.User]:
+        """
+        Filter the users based on the selected statuses and locations.
+
+        Normally, this would be done by querying a database, but for this
+        example, we will filter the users in memory.
+        """
+        users_filtered = []
+
+        # Get the selected statuses and locations
+        selected_statuses = [
+            option.name for option in self.status_options if option.is_selected
+        ]
+        selected_locations = [
+            option.name for option in self.location_options if option.is_selected
+        ]
+
+        # Filter the users based on the selected statuses and locations
+        for user in self.users:
+            if user.status in selected_statuses and user.location in selected_locations:
+                users_filtered.append(user)
+
+        return users_filtered
+
+    def build(self) -> rio.Component:
+        # Apply filters to users, then pass the filtered users to the UserTable
+        # component.
+        users_filtered = self.filter_users()
+        selected_display_options = self.get_selected_display_options()
+
+        return rio.Column(
+            rio.Column(
+                rio.Separator(
+                    color=self.session.theme.neutral_color,
+                    align_y=0,
+                ),
+                rio.Text(
+                    "Users",
+                    style=rio.TextStyle(
+                        font_size=1,
+                        font_weight="bold",
+                    ),
+                    align_x=0,
+                    align_y=0.5,
+                    margin_left=1,
+                    grow_y=True,
+                ),
+                align_y=0,
+                min_height=4,
+            ),
+            rio.Separator(color=self.session.theme.neutral_color, align_y=1),
+            FilterRow(
+                self.status_options,
+                self.location_options,
+                self.display_options,
+                on_change_status=self.on_change_selection,
+            ),
+            rio.ScrollContainer(
+                UserTable(
+                    users=users_filtered,
+                    selected_display_options=selected_display_options,
+                    align_y=0,
+                ),
+                grow_y=True,
+            ),
+        )
+```

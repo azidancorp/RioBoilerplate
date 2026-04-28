@@ -1,0 +1,51 @@
+Set
+
+A `set`-like object that automatically rebuilds components whenever its content changes.
+
+**This class is experimental and may change in the future**
+
+Experimental classes are included in Rio to gather feedback and
+real-world usage data. They may be removed or changed in the future. If you use
+this class you might have to update your code when you upgrade
+to a newer version of Rio.
+
+Constructor
+
+```python
+Set(items: Iterable[T] = ())
+```
+
+items
+`Iterable[T]`
+
+## Examples
+
+```python
+class ElementAdder(rio.Component):
+    set: rio.Set[str]
+
+    def build(self):
+        return rio.Button(
+            "add an element",
+            on_press=lambda: self.set.add(len(self.set)),
+        )
+
+class Display(rio.Component):
+    set: rio.Set[str]
+
+    def build(self):
+        return rio.Text("\n".join(self.set))
+
+class SetDemo(rio.Component):
+    set: rio.Set[str] = rio.Set()
+
+    def build(self):
+        return rio.Column(
+            ElementAdder(self.set),
+            Display(self.set),
+        )
+```
+
+Here you can see how the `Display` component automatically updates whenever
+the `ElementAdder` component adds a new element to the `Set`. This would be
+much trickier to do with a regular `set`.

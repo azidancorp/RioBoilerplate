@@ -1,0 +1,12 @@
+i_know_what_im_doing
+
+Suppresses warnings about likely mistakes.
+
+This is a function/class decorator that suppresses certain warnings telling
+you that you likely made a mistake.
+
+Signature
+
+```python
+@rio.i_know_what_im_doing
+```

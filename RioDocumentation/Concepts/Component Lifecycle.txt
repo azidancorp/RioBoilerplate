@@ -1,0 +1,131 @@
+# Component Life Cycle
+
+This image illustrates the lifecycle of a Rio component. You don't need to fully
+understand everything going on right now, but as you learn and build more, it
+will be a useful reference.
+
+[Image](https://rio.dev/rio/assets/temp/f-0fcb826ebe77c71dc8759f1d7f3ac8cddf9f93f97cbdfe13bc8eee4ba25a269f)
+
+## Instantiation
+
+The first stage of the lifecycle is instantiation, or your component's creation.
+The component's `__init__` is called and assigns all initial values to the
+attributes. Then `__post_init__` is called, which allows you to run your own
+code to make changes, or initialize the component further using fancy logic.
+
+_Note: Between `__init__` and `__post_init__`, Rio runs additional, internal
+code to set up the component. For example, this is when Rio injects the session
+into the component so you can access it later. This is also where attribute
+bindings are configured. That's why you should never override `__init__`,
+because you'd be working with an unfinished component and could interfere with
+Rio's logic._
+
+_Most components shouldn't need custom logic at all. And if you do, write it in
+`__post_init__` instead of `__init__`._
+
+## Populate
+
+Some components need to fetch data or perform other tasks before they are fully
+ready. Since database access is slow, this can be done asynchronously. This is
+what the `@rio.event.on_populate` decorator is for. It allows you to define a
+synchronous or asynchronous function that will be called right before the
+component's `build` function is called. This is a good place to fetch data via
+HTTP, from databases or any other slow sources.
+
+Note that if your populate function is asynchronous, the app will not freeze
+while you're fetching data. This means that the component will initially be
+built without the dat, and then be rebuilt after the populate function
+completes.
+
+## Build
+
+In order for Rio to display your component, it must know what the component
+looks like. That's where the `build` method comes in. The output of this
+function are again `Rio` components, but more basic ones that Rio can render.
+The component now becomes visible to the user, and interactions can begin.
+
+Whenever you assign to the component or call `self.force_refresh()`, the
+component is rebuilt, so this phase may run multiple times. If a component has
+been built before, the new output is _reconciled_ with the old one. See that
+stage for details.
+
+## Mount
+
+When the component is first added to the tree of components that makes up your
+app, it is _mounted_. Rio will call any function decorated with
+`@rio.event.on_mount`, so you can execute your own code at this stage. Keep in
+mind that a component can be unmounted and then mounted again, meaning your code
+could run multiple times.
+
+## Reconciliation
+
+Since the `build` method runs each time your component changes, it's possible
+that we end up with "duplicate" components. For example, consider this code:
+
+```python
+class Counter(rio.Component):
+    value: int = 0
+
+    def on_press(self):
+        self.count += 1
+
+    def build(self):
+        return rio.Column(
+            # A text to display the current value
+            rio.Text(
+                str(self.value),
+                justify="center"
+            ),
+            # And a button to bump the value
+            rio.Button(
+                "Increment",
+                on_press=self.on_press,
+            ),
+            align_x=0.5,
+            align_y=0.5,
+        )
+
+```
+
+When this component is first built, it creates a `rio.Text` component with a
+value of `0`. When the button is pressed, the component is rebuilt, so it now
+creates a `rio.Text` component with a value of `1`. Rio will now compare the
+old and new outputs, look for changes and then make the smallest number of
+changes to the GUI to reflect the new state. In this case, the text will need to
+be updated, while the other components can remain the same.
+
+This is not just a performance optimization, but also ensures that "hidden"
+state is preserved. Think of a `rio.TextInput` where the user has selected text.
+You wouldn't want for the selection to be lost each time something in your app
+updates. Because of reconciliation, the selection will be preserved.
+
+## Unmount
+
+Unmounting is the opposite of mounting - a component is removed from the apps
+component tree. This doesn't necessarily mean that the component is about to
+die; as long as someone still has a reference to the component instance, it can
+potentially be mounted again. See the following example of such a situation:
+
+```python
+class RemountDemo(rio.Component):
+    child: rio.Component
+    show_child: bool = True
+
+    def build(self) -> rio.Component:
+        column = rio.Column(
+            rio.Switch(is_on=self.bind().show_child),
+        )
+
+        # Conditionally add the child. Because of this, the same child can be
+        # added and removed multiple times, without ever being deleted.
+        if self.show_child:
+            column.add(self.child)
+```
+
+## Destruction
+
+Finally, the component reaches the Destruction stage. This marks the end of the
+lifecycle, where the component and all its resources are completely removed from
+memory. Rio provides no separate method for this stage, because Python already
+has a perfectly good one available! Use `__del__` to clean up any resources that
+the component may have allocated.

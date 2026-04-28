@@ -1,0 +1,24 @@
+# App Lifecycle
+
+The App Lifecycle in Rio involves the sequential handling of events related to
+the app's initialization, user sessions, and termination. The lifecycle stages
+are as follows:
+
+[Image](https://rio.dev/rio/assets/temp/f-54101561855ee57e976352fa9d911e63cebe3b17e3841c8642f9b72d521aaa6d)
+
+1. App creation: The app is instantiated using `app = rio.App(...)`.
+2. App startup (`on_app_start`): When the app starts, the `on_app_start`
+   function is called. This is where any necessary initialization or resource
+   allocation for the app as a whole can occur.
+3. Session management:
+    - Session start (`on_session_start`): Each time a user connects to the app, a
+      new `rio.Session` is created, and the `on_session_start` function is called.
+      This allows for handling user-specific initialization or preparation.
+
+    - Session end (`on_session_close`): When a user disconnects (or leaves the
+      session), the `on_session_close` function is executed. It is used for cleanup
+      or finalization tasks specific to the user session.
+
+4. App shutdown (`on_app_close`): When the app is closed, the `on_app_close`
+   function is called to clean up resources, save state, or perform any final
+   tasks before termination.

@@ -1,10 +1,15 @@
-How do I create custom events?
-Events are a core concept used throughout Rio. If you've written even a small app you'll have used them to react to button presses, changing text inputs and many other user interactions. Sometimes though, you'll want to create your own events.
+# How do I Create Custom Events?
 
-Creating your own events is a breeze. Just make some space for a handler and annotate it as rio.EventHandler:
+Events are a core concept used throughout Rio. If you've written even a small
+app you'll have used them to react to button presses, changing text inputs and
+many other user interactions. Sometimes though, you'll want to create your own
+events.
 
-Python
+Creating your own events is a breeze. First, make some space for a handler and
+annotate it as `rio.EventHandler`. Then you can trigger the event whenever you
+want by passing it to `self.call_event_handler(...)`:
 
+```python
 class MyComponent:
     # This property will store the event handler. Since we aren't passing any
     # values to the handler, it's annotated as `rio.EventHandler[[]]`.
@@ -28,3 +33,4 @@ class MyComponent:
             "Squeak!",
             on_press=self._on_press
         )
+```

@@ -1,0 +1,18 @@
+ClipboardError
+
+Raised for errors related to clipboard operations.
+
+This exception is raised when an error occurs while trying to interact with
+the clipboard. For example when trying to read from the clipboard and the
+browser refuses due to privacy restrictions.
+
+Attributes
+
+message
+
+read-only
+
+`str`
+
+This message contains additional information about the error in a form
+amenable to being displayed to humans.

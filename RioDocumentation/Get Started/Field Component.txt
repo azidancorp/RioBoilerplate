@@ -1,0 +1,233 @@
+# Field Component
+
+In the previous tutorial, we have created a minimal Tic-Tac-Toe grid, but it
+didn't contain any fields. Let's fix that.
+
+Remember that Rio apps are created by combining components. We have already
+created one component, the `TicTacToePage`. Now we need to create another
+component, the `Field`. We'll then use this field component inside of the grid
+we wrote earlier.
+
+To keep our codebase organized we'll put the component into a separate Python
+file. We could create the file ourselves of course, but Rio has a nifty command
+to help us out:
+
+```bash
+rio add component
+```
+
+This will ask you for the name of the component. Call it `Field`. Rio will then
+create the file `components/field.py` for you, with a placeholder component
+inside. We'll edit that file to look like so:
+
+```python
+import typing as t
+
+import rio
+
+class Field(rio.Component):
+    value: t.Literal["X", "O", ""]
+
+    on_press: rio.EventHandler[[]] = None
+
+    def build(self) -> rio.Component:
+        # If the field is empty, allow the player to press on it. Since buttons
+        # would look out of place here, cards are a nice alternative.
+        if self.value == "":
+            return rio.Card(
+                content=rio.Spacer(
+                    min_width=3,
+                    min_height=3,
+                ),
+                on_press=self.on_press,
+            )
+
+        # For fields that already contain an X or O, show the respective icon.
+        # Also vary the color based on the player.
+        if self.value == "X":
+            color = rio.Color.RED
+            icon = "material/close"
+        else:
+            color = rio.Color.BLUE
+            icon = "material/circle"
+
+        return rio.Icon(
+            icon=icon,
+            fill=color,
+            min_width=3,
+            min_height=3,
+        )
+```
+
+This should look familiar:
+
+- We are creating a class, which inherits from `rio.Component`
+- The class lists any attributes it needs to function
+- Finally, there's a `build` method which returns other Rio components
+
+In this case we have two attributes: `value` tells us which player has placed
+their mark in this field. This can either be `"X"`, `"O"` or `""`.
+
+The second attribute, `on_press` is an "event". Events are Python functions
+which are called when something happens. For example, a `rio.Button` would have
+a `on_press` event which is called when the user presses the button. Another
+example is the `on_change` event, which fires when the value of e.g. a
+`rio.TextInput` changes.
+
+Since fields can also be pressed, we're making our own event here. It is called
+`on_press`, and won't deliver any values to the function it calls (i.e. the
+function would have a signature like `def on_press():`). Thus the type
+annotation of `rio.EventHandler[[]]`. If we were to say call the function with
+an integer value, the type annotation would instead be `rio.EventHandler[int]`.
+
+Finally, the `build` method. We're distinguishing between two cases: If the
+field is empty, we're returning a `rio.Card`. Cards are rectangular containers
+which display a slightly different shade than the background. They're great for
+grouping content. In this case however, we're using them because they have an
+`on_press` event. While we could use buttons, they'd look out of place, so cards
+are a better fit.
+
+If the field is not empty, we're returning a `rio.Icon` instead. We utilize a
+simple `if` statement to decide which icon and color to use.
+
+That's all there is to the `Field`! Let's put it to use in the `TicTacToePage`
+from earlier.
+
+```python
+@rio.page(
+    name="Tic Tac Toe",
+    url_segment="",
+)
+class TicTacToePage(rio.Component):
+    # The contents of all fields. Each field can contain an X, an O, or be
+    # empty. The initial state is an empty board.
+    fields: list[t.Literal["X", "O", ""]] = [""] * 9
+
+    def build(self) -> rio.Component:
+        # Spawn components for the fields
+        field_components: list[rio.Component] = []
+
+        for index, field in enumerate(self.fields):
+            field_components.append(
+                comps.Field(
+                    value=field,
+                )
+            )
+
+        # Arrange all components in a grid
+        return rio.Grid(
+            field_components[0:3],
+            field_components[3:6],
+            field_components[6:9],
+            row_spacing=1,
+            column_spacing=1,
+            align_x=0.5,
+        )
+```
+
+The code is almost identical to last time. If you have a close look you'll see
+that instead of creating a `rio.Text` component for each field, we're now
+creating a `Field` component instead. Just like that, we've made our own
+component and put it to use!
+
+## Summary
+
+- Many components already ship with Rio, but it's easy to create your own by combining existing ones
+- Components can have custom events, which are Python functions that are called when something happens
+
+Our playing field already looks good, but it doesn't respond to input yet. In
+the next tutorial, we'll bring it to life by adding interactivity.
+
+## Complete Source Code
+
+Here's the complete source for all files from this tutorial. You can view the
+contents of a file by clicking on its name.
+
+### field.py
+
+```python
+from __future__ import annotations
+
+import typing as t
+
+import rio
+
+class Field(rio.Component):
+    value: t.Literal["X", "O", ""]
+
+    on_press: rio.EventHandler[[]] = None
+
+    def build(self) -> rio.Component:
+        # If the field is empty, allow the player to press on it. Since buttons
+        # would look out of place here, cards are a nice alternative.
+        if self.value == "":
+            return rio.Card(
+                content=rio.Spacer(
+                    min_width=3,
+                    min_height=3,
+                ),
+                on_press=self.on_press,
+            )
+
+        # For fields that already contain an X or O, show the respective icon.
+        # Also vary the color based on the player.
+        if self.value == "X":
+            color = rio.Color.RED
+            icon = "material/close"
+        else:
+            color = rio.Color.BLUE
+            icon = "material/circle"
+
+        return rio.Icon(
+            icon=icon,
+            fill=color,
+            min_width=3,
+            min_height=3,
+        )
+```
+
+### tic_tac_toe_page.py
+
+```python
+from __future__ import annotations
+
+import typing as t
+
+import rio
+
+from .. import components as comps
+
+@rio.page(
+    name="Tic Tac Toe",
+    url_segment="",
+)
+class TicTacToePage(rio.Component):
+    # The contents of all fields. Each field can contain an X, an O, or be
+    # empty. The initial state is an empty board.
+    fields: list[t.Literal["X", "O", ""]] = [""] * 9
+
+    def build(self) -> rio.Component:
+        # Spawn components for the fields
+        field_components: list[rio.Component] = []
+
+        for index, field in enumerate(self.fields):
+            field_components.append(
+                comps.Field(
+                    value=field,
+                )
+            )
+
+        # Arrange all components in a grid
+        return rio.Grid(
+            field_components[0:3],
+            field_components[3:6],
+            field_components[6:9],
+            row_spacing=1,
+            column_spacing=1,
+            align_x=0.5,
+        )
+```
+
+[Project Setup](https://rio.dev/docs/tutorial-tic-tac-toe/2-project-setup)
+
+[Making it Interactive](https://rio.dev/docs/tutorial-tic-tac-toe/4-interactivity)

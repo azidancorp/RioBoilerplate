@@ -1,16 +1,17 @@
 AssetError
+
 Raised when an error occurs related to assets.
 
-Signifies that some operation related to assets has failed. E.g. trying to access a nonexistent asset.
-
-Constructor
-AssetError(message: str)
-message
-str
+Signifies that some operation related to assets has failed. E.g. trying to
+access a nonexistent asset.
 
 Attributes
-message
-read-only
-str
 
-A human-readable message describing the problem.
+message
+
+read-only
+
+`str`
+
+This message contains additional information about the error to inform
+the developer.

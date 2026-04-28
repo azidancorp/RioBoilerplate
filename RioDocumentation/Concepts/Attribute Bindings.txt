@@ -1,134 +1,88 @@
+# Attribute Bindings
 
-How do I pass values between components?
-When creating apps with Rio, you'll often find yourself in situations where you need to pass values between components. This can be as simple as passing a string to a text input, or as complex as sharing a value across many components and keeping them all up-to-date.
+Graphical user interfaces need data flow in 2 directions: From the program to
+the user (i.e. output), and from the user to the program (i.e. input). Handling
+output is easy enough, but what about input?
 
-Parent to Child
-Plain text
-
-Parent Component        ┐
-│                       │
-├── Child Component 1  ◄┘
-│
-└── Child Component 2
-If you have a value in a component, and want to pass it to one of its children, you can simply pass it as a parameter to the child component:
-
-Python
-
-class CustomComponent(rio.Component):
-    some_value: str
-
-    def build(self) -> rio.Component:
-        return rio.TextInput(
-            text=self.some_value,
-        )
-Child to Parent
-Plain text
-
-Parent Component       ◄┐
-│                       │
-├── Child Component 1   ┘
-│
-└── Child Component 2
-But what if we wanted to pass a value in the other direction? After the user enters a text, we need to be able to get the modified value after all, so we can store it in a database, send it to a server, or whatever else we need to do with it.
-
-This is where one of Rio's coolest features comes in - Attribute bindings! Let's take a look at code:
-
-Python
-
-class CustomComponent(rio.Component):
-    some_value: str
-
-    def _on_button_press(self) -> None:
-        # Just read the local value. Thanks to the attribute binding below it
-        # will always be up-to-date
-        print(self.some_value)
-
-    def build(self) -> rio.Component:
-        return rio.Column(
-            rio.TextInput(
-                # By using `self.bind().some_value` instead of `self.some_value`,
-                # we're instructing Rio to create a connection between the parent
-                # and child components. This means that if the value in either
-                # of the components changes, the other one will be updated
-                # automatically for us!
-                #
-                # So, if the user types something into the TextInput, the value
-                # will be updated in both the TextInput itself, as well as
-                # our own component.
-                text=self.bind().some_value,
-            ),
-            rio.Button(
-                "Click me!",
-                on_press=self._on_button_press,
-            ),
-        )
-The code looks fairly similar to the previous example, but with one key difference: Notice how the some_value value we're passing to the TextInput component is written as self.bind().some_value instead of self.some_value? By using .bind() we're telling Rio that we don't just want to pass the current value to the child, but for Rio to create a connection between the parent and child components.
-
-If either of the components now assigns a new value to some_value, the other component will automatically be updated with the new value, without any extra code on our part!
-
-So now, if you want to get the value of the TextInput component, you can just write self.some_value and it will always contain the up-to-date value of the TextInput component. That is exactly what we're doing in the button's event handler.
-
-Sibling to Sibling
-Plain text
-
-Parent Component
-│
-├── Child Component 1   ┐
-│                       │
-└── Child Component 2  ◄┘
-Passing values between siblings doesn't require any new concepts. Simply bind both components to the same parent attribute and all three will be kept in sync:
-
-Python
-
-class CustomComponent(rio.Component):
-    some_value: str
-
-    def build(self) -> rio.Component:
-        return rio.Column(
-            rio.TextInput(
-                text=self.bind().some_value,
-            ),
-            rio.TextInput(
-                text=self.bind().some_value,
-            ),
-            spacing=1,
-        )
-Here, changing either of the inputs will update the other one. (You might have to press Enter ⏎ or click outside the input to see the change.)
-
-Session Attachments
-In larger projects you'll often find yourself in situations where you need to share a value across many components. If only a few components are involved you can simply pass the value as a parameter to the components. However, if you have many components that need access to the same value, you can use the session to store the value and access it from any component.
-
-Rio sessions have dictionary-like capabilities. You can "attach" values to them, and retrieve them later. Here's an example attaching user information to the session:
-
-Python
-
-from dataclasses import dataclass
-
-@dataclass
-class UserData:
-    name: str
-
-
-# Inside of your component:
+```python
 class MyComponent(rio.Component):
-    ...
+    user_name: str = 'John'
 
-    def attach_value(self) -> None:
-        user_data = UserData(name="John Doe")
-        self.session.attach(user_data)
-        ...
+    def build(self) -> rio.Component:
+        return rio.Column(
+            # Output is easy
+            rio.Text(f'Your name is: {self.user_name}'),
+            # But how do we get input?
+            rio.TextInput()
+        )
+```
 
+Attribute bindings allow a child component to synchronize its state with the
+parent component. For example, we can use it to sync the value of the
+`TextInput` with our `user_name` attribute. To create an attribute binding,
+simply pass `self.bind().attribute_name` to an input element like this:
 
-    def get_value(self) -> None:
-        user_data = self.session[UserData]
-        print(user_data.name)
-        ...
-Common use cases for attachments are:
+```python
+class MyComponent(rio.Component):
+    user_name: str = 'John'
 
-Database connections: Attach a database connection to the session, so that all components can access it.
+    def build(self) -> rio.Component:
+        return rio.Column(
+            # Output is easy
+            rio.Text(f'Your name is: {self.user_name}'),
+            # And with attribute bindings, input is easy too!
+            rio.TextInput(self.bind().user_name)
+        )
+```
 
-User authentication: When the user logs in, attach the logged in user's name and id to the session. This way, every component always knows which user it's talking to.
+Now, whenever the value of the `TextInput` changes, the value of
+`self.user_name` will automatically change as well.
 
-Per-user Settings: Any classes which inherit from rio.UserSettings will be stored persistentnly on the user's device. This means they'll still be present when the user visits your app again later.
+## Bindings are instructions, not values
 
-Please note that some countries have strict laws about storing user data. You might have to ask for the user's consent before storing any data on their device. Please do some research on this topic before implementing user settings.
+A common mistake is to treat attribute bindings - in particular, the output of
+`self.bind().attribute_name` - as if they were values. For example, you might be
+tempted to write this:
+
+```python
+rio.TextInput(f'Your name is: {self.bind().user_name}')
+```
+
+This doesn't work, because `self.bind().user_name` is an _instruction_ that
+tells the `TextInput` to synchronize its value with our `user_name` attribute.
+If you want to access the current _value_ of `user_name`, you must write
+`self.user_name` instead. Remember: Use `self.user_name` for output, and
+`self.bind().user_name` for input. You can't do both at the same time.
+
+## Attribute Bindings in custom components
+
+Attribute Bindings aren't reserved for builtin rio components - _all_ components
+support attribute bindings. And the best part is that you don't have to do
+anything at all! Check out this custom number input:
+
+```python
+import random
+
+# There's nothing special about this component...
+class CustomNumberInput(rio.Component):
+    value: int
+
+    def random_value(self) -> None:
+        self.value = random.randrange(0, 100)
+
+    def build(self) -> rio.Component:
+        return rio.Row(
+            rio.NumberInput(self.bind().value, decimals=0),
+            rio.Button('Random', on_press=self.random_value),
+        )
+
+class MyComponent(rio.Component):
+    number: int = 0
+
+    def build(self) -> rio.Component:
+        return rio.Column(
+            # ...and yet it supports attribute bindings!
+            CustomNumberInput(self.bind().number),
+            rio.Text(f'The number is {self.number}'),
+        )
+```

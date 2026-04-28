@@ -1,0 +1,263 @@
+# Making it Interactive
+
+We've created a playing field and custom components to represent the game's
+state. Now it's time to make the game come to life!
+
+The `Field` component can remain unchanged for now. We'll just have to wire it
+up from the `TicTacToePage`. Here's the new code:
+
+```python
+    # The player who is currently on turn
+    player: t.Literal["X", "O"] = "X"
+```
+
+First things first, there's a new attribute, to keep track of which player is up
+next. We'll use this to alternate between players.
+
+```python
+    def on_field_press(self, index: int) -> None:
+        """
+        This function reacts to presses on the fields, and updates the game
+        state accordingly.
+        """
+
+        # Set the field on that index
+        self.fields[index] = self.player
+
+        # Next player
+        self.player = "X" if self.player == "O" else "O"
+```
+
+Next, there's an `on_field_press` function. We'll wire this one up later in the
+`build` method to be called. Let's see what it does:
+
+- The function expects to receive the index of the pressed field as an argument.
+  0 corresponds to the top-left field, 1 to the top-center field, and so on.
+- The function assigns the current player's mark to the field.
+- It then advances to the next player.
+
+```python
+    def on_reset(self) -> None:
+        """
+        Reset the game to its initial state.
+        """
+        self.fields = [""] * 9
+        self.player = "X"
+```
+
+There's also a new `on_reset` function. The purpose of this function is to reset
+the game's state to the initial state, so the players can start over. The
+function should be self-explanatory.
+
+We now have all functions in place to make the game interactive, but they aren't
+used yet. In order for them to actually be called, let's modify the `build`
+method to make use of them. Here's the new one:
+
+```python
+    def build(self) -> rio.Component:
+        # Spawn components for the fields
+        field_components: list[rio.Component] = []
+
+        for index, field in enumerate(self.fields):
+            field_components.append(
+                comps.Field(
+                    value=field,
+                    on_press=functools.partial(self.on_field_press, index),
+                )
+            )
+
+        # Come up with a status message
+        message = f"{self.player}'s turn"
+
+        # Arrange all components in a grid
+        return rio.Column(
+            rio.Text(message, style="heading1"),
+            rio.Grid(
+                field_components[0:3],
+                field_components[3:6],
+                field_components[6:9],
+                row_spacing=1,
+                column_spacing=1,
+                align_x=0.5,
+            ),
+            rio.Button(
+                "Reset",
+                icon="material/refresh",
+                style="colored-text",
+                on_press=self.on_reset,
+            ),
+            spacing=2,
+            margin=2,
+            align_x=0.5,
+            align_y=0.0,
+        )
+```
+
+First, notice that the `Field`s now receive an `on_press` function. By passing
+in the function, our `Field` component from earlier will call our function
+whenever it is pressed.
+
+However, there's a problem. The `on_field_press` function expects an index, but
+the `Field` component doesn't know its own index. A simple solution to this is
+Python's built-in
+[`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial)
+function. This function allows us to create a new function with some arguments
+already filled in. In this case, we create a new function with the `index`
+argument already filled in, and pass that to the event handler. (Don't forget to
+add `import functools` at the top of the file!)
+
+Next, we come up with a status message. We'll use this to display which player
+is up next.
+
+Finally, we combine everything we've prepared into the final result. It's
+similar to before, but now the `rio.Grid` from earlier is wrapped in a
+`rio.Column`. The column takes any number of children and arranges them
+vertically, one below the other. This way we can add the status message above
+the grid, and a reset button below. Easy!
+
+## Summary
+
+- Python functions which are assigned to events will be called whenever the event occurs
+- The handy `functools.partial` function can be used to pass additional values to event handlers
+- `rio.Column` is a very common layout component that arranges its children vertically
+
+We can now for the first time interact with our creation. Clicking on a field
+will place the mark of the current player, and the status message will update
+accordingly. The reset button will clear the board and start a new game.
+
+But there's still one thing missing: We don't know when a player has won yet. In
+the next tutorial, we'll add this feature.
+
+## Complete Source Code
+
+Here's the complete source for all files from this tutorial. You can view the
+contents of a file by clicking on its name.
+
+### field.py
+
+```python
+from __future__ import annotations
+
+import typing as t
+
+import rio
+
+class Field(rio.Component):
+    value: t.Literal["X", "O", ""]
+
+    on_press: rio.EventHandler[[]] = None
+
+    def build(self) -> rio.Component:
+        # If the field is empty, allow the player to press on it. Since buttons
+        # would look out of place here, cards are a nice alternative.
+        if self.value == "":
+            return rio.Card(
+                content=rio.Spacer(
+                    min_width=3,
+                    min_height=3,
+                ),
+                on_press=self.on_press,
+            )
+
+        # For fields that already contain an X or O, show the respective icon.
+        # Also vary the color based on the player.
+        if self.value == "X":
+            color = rio.Color.RED
+            icon = "material/close"
+        else:
+            color = rio.Color.BLUE
+            icon = "material/circle"
+
+        return rio.Icon(
+            icon=icon,
+            fill=color,
+            min_width=3,
+            min_height=3,
+        )
+```
+
+### tic_tac_toe_page.py
+
+```python
+from __future__ import annotations
+
+import functools
+import typing as t
+
+import rio
+
+from .. import components as comps
+
+@rio.page(
+    name="Tic Tac Toe",
+    url_segment="",
+)
+class TicTacToePage(rio.Component):
+    # The contents of all fields. Each field can contain an X, an O, or be
+    # empty. The initial state is an empty board.
+    fields: list[t.Literal["X", "O", ""]] = [""] * 9
+
+    # The player who is currently on turn
+    player: t.Literal["X", "O"] = "X"
+
+    def on_field_press(self, index: int) -> None:
+        """
+        This function reacts to presses on the fields, and updates the game
+        state accordingly.
+        """
+
+        # Set the field on that index
+        self.fields[index] = self.player
+
+        # Next player
+        self.player = "X" if self.player == "O" else "O"
+
+    def on_reset(self) -> None:
+        """
+        Reset the game to its initial state.
+        """
+        self.fields = [""] * 9
+        self.player = "X"
+
+    def build(self) -> rio.Component:
+        # Spawn components for the fields
+        field_components: list[rio.Component] = []
+
+        for index, field in enumerate(self.fields):
+            field_components.append(
+                comps.Field(
+                    value=field,
+                    on_press=functools.partial(self.on_field_press, index),
+                )
+            )
+
+        # Come up with a status message
+        message = f"{self.player}'s turn"
+
+        # Arrange all components in a grid
+        return rio.Column(
+            rio.Text(message, style="heading1"),
+            rio.Grid(
+                field_components[0:3],
+                field_components[3:6],
+                field_components[6:9],
+                row_spacing=1,
+                column_spacing=1,
+                align_x=0.5,
+            ),
+            rio.Button(
+                "Reset",
+                icon="material/refresh",
+                style="colored-text",
+                on_press=self.on_reset,
+            ),
+            spacing=2,
+            margin=2,
+            align_x=0.5,
+            align_y=0.0,
+        )
+```
+
+[Field Component](https://rio.dev/docs/tutorial-tic-tac-toe/3-field-component)
+
+[Detecting Victory](https://rio.dev/docs/tutorial-tic-tac-toe/5-detecting-victory)

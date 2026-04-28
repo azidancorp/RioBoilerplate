@@ -1,0 +1,14 @@
+ListViewSelectionChangeEvent
+
+Holds information for when selection in a [`ListView`](/docs/api/listview) changes.
+
+This is a simple dataclass that stores useful information for when the
+selection in a [`ListView`](/docs/api/listview) changes. You'll typically receive this as argument
+in `on_selection_change` events.
+
+Attributes
+
+selected_items
+`list[str | int]`
+
+A list of keys of the currently selected items.

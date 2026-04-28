@@ -1,10 +1,14 @@
-
 RevealerChangeEvent
+
 Holds information regarding a revealer change event.
 
-This is a simple dataclass that stores useful information for when the user opens or closes a revealer. You'll typically receive this as argument in on_change events.
+This is a simple dataclass that stores useful information for when the user
+opens or closes a revealer. You'll typically receive this as argument in
+`on_change` events.
 
 Attributes
+
 is_open
-bool
-The new is_open state of the Revealer.
+`bool`
+
+The new `is_open` state of the [`Revealer`](/docs/api/revealer).

@@ -1,0 +1,124 @@
+# I have created a web-app using Rio. How do I deploy it?
+
+There are several ways to deploy a Rio website. Pick the one that best fits your
+needs.
+
+- One-click deployment (coming soon)
+- Manual deployment using `rio`
+- Manual deployment using `uvicorn`
+- Running the app directly from Python
+
+## One-click deployment
+
+We're currently working on a one-click deployment solution for Rio apps. This
+will allow you to deploy your app to the internet with just a single command.
+
+This will be announced in our discord server once it's ready. [Join our
+server](https://discord.gg/7ejXaPwhyH) to bee notified when it's available.
+
+## Manual deployment
+
+You can of course self host your app like you would any other website. We
+recommend to run your app on your machine without making it visible to the
+internet. Then put a hardened reverse proxy like `nginx` in front of it. This
+proxy is hardened against attacks, will likely support more advanced HTTP
+features and can also add encryption to your app.
+
+**Run your Rio app on a local port**, such as 8000, making sure that Rio is
+running in release mode. This will make it run faster, use less memory and
+enable additional safety checks. To do this, run your app with the `--release`
+flag:
+
+```bash
+rio run --port 8000 --release
+```
+
+Make sure **not** to pass the `--public` flag. We want to make sure Rio is only
+available on your local machine. The reverse proxy will take care of the public
+interface.
+
+**Alternatively**, you can run your app via a server such as `uvicorn`. At its
+core, Rio is a `fastapi` app and you can get the FastAPI object by calling
+`your_app.as_fastapi`. Then follow [FastAPI's deployment
+guide](https://fastapi.tiangolo.com/deployment/) to host your app.
+
+**Another alternative** is to run your app directly from Python. Apps have a
+`run_as_web_server` method, which will block and serve your app. Make sure to
+configure a port so that it doesn't run on a randomly chosen one each time!
+
+## Setting Up a Reverse Proxy with Nginx
+
+Since most Python web servers (including `uvicorn`) aren't meant to be directly
+visible to the public internet, it's recommended to use a reverse proxy such as
+Nginx. This is a separate, battle-tested program that accepts incoming HTTP
+requests and relays them to your app. This way the only thing exposed to the
+internet is the secure reverse proxy, and your app can run in a private network.
+
+A very popular reverse proxy is `nginx`. It's free, open source, and has a
+reputation for being secure and fast. While the exact setup and configuration
+routine depends on your system and needs, here's a minimal configuration file to
+get you started. This will listen on port 443 (HTTPS) and forward all requests
+to your Rio app running on port 8000.
+
+```python
+worker_processes 1;
+
+events {
+    worker_connections  1024;
+}
+
+http {
+    include mime.types;
+    default_type application/octet-stream;
+
+    sendfile on;
+
+    keepalive_timeout 65;
+
+    client_max_body_size 100M;
+
+    upstream mysite {
+        keepalive 100;
+        server 127.0.0.1:8000;
+    }
+
+    server {
+        # 443 is the default port for HTTPS
+        listen 0.0.0.0:443 ssl;
+
+        # Put your domain name here
+        server_name mysite.com;
+
+        # Change these to point to your SSL certificate and key
+        # ssl_certificate /etc/nginx/ ...;
+        # ssl_certificate_key /etc/nginx/ ...;
+
+        charset utf-8;
+
+        location / {
+            # These lines enable support for WebSockets
+            proxy_set_header connection "upgrade";
+            proxy_set_header upgrade $http_upgrade;
+        }
+    }
+}
+```
+
+The config above expects your Rio app to be running on port 8000. You can do
+that e.g. by running
+
+```sh
+rio run --port 8000 --release
+```
+
+Note that we are not passing the `--public` flag, even though we want to expose
+the app to the internet. This is because we want the proxy to take care of the
+public interface while the app itself will only be available on the host device
+itself.
+
+The excellent `nginx` documentation [has a guide specifically on reverse
+proxies](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/)
+should you need more details.
+
+You may also want to consider [dockerizing your
+app](/docs/howto/deployment-in-docker).

@@ -1,0 +1,30 @@
+TabItem
+
+Represents a single tab in a Tabs component.
+
+This dataclass holds the title, content, and optional icon for a tab.
+
+Constructor
+
+```python
+TabItem(
+    title: str,
+    content: rio.Component,
+    icon: str | None = None,
+)
+```
+
+title
+`str`
+
+The title of the tab.
+
+content
+`rio.Component`
+
+The content component shown when this tab is active.
+
+icon
+`str | None`
+
+The icon for the tab, or None for no icon.

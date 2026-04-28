@@ -1,0 +1,7 @@
+NoFileSelectedError
+
+Raised when the user doesn't select a file.
+
+This exception is raised when the user is prompted to select a file with a
+file picker and they close the file picker without selecting a file. This is
+a perfectly valid operation on the user's end - make sure you handle it.

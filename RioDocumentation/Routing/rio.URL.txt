@@ -1,3 +1,8 @@
-Rio - URL
-Since URLs are a commonly used data type, rio re-exports yarl.URL as rio.URL for convenience. See the yarl documentation for details about this class.
-by the Rio Team &amp; Contributors
+URL
+
+Alias for `yarl.URL`.
+
+Since URLs are a commonly used data type, Rio re-exports `yarl.URL` as
+`rio.URL` for convenience. See the
+[`yarl` documentation](https://yarl.aio-libs.org/en/stable/api/#yarl.URL) for
+details about this class.

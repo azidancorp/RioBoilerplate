@@ -1,0 +1,412 @@
+# Creating a Custom Dropdown
+
+This chapter provides a detailed guide on building a custom dropdown component
+in the Rio framework. Dropdowns are a staple in modern UI design, allowing users
+to choose one or more options from a list. While Rio offers a built-in
+[`rio.Dropdown`](/docs/api/dropdown) component for simple selections, more
+complex scenarios—such as multi-selection—often require a custom solution. In
+this chapter, we will walk you through creating a Custom Dropdown component that
+supports multiple selections and combines several subcomponents for a robust,
+interactive UI element.
+
+## Overview
+
+The custom dropdown we are about to create is composed of several smaller
+components:
+
+- **DropdownLabel:** Displays an individual selected option along with a close
+  icon to allow users to remove that option.
+
+- **DropdownHeader:** Acts as the clickable area that shows the current label
+  and selected options, and toggles the visibility of the dropdown menu.
+
+- **DropdownElement:** Represents a single selectable item in the dropdown. It
+  updates its appearance based on user interaction (hover, click) and selection
+  state.
+
+- **CustomDropdown:** Integrates all the above components into a cohesive
+  dropdown experience. This component manages the state (which options are
+  selected, whether the dropdown is open or closed) and ensures smooth
+  interaction and usability.
+
+By the end of this chapter, you'll have a comprehensive understanding of how to
+build these components and how they seamlessly work together to create an
+engaging user experience. This foundation will empower you to implement the
+provided example and extend it further with your own creative ideas. The only
+limit is your imagination!
+
+Let's see how the final component looks like:
+
+[Interactive example: CustomDropdown]
+
+## Introduction to Dropdowns in Rio
+
+Dropdown menus are essential in user interfaces for presenting a list of options
+without cluttering the screen. The built-in [rio.Dropdown] component supports
+single-option selection; however, real-world applications sometimes require more
+flexibility. For instance, you might need to allow users to select multiple
+filters or settings simultaneously.
+
+The CustomDropdown component we build here addresses these advanced use cases.
+It makes use of:
+
+- State Management: The component maintains an internal dictionary of options,
+  each with a boolean indicating its selection state.
+
+- Event Handling: User interactions, such as clicking or hovering, trigger event
+  handlers that update the component's state.
+
+- Visual Feedback: Changes in styling (e.g., icon fill colors, text styles) give
+  users immediate feedback on their interactions.
+
+## Core Components Explained
+
+### DropdownLabel
+
+The DropdownLabel component is responsible for displaying an option that has
+already been selected. It shows a formatted text representation of the option
+and includes a close icon (from the Material icons set) that allows the user to
+deselect the option. This component is especially useful in the dropdown header,
+where selected options are presented as small, dismissible badges.
+
+O. 1
+
+**Key Attributes:**
+- `option`: The string value representing the dropdown option.
+
+- `on_press`: An event handler that gets triggered when the label (or close icon)
+  is pressed.
+
+**How It Works:**
+
+When the user clicks on the label, the `_on_press` method calls the provided event
+handler to remove the option. The `format_option` method is used to abbreviate
+options in a user-friendly way (e.g., converting "Option 1" to "O. 1").
+
+### DropdownHeader
+
+The DropdownHeader component serves as the interactive header of the dropdown.
+It displays:
+
+- A label for the dropdown.
+- The currently selected options (as rendered by the DropdownLabel components).
+- An arrow icon to indicate whether the dropdown is open or closed.
+
+Select Options
+
+O. 1
+
+O. 3
+
+**Key Features:**
+
+- Dynamic Layout: The header uses a row layout to align the dropdown label,
+  selected options, and an icon that signals dropdown status.
+
+- Interactivity: It listens for click events. Clicking the header toggles the
+  dropdown body, making it visible or hidden.
+
+- Alignment Enhancements: A spacer ensures that regardless of the number of
+  selected options, the dropdown arrow remains at the far right.
+
+### DropdownElement
+
+Each DropdownElement is a clickable row representing an individual option in the
+dropdown menu. When hovered over, the element visually responds by changing its
+text style and icon color, providing clear feedback to the user.
+
+Option 1
+
+**Behavioral Highlights:**
+- Selection Toggling: Clicking an element adds or removes it from the selected
+options.
+
+- Hover Effects: On pointer enter, the text becomes bolder and the icon changes
+  color; on pointer leave, these styles revert to their defaults.
+
+- Modularity: It encapsulates both the display of text and the optional display
+  of a check icon (if the option is currently selected).
+
+### CustomDropdown
+
+The CustomDropdown component integrates the header and the dropdown options into
+one cohesive element. It manages:
+
+- State: A dictionary (`options`) where each key is an option and its value is a boolean indicating whether it is selected.
+- Dropdown Visibility: A boolean flag (`_is_open`) tracks if the dropdown is currently open.
+- Event Propagation: It binds events from subcomponents (like option selection/deselection) to update the internal state and trigger re-rendering.
+
+**Features:**
+- Popup Integration: Uses rio.Popup to simulate a native dropdown menu. This
+popup is configured to be dismissible by clicking outside its area, enhancing
+usability.
+
+- Efficient Refresh: After an option is toggled, the component calls
+  `force_refresh()` to update its visual representation immediately.
+
+- Dynamic Option Handling: The `_get_selected_options()` method scans the options
+  dictionary to extract and display currently selected options in the header.
+
+### Complete Code of the Custom Dropdown
+
+```
+import rio
+import functools
+
+class DropdownElement(rio.Component):
+    """
+    Single dropdown element component that displays an option and allows the
+    user to select or deselect it.
+
+    ## Attributes
+
+    `option`: Option to be displayed in the dropdown.
+
+    `is_selected`: Whether the option is selected.
+
+    `icon_fill`: Fill color for the check icon when the option is selected.
+
+    `font_style`: Text style for the option text.
+
+    `on_press`: Event handler that is called when the option is pressed.
+    """
+
+    option: str
+    is_selected: bool
+    icon_fill: rio.Color
+
+    font_style: rio.TextStyle = rio.TextStyle()
+    on_press: rio.EventHandler[[]] = None
+
+    async def _on_press(self, _: rio.PointerEvent) -> None:
+        await self.call_event_handler(self.on_press)
+
+    def _on_pointer_enter(self, _: rio.PointerEvent) -> None:
+        # Change text style when entering
+        self.font_style = rio.TextStyle(
+            fill=self.session.theme.secondary_color,
+            font_weight="bold",
+        )
+        # Change icon fill
+        self.icon_fill = self.session.theme.secondary_color
+
+    def _on_pointer_leave(self, _: rio.PointerEvent) -> None:
+        # Change text style to default when leaving
+        self.font_style = rio.TextStyle()
+        # Change icon fill to the default text color and fix the type
+        icon_fill_color = self.session.theme.text_style.fill
+        if isinstance(icon_fill_color, rio.Color):
+            self.icon_fill = icon_fill_color
+
+    def build(self) -> rio.Component:
+        # Create a row with the option text and a check icon if the option is
+        # selected
+        content_row = rio.Row(
+            rio.Text(self.option, style=self.font_style),
+            rio.Spacer(),
+            margin_x=1,
+            margin_y=0.25,
+        )
+
+        # Add a check icon if the option is selected
+        if self.is_selected:
+            content_row.add(
+                rio.Icon("material/check", fill=self.icon_fill, min_height=1)
+            )
+
+        # Create a pointer event listener that changes the style of the option
+        # when hovered and calls the on_press event handler when clicked
+        return rio.PointerEventListener(
+            rio.Rectangle(
+                content=content_row,
+                fill=rio.Color.TRANSPARENT,
+                hover_fill=self.session.theme.primary_color.replace(opacity=0.2),
+                cursor='pointer',
+                transition_time=0.1,
+                margin_x=0.2,
+            ),
+            on_pointer_enter=self._on_pointer_enter,
+            on_pointer_leave=self._on_pointer_leave,
+            on_press=self._on_press,
+        )
+
+class DropdownLabel(rio.Component):
+    """
+    Dropdown label component that displays an option and allows the user to
+    deselect it.
+
+    ## Attributes
+
+    `option`: Option to be displayed in the label.
+
+    `on_press`: Event handler that is called when the label is pressed.
+    """
+
+    option: str
+    on_press: rio.EventHandler[[]] = None
+
+    async def _on_press(self) -> None:
+        await self.call_event_handler(self.on_press)
+
+    def format_option(self, option: str) -> str:
+        """
+        Format the option string to be displayed in the dropdown label.
+
+        e.g. "Option 1" -> "O. 1"
+        """
+        parts = option.split()
+        if len(parts) == 2 and parts[0] == "Option":
+            return f"O. {parts[1]}"
+        return option
+
+    def build(self) -> rio.Component:
+        return rio.Card(
+            content=rio.Row(
+                rio.Text(self.format_option(self.option)),
+                rio.IconButton(
+                    "material/close",
+                    style="plain-text",
+                    min_size=1.2,
+                    on_press=self._on_press,
+                ),
+                spacing=0.2,
+                margin=0.2,
+            ),
+            color=self.session.theme.neutral_palette.background_variant,
+            align_x=0.5,
+            align_y=0.5,
+        )
+
+class DropdownHeader(rio.Component):
+    """
+    Dropdown header component that displays the selected options and allows the
+    user to deselect options.
+
+    ## Attributes
+
+    `selected_options`: List of selected options.
+
+    `label`: Label for the dropdown.
+
+    `on_press_option`: Event handler that is called when a Dropdown Label is
+    pressed.
+    """
+
+    selected_options: list[str]
+    label: str
+    on_press_option: rio.EventHandler[[str]] = None
+
+    async def _on_press(self, selected_option: str) -> None:
+        await self.call_event_handler(self.on_press_option, selected_option)
+        self.force_refresh()
+
+    def build(self) -> rio.Component:
+        options_row = rio.Row(
+            rio.Text(self.label),
+            spacing=0.2,
+            margin_x=0.2,
+            # align_x=0,
+        )
+        # Populate the dropdown with elements and add labels for selected items.
+        for selected_option in self.selected_options:
+
+            options_row.add(
+                DropdownLabel(
+                    option=selected_option,
+                    on_press=functools.partial(self._on_press, selected_option),
+                )
+            )
+
+        # Add a spacer to align the dropdown icon to the right, ensuring it
+        # remains positioned at the right edge of the dropdown header. This
+        # guarantees consistent alignment regardless of the number of selected
+        # options.
+        options_row.add(
+            rio.Spacer(),
+        )
+
+        # Add a dropdown icon
+        options_row.add(
+            rio.Icon(
+                "material/keyboard_arrow_down",
+            ),
+        )
+
+        return rio.Rectangle(
+            content=options_row,
+            fill=self.session.theme.neutral_color,
+            corner_radius=self.session.theme.corner_radius_small,
+            cursor='pointer',
+            min_width=20,
+            min_height=2,
+        )
+
+class CustomDropdown(rio.Component):
+    """
+    Custom dropdown component that allows the user to select multiple options
+    from a list of options.
+
+    ## Attributes
+
+    `options`: All possible options and whether they are selected.
+
+    `label`: Label for the dropdown.
+
+    `_is_open`: Whether the popup is currently open.
+    """
+
+    options: dict[str, bool]
+    label: str
+    _is_open: bool = False
+
+    def _on_press(self, _: rio.PointerEvent) -> None:
+        self._is_open = not self._is_open
+
+    def _on_option_press(self, option: str) -> None:
+        self.options[option] = not self.options[option]
+        self.force_refresh()
+
+    def _get_selected_options(self) -> list[str]:
+        return [option for option, is_selected in self.options.items() if is_selected]
+
+    def build(self) -> rio.Component:
+        # Create a column for the dropdown options
+        dropdown_options = rio.Column(margin_y=0.2)
+
+        # Change icon fill to the default text color and fix the type
+        icon_fill_color = self.session.theme.text_style.fill
+        if isinstance(icon_fill_color, rio.Color):
+            icon_fill_typed = icon_fill_color
+
+        # Populate the dropdown with elements and add labels for selected items.
+        for option, is_selected in self.options.items():
+            dropdown_options.add(
+                DropdownElement(
+                    option=option,
+                    is_selected=is_selected,
+                    on_press=functools.partial(self._on_option_press, option),
+                    icon_fill=icon_fill_typed,
+                )
+            )
+
+        # Create a popup that will be shown when the dropdown button is pressed
+        # which has a similar appearance to a dropdown menu. Just combine the
+        # header and the dropdown body.
+        return rio.Popup(
+            anchor=rio.PointerEventListener(
+                DropdownHeader(
+                    selected_options=self._get_selected_options(),
+                    label=self.label,
+                    on_press_option=self._on_option_press,
+                ),
+                on_press=self._on_press,
+            ),
+            content=dropdown_options,
+            position="dropdown",
+            is_open=self._is_open,
+            color="keep",
+            # Make sure user can close the popup by clicking outside of it
+            user_closable=True,
+            corner_radius=self.session.theme.corner_radius_small,
+        )
+```

@@ -1,35 +1,59 @@
 CursorStyle
+
+Deprecated since 0.11.3
+
+`CursorStyle` is deprecated in favor of string literals.
+
 Enumeration of all available cursor styles. Use these to indicate which kinds of action a user can perform while hovering over a component.
 
 Constructor
+
+```python
 CursorStyle(
-    *args, 
-    **kwds, 
+    *args,
+    **kwds,
 )
+```
+
 args
-Any
+`Any`
 
 kwds
-Any
+`Any`
 
 DEFAULT
-NONE
-HELP
-POINTER
-LOADING
-BACKGROUND_LOADING
-CROSSHAIR
-TEXT
-MOVE
-NOT_ALLOWED
-CAN_GRAB
-IS_GRABBED
-ZOOM_IN
-ZOOM_OUT
-Example
-Python
 
+NONE
+
+HELP
+
+POINTER
+
+LOADING
+
+BACKGROUND_LOADING
+
+CROSSHAIR
+
+TEXT
+
+MOVE
+
+NOT_ALLOWED
+
+CAN_GRAB
+
+IS_GRABBED
+
+ZOOM_IN
+
+ZOOM_OUT
+
+## Example
+
+```python
 rio.Rectangle(
     fill=rio.Color.WHITE,
     cursor=rio.CursorStyle.POINTER,
 )
+```

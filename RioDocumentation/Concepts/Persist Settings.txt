@@ -1,0 +1,120 @@
+# How Can I Persist Settings Between App Launches?
+
+Easy! Create a class that inherits from `rio.UserSettings` and add it your app's
+`default_attachments`. That's it! Rio will automatically store and retrieve the
+values for you.
+
+```python
+# Create a dataclass that inherits from rio.UserSettings. This indicates to Rio
+# that these are settings and should be persisted.
+class MySettings(rio.UserSettings):
+    language: str = "en"
+
+# Attach the settings to the app. This way the settings will be available in all
+# sessions. They will be loaded automatically from the user whenever they
+# connect or start the app.
+app = rio.App(
+    ...,
+    default_attachments=[
+        MySettings(),
+    ],
+)
+```
+
+Whenever you modify the settings, make sure to re-attach them. Rio will detect
+this and save the new values:
+
+```python
+# ... somewhere in your code
+settings = self.session[MySettings]
+
+# Read any values you need to
+print(settings.language)  # "en"
+
+# Update the settings
+settings.language = "de"
+
+# Re-attach the settings to the session to save the new values
+self.session.attach(settings)
+```
+
+On websites, settings will be stored in the user's local storage. For apps, Rio
+will create a configuration file and store the settings there.
+
+Since settings are stored on the user's device, special considerations
+    apply. Some countries have strict privacy laws regulating what you can store
+    with/without the user's consent. Make sure you are familiar with the legal
+    situation before going wild and storing everything you can think of.
+
+Since settings are stored on the user's device, you should never trust
+    them to be valid. A malicious actor could modify them to intentionally
+    trigger bugs in your app. Always validate the values before using them.
+
+## Supported Data Types
+
+Internally, Rio uses [`uniserde`](https://pypi.org/project/uniserde/) to
+serialize the settings to JSON. This means that only data types supported by
+`uniserde` can be used. These include:
+
+- `bool` (`True` / `False`)
+- `int` (`42`)
+- `float` (`3.14`)
+- `str` (`"Hello, World!"`)
+- `tuple` (`(1, 2, 3)`)
+- `list` (`[1, 2, 3]`)
+- `set` (`{1, 2, 3}`)
+- `typing.Optional` (`None` or a value)
+- `typing.Literal`
+- `enum.Enum`
+- `enum.Flag`
+- `bytes` (`b"Hello, World!"`)
+- `datetime.datetime` (Must have a timezone set)
+- `datetime.timedelta`
+- `dict` (string keys only: `{"panic": False}`)
+- `bson.ObjectId` (`ObjectId('67a2552dae8cf5078804a337')`)
+- `pathlib.Path` (`Path("/home/user/file.txt")`)
+- `uuid.UUID` (`UUID('6d161734-7938-41c7-9996-20353b60d285')`)
+- Custom classes, as long as all of their attributes are annotated and
+  themselves supported by `uniserde`
+
+## Complete Example
+
+Here's a complete example that demonstrates how to use persistent settings:
+
+```python
+import rio
+
+class MyUserSettings(rio.UserSettings):
+    language: str = "en"
+
+class MyRoot(rio.Component):
+    def on_change_language(self, event: rio.DropdownChangeEvent) -> None:
+        # Get the settings
+        settings = self.session[MyUserSettings]
+
+        # Update them
+        settings.language = event.value
+
+        # Re-attach to save the changes
+        self.session.attach(settings)
+
+    def build(self) -> rio.Component:
+        settings = self.session[MyUserSettings]
+
+        return rio.Dropdown(
+            label="Language",
+            options=["en", "de", "fr", "es"],
+            selected_value=settings.language,
+            on_change=self.on_change_language,
+            min_width=20,
+            align_x=0.5,
+            align_y=0.5,
+        )
+
+app = rio.App(
+    build=MyRoot,
+    default_attachments=[
+        MyUserSettings(),
+    ],
+)
+```

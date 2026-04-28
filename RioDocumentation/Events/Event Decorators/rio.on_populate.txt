@@ -1,27 +1,37 @@
 on_populate
+
 Triggered when the component has been created or has been reconciled.
 
-This decorator makes the decorated method an event handler for on_populate events. The method will be called whenever the component has been created or has been reconciled. This allows you to asynchronously fetch any data right after component initialization.
+This decorator makes the decorated method an event handler for `on_populate`
+events. The method will be called whenever the component has been created or
+has been reconciled. This allows you to asynchronously fetch any data right
+after component initialization.
 
-This decorator can be used on both synchronous as well as asynchronous methods.
+This decorator can be used on both synchronous as well as asynchronous
+methods.
 
 Signature
+
+```python
 @rio.event.on_populate
-Example
-on_populate is often useful as a sort of "async init", where you can put async code that needs to be run when the component is instantiated. In this example we'll use it to perform an asynchronous HTTP request.
+```
 
-Python
+## Example
 
+`on_populate` is often useful as a sort of "async init", where you can put
+async code that needs to be run when the component is instantiated. In this
+example we'll use it to perform an asynchronous HTTP request.
+
+```python
 import httpx
-from dataclasses import field
-
+import dataclasses
 
 class PypiVersionFetcher(rio.Component):
     module: str
     # The `version` attribute is initialized to an empty
     # string, which will will act as a placeholder until
     # the HTTP request finishes
-    version: str = field(init=False, default="")
+    version: str = dataclasses.field(init=False, default="")
 
     @rio.event.on_populate
     async def on_populate(self):
@@ -34,3 +44,4 @@ class PypiVersionFetcher(rio.Component):
 
     def build(self):
         return rio.Text(f"Latest {self.module} version: {self.version}")
+```

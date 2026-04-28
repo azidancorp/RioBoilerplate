@@ -1,0 +1,54 @@
+Dict
+
+A `dict`-like object that automatically rebuilds components whenever its content changes.
+
+**This class is experimental and may change in the future**
+
+Experimental classes are included in Rio to gather feedback and
+real-world usage data. They may be removed or changed in the future. If you use
+this class you might have to update your code when you upgrade
+to a newer version of Rio.
+
+Constructor
+
+```python
+Dict(**kwargs: V)
+```
+
+kwargs
+`V`
+
+## Examples
+
+```python
+class ElementAdder(rio.Component):
+    dict: rio.Dict[int, str]
+
+    def _add_element(self):
+        self.dict[len(self.dict)] = "foo"
+
+    def build(self):
+        return rio.Button(
+            "add an element",
+            on_press=self._add_element,
+        )
+
+class Display(rio.Component):
+    dict: rio.Dict[int, str]
+
+    def build(self):
+        return rio.Text("\n".join(f"{k}: {v}" for k, v in self.dict.items()))
+
+class DictDemo(rio.Component):
+    dict: rio.Dict[int, str] = rio.Dict()
+
+    def build(self):
+        return rio.Column(
+            ElementAdder(self.dict),
+            Display(self.dict),
+        )
+```
+
+Here you can see how the `Display` component automatically updates whenever
+the `ElementAdder` component adds a new element to the `Dict`. This would be
+much trickier to do with a regular `dict`.

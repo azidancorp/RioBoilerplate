@@ -1,0 +1,145 @@
+# Rio Setup
+
+Welcome to the Rio tutorial! This short series will walk you through the process
+of setting up a Rio application from scratch, including installing Rio, creating
+a new project, and turning that project into a playable Tic-Tac-Toe game.
+
+Rio code is the same, regardless of whether you're creating an app or website.
+The only difference is in how you run it.
+
+So, while this tutorial will focus on creating a website, the concepts you learn
+here will apply regardless of whether you're creating a website or local app.
+
+## Installing Python
+
+First things first, make sure you have Python installed. Rio is compatible with
+Python versions `3.10` and up. You can check your Python version by running the
+following command in your terminal:
+
+```bash
+python --version
+```
+
+Or, on some platforms:
+
+```bash
+py --version
+```
+
+```bash
+python3 --version
+```
+
+If you can see a supported Python version you're good to go! If not, install
+Python using a package manager, or download it from the [Python
+website](https://www.python.org/downloads/).
+
+For the rest of this tutorial, we'll assume that the Python command is available
+as `python`. If that isn't the case on your device, make sure to replace
+`python` with `py`, `python3` or whichever the appropriate command is on your
+machine.
+
+## Installing Rio
+
+Rio is available on PyPI, so you can simply install it using `pip`:
+
+```bash
+python -m pip install rio-ui
+```
+
+This will install the `rio` module as well as the `rio` command line tool, which
+we'll use to set up and run our little tutorial project.
+
+If you're using `poetry`, `uv` or similar tools, those will work as well of
+course.
+
+### Local app support
+
+If you want to create local apps in addition to websites, you must install rio
+with the `[window]` extra:
+
+```python
+python -m pip install "rio-ui[window]"
+```
+
+This will install all required python modules, but depending on your operating
+system you may also have to install some non-python dependencies. Please see the
+[pywebview
+documentation](https://pywebview.flowrl.com/guide/installation.html#dependencies)
+for details.
+
+You can always change the project type later by editing the `rio.toml` file in
+your project directory. The code stays exactly the same, this only changes the
+way the project is run.
+
+## Creating a new Project
+
+Now that everything is installed, let's create a new project. Still in your
+terminal, run the following command:
+
+```bash
+rio new
+```
+
+Once again, some platforms might require you to use a different command. If
+`rio` isn't available directly, try one of `python -m rio`, `py -m rio`
+or `python3 -m rio`.
+
+Rio will ask you a few questions about your project. Enter the following values:
+
+- **Project name:** `rio-tutorial`
+- **Project template:** `Empty`
+- **Project type:** `website`
+
+You will end up with a file structure like this:
+
+```text
+rio-tutorial
+│
+│── rio_tutorial
+│   │
+│   ├── assets
+│   │
+│   ├── components
+│   │   └── __init__.py
+│   │
+│   ├── pages
+│   │   ├── __init__.py
+│   │   └── sample_page.py
+│   │
+│   └── __init__.py
+│
+└── rio.toml
+```
+
+You can see the project is organized into multiple directories
+
+- `rio_tutorial` is Python's package directory for the project
+- `assets` is where you can put images, and other non-code files which your app requires
+- `components` is where you'll put your Rio components
+- `pages` is where you'll put your Rio pages
+
+There's also `rio.toml`. This file contains metadata about your project, such as
+whether it's an app or website. It's a file Rio needs to function, but we don't
+have to worry about.
+
+## Running Your Project
+
+Now that your project is all set up, let's run it! Open a terminal and navigate
+to your project directory. Then, run the following command:
+
+```bash
+cd <path-to-your-project>
+rio run
+```
+
+**You can exit the app by pressing `Ctrl+C` while the terminal is focused.**
+
+A browser should open, and display your new app. If the browser doesn't open by
+itself, you can find a link to the app in the terminal output. If anything went
+wrong, double check you have followed all the steps above. If you need help,
+feel free to reach out on the [Rio Discord
+server](https://discord.gg/7ejXaPwhyH). There you will find an entire channel
+dedicated to helping newcomers get started.
+
+[Project Setup](https://rio.dev/docs/tutorial-tic-tac-toe/2-project-setup)

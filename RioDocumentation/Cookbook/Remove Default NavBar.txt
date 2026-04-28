@@ -1,8 +1,9 @@
-How can I remove the default navigation bar?
-If your app has multiple pages, a default navigation bar will automatically be displayed.
+# How can I Remove the Default Navigation Bar?
 
-Python
+If your app has multiple pages, a default navigation bar will automatically be
+displayed.
 
+```python
 app = rio.App(
     pages=[
         rio.ComponentPage(
@@ -17,13 +18,15 @@ app = rio.App(
         ),
     ],
 )
-To disable the default navigation bar, simply add a build method to your App class.
+```
 
-Python
+To disable the default navigation bar, simply add a `build` method to your
+`App`.
 
+```python
 app = rio.App(
-    # Add a build method to your App class
-    build=lambda: rio.PageView(grow_y=True), # <-- Will remove the default navigation bar
+    # Add a build method to your App
+    build=lambda: rio.PageView(), # <-- Will remove the default navigation bar
     pages=[
         rio.ComponentPage(
             name="Home",
@@ -37,4 +40,8 @@ app = rio.App(
         ),
     ],
 )
-For details on styling your navigation bar and creating a custom build function, refer to Multipage Example.
+
+```
+
+For details on styling your navigation bar and creating a custom build function,
+refer to the [Multipage Example](/examples/multipage-website).

@@ -1,0 +1,186 @@
+# Project Setup
+
+In the previous tutorial we've installed Rio and created a new project. Now it's
+time to transform it into a Tic-Tac-Toe game.
+
+After each tutorial you can find the full code at the bottom of the page. If
+you'd like to jump ahead and see the completed project, create a new project
+using the `Tic-Tac-Toe` template:
+
+```bash
+rio new --template Tic-Tac-Toe --nicename Tic-Tac-Toe
+```
+
+Let's think about this for a second. Tic-Tac-Toe is a game that consists of a
+3x3 grid. Each cell can be empty, contain an `X`, or contain an `O`. For now,
+let's just create a grid with placeholder values. We'll add the fields in the
+next tutorial.
+
+Here's the code for the grid. Place it in the file `pages/tic_tac_toe_page.py`.
+
+```python
+import typing as t
+
+import rio
+
+@rio.page(
+    name="Tic Tac Toe",
+    url_segment="",
+)
+class TicTacToePage(rio.Component):
+    fields: list[t.Literal["X", "O", ""]] = [""] * 9
+
+    def build(self) -> rio.Component:
+        # Spawn components for the fields
+        field_components: list[rio.Component] = []
+
+        for index, field in enumerate(self.fields):
+            field_components.append(rio.Text(f"Field {index}"))
+
+        # Arrange all components in a grid
+        return rio.Grid(
+            field_components[0:3],
+            field_components[3:6],
+            field_components[6:9],
+            row_spacing=1,
+            column_spacing=1,
+            align_x=0.5,
+        )
+```
+
+Let's break this down.
+
+```python
+@rio.page(
+    name="Tic Tac Toe",
+    url_segment="",
+)
+class TicTacToePage(rio.Component):
+```
+
+This class is what's called a `Component`. These are the building blocks of Rio
+apps - virtually everything you can see on the screen is a component. For
+example, each text, button, image, etc is a component.
+
+As you can see, a component is just a Python class that inherits from
+`rio.Component`. Nothing fancy going on here.
+
+We're also decorating the component as `@rio.page`. This tells Rio that this
+component should be available under the URL `/`. Don't worry about this for now.
+
+For a more detailed explanation, see the [Multiple Pages
+tutorial](/docs/howto/multiple-pages).
+
+```python
+    fields: list[t.Literal["X", "O", ""]] = [""] * 9
+```
+
+After the header follow the class's attributes. Each attribute has a name as
+well as a data type. In this case we have a single attribute called `fields`.
+The attribute is a  list of strings, where each string is either `X`, `O`, or
+empty. We also assign a default value to the attribute, which is just a list of
+nine empty strings.
+
+Notice that there is no need to create a constructor. That's because all Rio
+components are automatically `dataclasses`, which means that Rio will
+automatically take care of the constructor for you - all you need to do is
+specify which attributes you need.
+
+Never create a custom `__init__` method for your components. Instead, declare
+your attributes and let Rio do the rest. If you must run custom logic when a
+component is created, the `__post_init__` method is a good place to put it.
+
+```python
+    def build(self) -> rio.Component:
+        # Spawn components for the fields
+        field_components: list[rio.Component] = []
+
+        for index, field in enumerate(self.fields):
+            field_components.append(rio.Text(f"Field {index}"))
+
+        # Arrange all components in a grid
+        return rio.Grid(
+            field_components[0:3],
+            field_components[3:6],
+            field_components[6:9],
+            row_spacing=1,
+            column_spacing=1,
+            align_x=0.5,
+        )
+```
+
+Finally, there's a function called `build`. Rio will call this function when it
+wants to display a component. This function will then return other, simpler Rio
+components that Rio can display.
+
+In this case we first prepare a list of `rio.Text` components. These do exactly
+what you'd expect - they display text. Since we don't have a component to use
+for the individual fields just yet, these texts will act as placeholders.
+
+Towards the bottom of the function we create a `rio.Grid` component. This is a
+layout component. It doesn't have an appearance of its own, but accepts other
+components as children. Since this is a grid, it will display its children in a
+grid layout. You can think of it as a table.
+
+In addition to the children, we also pass a few other parameters:
+
+- `row_spacing` determines how much space Rio should leave between rows
+- `column_spacing` is the same, but for columns
+- `align_x` positions the component inside of its parent. In this case the
+  grid's parent is the page itself. By passing `0.5`, we center the grid
+  horizontally. `0` would align it to the left, `1` to the right.
+
+If you'd like to see the result in action, you can run it using the `rio run`
+command from a terminal. You should see a 3x3 grid with placeholder texts.
+
+## Summary
+
+- Rio apps are created by combining components
+- Components are just Python classes that inherit from `rio.Component`
+- At a minimum, each component needs to implement a `build` method
+- Components can have attributes. Each attribute has a name as well as a data type
+
+[Interactive example: DoDont]
+
+## Complete Source Code
+
+Here's the complete source for all files from this tutorial. You can view the
+contents of a file by clicking on its name.
+
+### tic_tac_toe_page.py
+
+```python
+from __future__ import annotations
+
+import typing as t
+
+import rio
+
+@rio.page(
+    name="Tic Tac Toe",
+    url_segment="",
+)
+class TicTacToePage(rio.Component):
+    fields: list[t.Literal["X", "O", ""]] = [""] * 9
+
+    def build(self) -> rio.Component:
+        # Spawn components for the fields
+        field_components: list[rio.Component] = []
+
+        for index, field in enumerate(self.fields):
+            field_components.append(rio.Text(f"Field {index}"))
+
+        # Arrange all components in a grid
+        return rio.Grid(
+            field_components[0:3],
+            field_components[3:6],
+            field_components[6:9],
+            row_spacing=1,
+            column_spacing=1,
+            align_x=0.5,
+        )
+```
+
+[Rio Setup](https://rio.dev/docs/tutorial-tic-tac-toe/1-rio-setup)
+
+[Field Component](https://rio.dev/docs/tutorial-tic-tac-toe/3-field-component)

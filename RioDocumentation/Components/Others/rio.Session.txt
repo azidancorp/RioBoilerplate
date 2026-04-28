@@ -1,257 +1,677 @@
 Session
+
 Represents a single client connection to the app.
 
-A session corresponds to a single connection to a client. It maintains all state related to this client including local settings, the currently active page, and others.
+A session corresponds to a single connection to a client. It maintains all
+state related to this client including local settings, the currently active
+page, and others.
 
-Sessions are created automatically by the app and should not be created manually.
+Sessions are created automatically by the app and should not be created
+manually.
 
 Attributes
+
 timezone
-datetime.tzinfo
-The timezone the connected client is in. You can use this to display times in the client's local time.
+`datetime.tzinfo`
+
+The timezone the connected client is in. You can use this to
+display times in the client's local time.
 
 preferred_languages
-Sequence[str]
-The languages preferred by the client. Use this to present content in the most convenient language for your users. The values are ordered with the most preferred language first.
+`Sequence[str]`
+
+The languages preferred by the client. Use this to
+present content in the most convenient language for your users. The
+values are ordered with the most preferred language first.
+
 This always contains at least one langauge.
-The values are in the format language-region, e.g. en-US for American English. The full specification is defined in RFC 5646.
+
+The values are in the format `language-region`, e.g. `en-US` for
+American English. The full specification is defined in
+[RFC 5646](https://datatracker.ietf.org/doc/html/rfc5646).
+
+screen_width
+`float`
+
+How many units the client's screen is wide. Note that this
+is specifically the screen and not the window your app is running in. If
+you're interested in pixels rather than font heights, multiply this
+value with `self.session.pixels_per_font_height`.
+
+screen_height
+`float`
+
+How many units the client's screen is high. Note that this
+is specifically the screen and not the window your app is running in. If
+you're interested in pixels rather than font heights, multiply this
+value with `self.session.pixels_per_font_height`.
 
 window_width
-float
-The width of the client's window in pixels. Like all units in Rio, this is measured in font-heights.
+`float`
+
+The width of the client's window in font heights. Like all
+units in Rio, this is measured in font heights.
 
 window_height
-float
-The height of the client's window in pixels. Like all units in Rio, this is measured in font-heights.
+`float`
 
-theme
-rio.Theme
-The theme that the client is using. If you've passed both a light and dark theme into the app, this will be the one which is actually used by the client.
+The height of the client's window in font heights. Like all
+units in Rio, this is measured in font heights.
+
+pixels_per_font_height
+`float`
+
+How many pixels a font height is. This can be used
+to convert font heights to pixels or the other way around.
+
+(Attention web-devs: Note that this are real pixels, as would be on the
+user's screen, not CSS pixels.)
+
+scroll_bar_size
+`float`
+
+The width (or height if scrolling horizontally) of the
+scroll bar in font heights. This can sometimes be useful if you want to
+align items with those in a scroll container or leave empty space for
+the bar.
+
+primary_pointer_type
+`Literal['mouse', 'touch']`
+
+The typical way pointer (i.e. mouse, touch, stylus)
+inputs will be made on this device. If this is `mouse`, you can expect
+the user to be able to give precise inputs and hover over elements. If
+`touch` this is likely not the case, and your layout might want to be
+more spacious.
+
+Possible values are `"mouse"` and `"touch"`.
+
+This is the **primary** way pointer inputs will be made. A
+    device may well be equipped with a touch screen, a mouse and a pen
+    tablet all at the same time. So this value doesn't in any way
+    guarantee that no inputs with other devices will be made.
+
+This literal shouldn't be seen as complete. Future versions of
+    Rio may add additional values as new types of devices get popular.
+    Extending this literal is not considered a compatibility break and
+    may happen even in minor versions. If you rely on this value, it's
+    good practice to add a fallback for unknown strings.
 
 http_headers
-Mapping[str, str]
-The HTTP headers sent by the client. This is a read-only, case-insensitive dictionary.
+`Mapping[str, str]`
+
+The HTTP headers sent by the client. This is a read-only,
+case-insensitive dictionary.
 
 app
+
 read-only
-rio.App
-Each app can have multiple sessions. Each session belongs to one app. This property provides access to the rio.App instance that this session belongs to.
+
+`rio.App`
+
+Each app can have multiple sessions. Each session belongs to one app.
+This property provides access to the `rio.App` instance that this
+session belongs to.
 
 assets
+
 read-only
-pathlib.Path
-When creating an app, a path can be provided to its asset directory. This property holds the pathlib.Path to the App's asset directory.
-This allows you to access assets by simply typing self.session.assets / "my-asset.png" to obtain the path of an asset file.
+
+`pathlib.Path`
+
+When creating an app, a path can be provided to its asset directory.
+This property holds the `pathlib.Path` to the `App`'s asset directory.
+
+This allows you to access assets by simply typing
+`self.session.assets / "my-asset.png"` to obtain the path of an
+asset file.
 
 running_in_window
+
 read-only
-bool
-True if the app is running in a local window, and False if it is hosted as a website.
+
+`bool`
+
+`True` if the app is running in a local window, and `False` if it is
+hosted as a website.
 
 running_as_website
+
 read-only
-bool
-True if the app is running as a website, and False if it is running in a local window.
+
+`bool`
+
+`True` if the app is running as a website, and `False` if it is running
+in a local window.
 
 base_url
+
 read-only
-rio.URL
-The location the app is hosted at. This is useful if you're hosting the same app at multiple domains, or if your app is hosted at a subdirectory of a domain.
-This URL is always absolute and has neither query parameters nor a fragment. Only available when running as a website.
+
+`rio.URL`
+
+The location the app is hosted at. This is useful if you're hosting the
+same app at multiple domains, or if your app is hosted at a subdirectory
+of a domain.
+
+This URL is always absolute and has neither query parameters nor a
+fragment. Only available when running as a website.
 
 active_page_url
+
 read-only
-rio.URL
-This value contains the URL of the currently active page. The URL is always absolute.
-This property is read-only. To change the page, use Session.navigate_to.
+
+`rio.URL`
+
+This value contains the URL of the currently active page. The URL is
+always absolute.
+
+You can use this to apply custom logic based on the current URL, or get
+additional URL information such as query parameters.
+
+This property is read-only. To change the page, use
+`Session.navigate_to`.
 
 active_page_instances
+
 read-only
-tuple[rio.ComponentPage, ...]
-This value contains all rio.ComponentPage instances that are currently active. The reason multiple pages may be active at the same time, is that a page may contain a rio.PageView itself. For example, if a user is on /foo/bar/baz, then this property will contain the rio.ComponentPage instances for foo, bar, and baz.
-This property is read-only. To change the page, use Session.navigate_to.
+
+`tuple[rio.ComponentPage, ...]`
+
+This value contains all `rio.ComponentPage` instances that are currently
+active. The reason multiple pages may be active at the same time, is
+that a page may contain a `rio.PageView` itself. For example, if a user
+is on `/foo/bar/baz`, then this property can contain the
+`rio.ComponentPage` instances for foo, bar, and baz.
+
+Keep in mind that some pages may match multiple segments at once, so the
+number of active pages may be less than the number of segments in the
+URL.
+
+This property is read-only. To change the page, use
+`Session.navigate_to`.
 
 client_ip
+
 read-only
-str
+
+`str`
+
 This is the public IP address of the connected client.
+
 Only available when running as a website.
 
 client_port
+
 read-only
-int
+
+`int`
+
 This is the port of the connected client.
+
 Only available when running as a website.
 
 user_agent
+
 read-only
-str
-This contains the user agent string sent by the client's browser. User agents contain a wealth of information regarding the client's device, operating system, browser and more. This information can be used to tailor the app's appearance and behavior to the client's device.
+
+`str`
+
+This contains the user agent string sent by the client's browser. User
+agents contain a wealth of information regarding the client's device,
+operating system, browser and more. This information can be used to
+tailor the app's appearance and behavior to the client's device.
+
+theme
+
+property
+
+`rio.Theme`
+
+If you've passed both a light and dark theme to your app, this will be
+whichever one is actually being used by the client. You can also assign
+a new theme to this property to change the theme for this session.
+
+Note that changing the theme will only affect this specific session, not
+the entire app.
 
 Functions
+
 Session.attach
-Attaches the given value to the Session. It can be retrieved later using session[...].
+
+Attaches a value to the session.
+
+Sessions can have arbitrary values attached to them. This makes it easy
+to share values with the entire session, such as a database connection
+or an object representing the currently logged in user.
+
+This function attaches the given value to the `Session`. It can be
+retrieved later using `session[...]`, where `...` is the type of the
+value you want to retrieve. (For example, `session[int]`.)
 
 Signature
+
+```python
 def attach(value: Any) -> None
+```
+
 value
-Any
+`Any`
+
 The value to attach.
 
 Session.detach
+
 Removes an attachment from this session.
 
+Sessions can have arbitrary values attached to them. This makes it easy
+to share values with the entire session, such as a database connection
+or an object representing the currently logged in user.
+
+This function removes an attachment from the session. To attach values
+to the session, use `Session.attach`.
+
+This function is an alias for `del session[...]`, to match the `attach`
+method.
+
 Signature
+
+```python
 def detach(typ: type) -> None
+```
+
 typ
-type
+`type`
+
+The type of the attachment to remove. This is used as the key to
+refer to attachments.
 
 Session.close
+
 Ends the session, closing any window or browser tab.
 
+Allows you to explicitly close the session. This is useful if you want
+to close the window or tab when the user has finished interacting with
+the app.
+
+Avoid using this function when running as a website. Browser tabs
+closing themselves are unusual and may be confusing to users.
+
 Signature
+
+```python
 def close() -> None
+```
 
 Session.url_for_asset
-Returns the URL for the given asset file. The asset must be located in the app's assets_dir.
+
+Get a unique URL for an asset file.
+
+Returns the URL for the given asset file. The asset must be located in
+the app's [`assets_dir`](/docs/api/app).
 
 Signature
+
+```python
 def url_for_asset(asset: pathlib.Path) -> rio.URL
+```
+
 asset
-pathlib.Path
+`pathlib.Path`
+
 The file path of the asset whose URL you need.
 
 Session.create_task
-Creates an asyncio.Task that is cancelled when the session is closed.
 
-This is identical to asyncio.create_task, except that any tasks are automatically cancelled when the session is closed. This makes sure that old tasks don't keep piling up long after they are no longer needed.
+Creates an `asyncio.Task` that is cancelled when the session is closed.
+
+This is identical to `asyncio.create_task`, except that any tasks are
+automatically cancelled when the session is closed. This makes sure that
+old tasks don't keep piling up long after they are no longer needed.
 
 Signature
+
+```python
 def create_task(
-    coro: Coroutine[Any, None, T], 
-    *, 
-    name: str | None = None, 
+    coro: Coroutine[Any, None, T],
+    *,
+    name: str | None = None,
 ) -> asyncio.Task[T]
+```
+
 coro
-Coroutine[Any, None, T]
+`Coroutine[Any, None, T]`
+
 The coroutine to run.
 
 name
-str | None
-An optional name for the task. Assigning descriptive names can be helpful when debugging.
+`str | None`
+
+An optional name for the task. Assigning descriptive names can
+be helpful when debugging.
 
 Session.navigate_to
-Switches the app to display the given page URL.
-
-Switches the app to display the given page URL. If replace is True, the browser's most recent history entry is replaced with the new page. This means that the user can't go back to the previous page using the browser's back button. If False, a new history entry is created, allowing the user to go back to the previous page.
 
 Signature
+
+```python
 def navigate_to(
-    target_url: rio.URL | str, 
-    *, 
-    replace: bool = False, 
+    target_url: rio.URL | str,
+    *,
+    replace: bool = False,
 ) -> None
+```
+
 target_url
-rio.URL | str
-The URL of the page to navigate to.
+`rio.URL | str`
 
 replace
-bool
-If True, the browser's most recent history entry is replaced with the new page. If False, a new history entry is created, allowing the user to go back to the previous page.
+`bool`
+
+Session.open_url_in_browser
+
+Opens the given URL in the user's browser.
+
+This is similar to Python's built-in `webbrowser.open`, but it opens the
+browser on the user's machine, not the server's. So if your app is
+running as website, it will open the URL in the user's already running
+browser. If running in window, the function delegates to
+`webbrowser.open`.
+
+Signature
+
+```python
+def open_url_in_browser(url: rio.URL | str) -> None
+```
+
+url
+`rio.URL | str`
+
+The URL to open.
 
 Session.set_title
+
+async
+
 Changes the window title of this session.
 
+Sets the text to display in the window. When running in a window this
+will be the title of the window. When running in a browser this will be
+the title of the tab.
+
 Signature
+
+```python
 async def set_title(title: str) -> None
+```
+
 title
-str
+`str`
+
 The new window title.
 
-Session.pick_file
-Open a file picker dialog.
+Session.pick_folder
 
-This function opens a file picker dialog, allowing the user to pick a file. The selected file is returned, allowing you to access its contents. See also save_file, if you want to save a file instead of opening one.
+async
+
+Open a folder picker dialog.
+
+This function opens a folder picker dialog, allowing the user to pick a
+folder. The path of the selected folder is returned.
+
+This function can only be used in "app" mode. (i.e. not in the browser)
 
 Signature
-def pick_file(
-    *, 
-    file_types: Iterable[str] | None = None, 
-    multiple: bool = False, 
-) -> rio.FileInfo | list[rio.FileInfo]
-file_types
-Iterable[str] | None
-A list of file extensions which the user is allowed to select. Defaults to None, which means that the user may select any file. Values can be passed as file extensions, ('pdf', '.pdf', '*.pdf' are all accepted) or MIME types (e.g. 'application/pdf').
 
-Note that there is no way for Rio to enforce the file type. Users will always be able to upload arbitrary files, e.g. by renaming them. Treat this as a hint to the user, and so the file browser may filter files, but not as a security measure.
+```python
+async def pick_folder() -> pathlib.Path
+```
+
+Session.pick_file
+
+async
+
+Open a file picker dialog.
+
+This function opens a file picker dialog, allowing the user to pick a
+file. The selected file is returned, allowing you to access its
+contents. See also `save_file`, if you want to save a file instead of
+opening one.
+
+Signature
+
+```python
+async def pick_file(
+    *,
+    file_types: Iterable[str] | None = None,
+    multiple: bool = False,
+) -> rio.FileInfo | list[rio.FileInfo]
+```
+
+file_types
+`Iterable[str] | None`
+
+A list of file extensions which the user is allowed
+to select. Defaults to `None`, which means that the user may select
+any file. Values can be passed as file extensions, ('pdf',
+'.pdf', '*.pdf' are all accepted) or MIME types (e.g.
+'application/pdf').
+
+Note that there is no way for Rio to enforce the file type. Users
+will always be able to upload arbitrary files, e.g. by renaming
+them. Treat this as a hint to the user, and so the file browser may
+filter files, but not as a security measure.
 
 multiple
-bool
+`bool`
+
 Whether the user should pick a single file, or multiple.
 
 Session.file_chooser
-This function has been renamed. Use pick_file instead.
+
+async
+
+Deprecated since 0.10
+
+[`Session.file_chooser`](/docs/api/session) is deprecated. Use [`Session.pick_file`](/docs/api/session) instead.
+
+Open a file picker dialog.
+
+This function opens a file picker dialog, allowing the user to pick a
+file. The selected file is returned, allowing you to access its
+contents. See also `save_file`, if you want to save a file instead of
+opening one.
 
 Signature
-def file_chooser(
-    *args, 
-    **kwargs, 
-) -> rio.FileInfo | list[rio.FileInfo]
-args
-Any
 
-kwargs
-Any
+```python
+async def file_chooser(
+    *,
+    file_types: Iterable[str] | None = None,
+    multiple: bool = False,
+) -> rio.FileInfo | list[rio.FileInfo]
+```
+
+file_types
+`Iterable[str] | None`
+
+A list of file extensions which the user is allowed
+to select. Defaults to `None`, which means that the user may select
+any file. Values can be passed as file extensions, ('pdf',
+'.pdf', '*.pdf' are all accepted) or MIME types (e.g.
+'application/pdf').
+
+Note that there is no way for Rio to enforce the file type. Users
+will always be able to upload arbitrary files, e.g. by renaming
+them. Treat this as a hint to the user, and so the file browser may
+filter files, but not as a security measure.
+
+multiple
+`bool`
+
+Whether the user should pick a single file, or multiple.
 
 Session.save_file
+
+async
+
 Save a file to the user's device.
 
-This function allows you to save a file to the user's device. The user will be prompted to select a location to save the file to.
+This function allows you to save a file to the user's device. The user
+will be prompted to select a location to save the file to.
 
-See also pick_file if you want to open a file instead of saving one.
+See also `pick_file` if you want to open a file instead of saving
+one.
 
 Signature
+
+```python
 async def save_file(
-    file_contents: pathlib.Path | str | bytes, 
-    file_name: str = 'Unnamed File', 
-    *, 
-    media_type: str | None = None, 
-    directory: pathlib.Path | None = None, 
+    file_contents: pathlib.Path | str | bytes,
+    file_name: str = 'Unnamed File',
+    *,
+    media_type: str | None = None,
+    directory: pathlib.Path | None = None,
 ) -> None
+```
+
 file_contents
-pathlib.Path | str | bytes
-The contents of the file to save. This can be a string, bytes, or a path to a file on the server.
+`pathlib.Path | str | bytes`
+
+The contents of the file to save. This can be a
+string, bytes, or a path to a file on the server.
 
 file_name
-str
-The default file name that will be displayed in the file dialog. The user can freely change it.
+`str`
+
+The default file name that will be displayed in the file
+dialog. The user can freely change it.
 
 media_type
-str | None
-The media type of the file. Defaults to None, which means that the media type will be guessed from the file name.
+`str | None`
+
+The media type of the file. Defaults to `None`, which
+means that the media type will be guessed from the file name.
 
 directory
-pathlib.Path | None
-The directory where the file dialog should open. This has no effect if the user is visiting the app in a browser.
+`pathlib.Path | None`
+
+The directory where the file dialog should open. This has
+no effect if the user is visiting the app in a browser.
 
 Session.show_custom_dialog
+
+async
+
 Displays a custom dialog.
 
-This function displays a dialog to the user. This will call the build function and use its result as the content of the dialog. The content will be assigned the full size of the screen. This allows you to position the dialog yourself, using the align and margin properties of your component.
+This function displays a dialog to the user. This will call the `build`
+function and use its result as the content of the dialog. The content
+will be assigned the full size of the screen. This allows you to
+position the dialog yourself, using the align and margin properties of
+your component.
 
-Note: Dialogs are useful if you need to show components without returning them from the build method. A good example is asking for confirmation from an event handler, without having to rebuild the component. If you can return components from the build method, rio.Popup is often an easier choice (set position to "fullscreen" to get a similar look to dialogs).
+By default, dialogs are styled similar to cards, hovering above the
+remainder of the content. If you want to take full control and style
+everything yourself, set `style` to `"custom"`. Note that in this
+case you'll probably want to set an alignment on your component so it
+doesn't take up the entire screen.
 
-Note: If spawning many dialogs (for example when creating one for each item inside of a CRUD application) dialogs can be faster than rio.Popup, because dialogs only have to build their children when they're opened, while rio.Popup has its children built immediately, for every single item in the list.
+Note: Dialogs are useful if you need to show components without
+    returning them from the `build` method. A good example is asking for
+    confirmation from an event handler, without having to rebuild the
+    component. **If you can return components from the `build` method,
+    [`rio.Popup`](/docs/api/popup) is often an easier choice** (set `position` to
+    `"fullscreen"` to get a similar look to dialogs).
 
-The result of this function is an instance of rio.Dialog, which can be used to interact with the dialog programmatically. For example, you can close the dialog or wait for it to be closed.
+Note: If spawning many dialogs (for example when creating one for each
+    item inside of a CRUD application) dialogs can be faster than
+    [`rio.Popup`](/docs/api/popup), because dialogs only have to build their children when
+    they're opened, while [`rio.Popup`](/docs/api/popup) has its children built
+    immediately, for every single item in the list.
 
-Dialogs can store a result value, which can be retrieved by calling Dialog.wait_for_close. This allows you to easily wait for the dialog to disappear, and also get a return value while you're at it. See the example below for details.
+The result of this function is an instance of [`rio.Dialog`](/docs/api/dialog), which can be
+used to interact with the dialog programmatically. For example, you can
+close the dialog or wait for it to be closed.
 
-Example
-This example demonstrates how to spawn a custom dialog that allows the user to select a value from a Dropdown menu. Once the user selects an option, the dialog closes, and the selected value is returned.
+Dialogs can store a result value, which can be retrieved by calling
+[`Dialog.wait_for_close`](/docs/api/dialog). This allows you to easily wait for the dialog
+to disappear, and also get a return value while you're at it. See the
+example below for details.
 
-Python
+**This method is experimental and may change in the future**
 
+Experimental methods are included in Rio to gather feedback and
+real-world usage data. They may be removed or changed in the future. If you use
+this method you might have to update your code when you upgrade
+to a newer version of Rio.
+
+Signature
+
+```python
+async def show_custom_dialog(
+    build: Callable[[], rio.Component],
+    *,
+    modal: bool = True,
+    user_closable: bool = True,
+    on_close: rio.EventHandler[[]] = None,
+    owning_component: rio.Component | None = None,
+    style: Literal['default', 'custom'] = 'default',
+) -> rio.Dialog
+```
+
+build
+`Callable[[], rio.Component]`
+
+A function which creates the component to be displayed in the
+dialog. Please note that this is a function, not a component. You
+can of course pass a component _class_ as this function, as long as
+the constructor doesn't require any arguments.
+
+modal
+`bool`
+
+Whether the dialog should prevent interactions with the rest of
+the app while it is open. If this is set, the background will also
+be darkened, to guide the user's focus to the dialog.
+
+user_closable
+`bool`
+
+Whether the user can close the dialog, e.g by clicking
+outside of it.
+
+on_close
+`rio.EventHandler[[]]`
+
+An event handler which is called when the dialog is closed.
+This will not be called if you explicitly remove the dialog by
+calling `dialog.close()`.
+
+owning_component
+`rio.Component | None`
+
+If provided, the dialog will close automatically
+should the owning component be destroyed. This is useful if you want
+a dialog to disappear when a user e.g. navigates away from the
+current page.
+
+style
+`Literal['default', 'custom']`
+
+Controls the appearance of the dialog. If `"default"`, it's
+styled similarly to a [`Card`](/docs/api/card), hovering above the rest of the app. If
+`"custom"`, no styling is applied at all and your component covers
+the entire screen. Apply an alignment to your component to center it
+instead.
+
+### Example
+
+This example demonstrates how to spawn a custom dialog that allows the
+user to select a value from a Dropdown menu. Once the user selects an
+option, the dialog closes, and the selected value is returned.
+
+```python
 class MyComponent(rio.Component):
     value: str = "Vanilla"
 
@@ -292,7 +712,7 @@ class MyComponent(rio.Component):
             # while the dialog is open
             modal=True,
             # Don't close the dialog if the user clicks outside of it
-            user_closeable=False,
+            user_closable=False,
         )
 
         # Wait for the user to select an option
@@ -319,52 +739,106 @@ class MyComponent(rio.Component):
                 on_press=self.on_spawn_dialog,
             ),
             rio.Text(f"You've chosen: {self.value}"),
+            spacing=1,
+            align_x=0.5,
+            align_y=0.5,
         )
-This method is experimental and may change in the future
-
-Experimental methods are included in Rio to gather feedback and real-world usage data. They may be removed or changed in the future. If you use this method you might have to update your code when you upgrade to a newer version of Rio.
-
-Signature
-async def show_custom_dialog(
-    build: Callable[[], rio.Component], 
-    *, 
-    modal: bool = True, 
-    user_closeable: bool = True, 
-    on_close: rio.EventHandler[[]] = None, 
-    owning_component: rio.Component | None = None, 
-) -> rio.Dialog
-build
-Callable[[], rio.Component]
-A function which creates the component to be displayed in the dialog. Please note that this is a function, not a component. You can of course pass a component class as this function, as long as the constructor doesn't require any arguments.
-
-modal
-bool
-Whether the dialog should prevent interactions with the rest of the app while it is open. If this is set, the background will also be darkened, to guide the user's focus to the dialog.
-
-user_closeable
-bool
-Whether the user can close the dialog, e.g by clicking outside of it.
-
-on_close
-rio.EventHandler[[]]
-An event handler which is called when the dialog is closed. This will not be called if you explicitly remove the dialog by calling dialog.close().
-
-owning_component
-rio.Component | None
-If provided, the dialog will close automatically should the owning component be destroyed. This is useful if you want a dialog to disappear when a user e.g. navigates away from the current page.
+```
 
 Session.show_yes_no_dialog
+
+async
+
 Displays a simple dialog with a yes and no button.
 
-This is a convenience function which displays a simple dialog to the user, with a "Yes" and "No" button. The user can select one of the options, and the function will return True or False respectively. If the user closes the dialog without selecting an option, None is returned instead.
+This is a convenience function which displays a simple dialog to the
+user, with a "Yes" and "No" button. The user can select one of the
+options, and the function will return `True` or `False` respectively. If
+the user closes the dialog without selecting an option, `None` is
+returned instead.
 
 The button texts and colors can be customized.
 
-Example
-Here's a simple example that demonstrates how to spawn a dialog where the user can select a boolean value:
+**This method is experimental and may change in the future**
 
-Python
+Experimental methods are included in Rio to gather feedback and
+real-world usage data. They may be removed or changed in the future. If you use
+this method you might have to update your code when you upgrade
+to a newer version of Rio.
 
+Signature
+
+```python
+async def show_yes_no_dialog(
+    text: str,
+    *,
+    title: str | None = None,
+    icon: str | None = None,
+    default: bool | None = None,
+    yes_text: str = 'Yes',
+    no_text: str = 'No',
+    yes_color: rio.ColorSet = 'keep',
+    no_color: rio.ColorSet = 'keep',
+    owning_component: rio.Component | None = None,
+) -> bool | None
+```
+
+text
+`str`
+
+A markdown string to display below the title. This should
+explain to the user what the dialog is about.
+
+title
+`str | None`
+
+A heading to display at the top of the dialog.
+
+icon
+`str | None`
+
+An icon to display next to the title.
+
+default
+`bool | None`
+
+The option the user is likely to take. This will highlight
+the respective button.
+
+yes_text
+`str`
+
+The text to display on the "Yes" button.
+
+no_text
+`str`
+
+The text to display on the "No" button.
+
+yes_color
+`rio.ColorSet`
+
+The color of the "Yes" button.
+
+no_color
+`rio.ColorSet`
+
+The color of the "No" button.
+
+owning_component
+`rio.Component | None`
+
+If provided, the dialog will close automatically
+should the owning component be destroyed. This is useful if you want
+a dialog to disappear when a user e.g. navigates away from the
+current page.
+
+### Example
+
+Here's a simple example that demonstrates how to spawn a dialog where
+the user can select a boolean value:
+
+```python
 class MyComponent(rio.Component):
     selected_value: bool = False
 
@@ -390,70 +864,49 @@ class MyComponent(rio.Component):
             ),
             rio.Text(f"You've selected: {self.selected_value}"),
         )
-This method is experimental and may change in the future
-
-Experimental methods are included in Rio to gather feedback and real-world usage data. They may be removed or changed in the future. If you use this method you might have to update your code when you upgrade to a newer version of Rio.
-
-Signature
-async def show_yes_no_dialog(
-    text: str, 
-    *, 
-    title: str | None = None, 
-    icon: str | None = None, 
-    default: bool | None = None, 
-    yes_text: str = 'Yes', 
-    no_text: str = 'No', 
-    yes_color: rio.ColorSet = 'keep', 
-    no_color: rio.ColorSet = 'keep', 
-    owning_component: rio.Component | None = None, 
-) -> bool | None
-text
-str
-A markdown string to display below the title. This should explain to the user what the dialog is about.
-
-title
-str | None
-A heading to display at the top of the dialog.
-
-icon
-str | None
-An icon to display next to the title.
-
-default
-bool | None
-The option the user is likely to take. This will highlight the respective button.
-
-yes_text
-str
-The text to display on the "Yes" button.
-
-no_text
-str
-The text to display on the "No" button.
-
-yes_color
-rio.ColorSet
-The color of the "Yes" button.
-
-no_color
-rio.ColorSet
-The color of the "No" button.
-
-owning_component
-rio.Component | None
-If provided, the dialog will close automatically should the owning component be destroyed. This is useful if you want a dialog to disappear when a user e.g. navigates away from the current page.
+```
 
 Session.set_clipboard
+
+async
+
 Copies the given text to the client's clipboard.
 
+This function updates the client's clipboard with the given text. This
+can be useful for providing the user with a quick way to copy data from
+the app to other applications.
+
+Unlike reading the clipboard this is usually allowed by browsers as it
+does not pose a security risk.
+
 Signature
+
+```python
 async def set_clipboard(text: str) -> None
+```
+
 text
-str
+`str`
+
 The text to copy to the clipboard.
 
 Session.get_clipboard
+
+async
+
 Gets the current text from the client's clipboard.
 
+Attempts to read the current text from the client's clipboard. This can
+be useful for providing the user with a quick way to copy data from
+other applications to the app.
+
+Note that this operation can fail if running as website and the user
+does not grant special permissions to the website. Thats because
+reading the clipboard can be a privacy & security risk as it can contain
+sensitive information such as passwords.
+
 Signature
+
+```python
 async def get_clipboard() -> str | None
+```

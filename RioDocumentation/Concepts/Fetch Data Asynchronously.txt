@@ -1,0 +1,31 @@
+# How can I Fetch Data Asynchronously When my Component is Created?
+
+Rio offers the `@rio.event.on_populate` decorator specifically for this. Here's an example:
+
+```python
+class MyComponent(rio.Component):
+    content: str | None = None
+
+    @rio.event.on_populate
+    async def load_content(self) -> None:
+        # Fetch your content here. This could be from a database, via HTTP, or
+        # any other method.
+        await asyncio.sleep(2)
+        self.content = "Hello, World!"
+
+    def build(self) -> rio.Component:
+        if self.content is None:
+            return rio.ProgressCircle(
+                align_x=0.5,
+                align_y=0.5,
+            )
+
+        return rio.Text(
+            self.content,
+            justify="center",
+        )
+```
+
+This will start out displaying a progress circle, and then switch to displaying
+the content once it's loaded. Note that `load_content` is asynchronous. This way
+Python doesn't lock up while it's running.

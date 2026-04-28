@@ -1,0 +1,122 @@
+Palette
+
+A group of related colors in a theme.
+
+Rio's themes consist of multiple palettes. Each palette has the same set of
+colors, but in different shades. You can switch between palettes using a
+[`rio.ThemeContextSwitcher`](/docs/api/themecontextswitcher).
+
+Future versions of Rio may add additional colors to palettes. For
+    this reason, there is no constructor that simply accepts all palette
+    colors. This way any missing colors can be automatically derived.
+
+Constructor
+
+```python
+Palette(
+    background: rio.Color,
+    *,
+    background_variant: rio.Color | None = None,
+    background_active: rio.Color | None = None,
+    foreground: rio.Color | None = None,
+    contrast: float = 1,
+    target_color: rio.Color | None = None,
+)
+```
+
+background
+`rio.Color`
+
+The main background color of the palette. All other colors
+will be derived assuming components using this palette are placed on
+a large area of this color.
+
+background_variant
+`rio.Color | None`
+
+A slightly modified version of the background
+color. This is used by many components to fit the background while
+still providing enough contrast. For example, this is the main color
+of a [`rio.TextInput`](/docs/api/textinput). This will be derived automatically if not
+provided.
+
+background_active
+`rio.Color | None`
+
+Used by components to indicate interactivity. For
+example a [`rio.TextInput`](/docs/api/textinput) might switch to this when hovered. This
+will be derived automatically if not provided.
+
+foreground
+`rio.Color | None`
+
+The color to use for text and other elements that need to
+be legible or otherwise stand out. This is what you'll typically use
+for text and icons. This will be derived automatically if not
+provided.
+
+contrast
+`float`
+
+When deriving colors, this controls how much the colors
+should differ from the background. Values less than `1` will create
+less contrast than would be the default, while values greater than
+`1` will create more contrast.
+
+target_color
+`rio.Color | None`
+
+If not provided, derived colors will be different shades
+of the background color. If provided, the colors will be derived by
+blending in this color. This can be used to tint the colors towards
+a specific hue.
+
+Functions
+
+Palette.from_color
+
+staticmethod
+
+Deprecated since 0.11.0
+
+The [`Palette`](/docs/api/palette) constructor now has the functionality that [`from_color`](/docs/api/palette) used to provide. Pass your color to the constructor directly.
+
+Derives a palette from a single color.
+
+This creates a new palette from the provided color. Any colors needed by
+palettes that aren't specified are automatically derived to fit in.
+
+Signature
+
+```python
+@staticmethod
+def from_color(
+    color: rio.Color,
+    *,
+    offset: float = 1,
+    target_color: rio.Color | None = None,
+) -> rio.Palette
+```
+
+color
+`rio.Color`
+
+The main background color of the palette. All other colors
+will be derived assuming components using this palette are placed on
+a large area of this color.
+
+offset
+`float`
+
+When deriving colors, this controls how much the colors should
+differ from the background. Values less than `1` will create less
+contrast than would be the default, while values greater than `1`
+will create more contrast
+
+target_color
+`rio.Color | None`
+
+If not provided, derived colors will be different shades
+of the background color. If provided, the colors will be derived by
+blending in this color. This can be used to tint the colors towards
+a specific hue.

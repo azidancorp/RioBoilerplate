@@ -1,10 +1,14 @@
-
 CheckboxChangeEvent
+
 Holds information regarding a checkbox change event.
 
-This is a simple dataclass that stores useful information for when the user switches a CheckBox on or off. You'll typically receive this as argument in on_change events.
+This is a simple dataclass that stores useful information for when the user
+switches a [`Checkbox`](/docs/api/checkbox) on or off. You'll typically receive this as argument
+in `on_change` events.
 
 Attributes
+
 is_on
-bool
+`bool`
+
 Whether the checkbox is now ticked.

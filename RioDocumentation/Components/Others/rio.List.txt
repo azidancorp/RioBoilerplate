@@ -1,0 +1,51 @@
+List
+
+A `list`-like object that automatically rebuilds components whenever its content changes.
+
+**This class is experimental and may change in the future**
+
+Experimental classes are included in Rio to gather feedback and
+real-world usage data. They may be removed or changed in the future. If you use
+this class you might have to update your code when you upgrade
+to a newer version of Rio.
+
+Constructor
+
+```python
+List(items: Iterable[T] = ())
+```
+
+items
+`Iterable[T]`
+
+## Examples
+
+```python
+class ElementAdder(rio.Component):
+    list: rio.List[str]
+
+    def build(self):
+        return rio.Button(
+            "add an element",
+            on_press=lambda: self.list.append("foo"),
+        )
+
+class Display(rio.Component):
+    list: rio.List[str]
+
+    def build(self):
+        return rio.Text("\n".join(self.list))
+
+class ListDemo(rio.Component):
+    list: rio.List[str] = rio.List()
+
+    def build(self):
+        return rio.Column(
+            ElementAdder(self.list),
+            Display(self.list),
+        )
+```
+
+Here you can see how the `Display` component automatically updates whenever
+the `ElementAdder` component appends a new element to the `List`. This would
+be much trickier to do with a regular `list`.

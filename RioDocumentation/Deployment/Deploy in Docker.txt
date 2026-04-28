@@ -1,0 +1,145 @@
+# Deploying a Rio App with Docker
+
+This guide will walk you through deploying a Rio web-app inside a **Docker**
+container. If you're new to Docker, don’t worry—I'll explain the key steps as we
+go.
+
+## What is Docker and Why Use It?
+
+Docker allows you to package your app with all its dependencies into a
+**container**. Containers store everything your app needs to run, including the
+operating system, libraries, and code. This makes your app portable and
+consistent across different environments.
+
+Docker containers are also lightweight and fast to start, making them ideal for
+deploying web apps. They've taken the modern software development world by
+storm, and for good reason!
+
+## Prerequisites
+
+Make sure you have Docker installed on your machine ([Download
+Docker](https://www.docker.com/get-started)). You'll also need a Rio app of
+course!
+
+## Writing the Dockerfile
+
+A **Dockerfile** is a script that tells Docker how to build your container. It's
+essentially a list of instructions that tells docker the steps to follow to
+create the container image.
+
+This dockerfile assumes that you're using a `pyproject.toml` to manage your
+project. If that's not the case, you'll have to tweak it to fit your needs.
+
+```dockerfile
+# Use the official Python image as a base. This ensures that typical Python
+# dependencies are already installed in the container.
+FROM python:3.12-slim
+
+# Make port 8000 available to the outside world. This is the port Rio will run
+# at
+EXPOSE 8000
+
+# Set environment variables to prevent Python from writing `.pyc` files and
+# creating a buffer for stdout
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Install the latest version of `uv`. `uv` is similar to `pip`, but much faster
+# and supports additional commands we'll use below
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Docker caches the results of each RUN instruction. Whenever a container is
+# rebuilt, Docker will avoid running any steps whose results are still valid
+# from last time.
+#
+# To make sure the dependencies don't all have to be reinstalled every time you
+# change a single line of code, we'll install them before adding the bulk of the
+# project files.
+#
+# Some build tools, like `poetry` require the project's README file to be
+# present for this step. If your file is named differently or you don't have one
+# at all, update this line or add a file.
+COPY pyproject.toml README.md /app/
+RUN uv pip install -r pyproject.toml --system --pre
+
+# Alternatively, if you're using a `requirements.txt` file instead of
+# `pyproject.toml`, you can use the following commands instead:
+#
+# COPY requirements.txt /app
+# RUN uv pip install -r requirements.txt --pre
+
+# Now copy the remainder of the project. This way if anything in the project
+# changes the dependencies don't have to be reinstalled.
+COPY . /app
+
+# This command will be run by docker once you run the container. It starts the
+# Rio server in release mode, on port 8000. We also make the port publicly
+# available, so that Docker can expose it to the outside world.
+CMD ["python", "-m", "rio", "run", "--release", "--port=8000", "--public"]
+```
+
+## Building the Docker Image
+
+Once your `Dockerfile` is ready, navigate to your project directory in a
+terminal and run:
+
+```sh
+docker build -t my-rio-app .
+```
+
+This tells Docker to:
+
+- Use the **Dockerfile** in the current directory (`.`)
+- Name the built image **my-rio-app**
+
+No container will be created yet. This command only builds the image that we can
+use to run containers.
+
+## Running the Container
+
+Now, start your container like so:
+
+```sh
+docker run -p 8000:80 my-rio-app
+```
+
+This will create a new container from the `my-rio-app` image we've just built.
+Docker isolates containers from the host machine, so your app will run in its
+own environment. Because we want to access the app from the host machine, we
+expose port 8000 on the host machine and map it to port 80 inside the container.
+
+You can now access your Rio app by navigating to `http://localhost:8000` in your
+browser.
+
+## Additional Steps
+
+As with deployments directly on the host, we recommend putting a reverse proxy
+in front of Rio. This will add an extra layer of security and allow you to
+easily add encryption to your app.
+
+See the [Deployment Guide](/docs/howto/deployment) for details
+on that subject.
+
+## Additional Docker Commands
+
+To stop the running container:
+
+```sh
+docker ps   # Find the container ID
+docker stop <container_id>
+```
+
+Stopping a container doesn't delete it. To get rid of it entirely, run this:
+
+```sh
+docker rm <container_id>
+```
+
+To remove an image:
+
+```sh
+docker rmi my-rio-app
+```

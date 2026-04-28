@@ -1,0 +1,180 @@
+# Route Parameters
+
+Most of the time, when creating pages, you will assign them a fixed URL. For
+example, your home page will always live at `/` and probably doesn't need any
+data to be passed to it.
+
+```py
+@rio.page(
+    name="Home",
+    url_segment="",
+)
+class MyPage(rio.Component):
+    def build(self) -> rio.Component:
+        return rio.Text(
+            "You're currently on the Home page!",
+            justify="center",
+        )
+```
+
+When visiting `/`, you'll see the text "You're currently on the Home page!". If
+you were to visit another URL, such as `/about`, you'd still see the same text,
+because the page contents dont't depend on the URL.
+
+(You can run this via `rio run`. You'll see the same page regardless of which
+URL you're on.)
+
+But what if you need additional information? Here are your options:
+
+## Dynamic Routes
+
+Rio supports FastAPI-style dynamic routes. You can define a page you can put
+part of the segment in curly braces. Those segments will match any value and be
+passed to your component as keyword arguments.
+
+```py
+@rio.page(
+    # Notice the `{user_name}` in the URL. The matched URL segment
+    # will be passed to the component as the `user_name` parameter.
+    url_segment="user/{user_name}",
+)
+class UserPage(rio.Component):
+    # This parameter will be taken from the URL
+    user_name: str
+
+    def build(self) -> rio.Component:
+        return rio.Text(
+            f"You're currently on {self.user_name}'s page",
+            justify="center",
+        )
+```
+
+When visiting `/user/alice`, you'll see the text "You're currently on alice's
+page". If you visit `/user/bob`, you'll see "You're currently on bob's page". If
+you visit `/` or `/user` or `/bob` you'll get an error page, because the page
+doesn't match the URL.
+
+Note that each `{parameter}` matches exactly one segment. So if you were to
+visit `/user/john/doe`, the `user_name` would be `"john"`, not `"john/doe"`. To
+match more than one segment, use `{parameter:path}`:
+
+```py
+@rio.page(
+    # Notice the `{user_name:path}` in the URL. The matched segments
+    # will be passed to the component as the `user_name` parameter.
+    url_segment="user/{user_name:path}",
+)
+class UserPage(rio.Component):
+    # This parameter will be taken from the URL
+    user_name: str
+
+    def build(self) -> rio.Component:
+        return rio.Text(
+            f"You're currently on {self.user_name}'s page",
+            justify="center",
+        )
+```
+
+This page will be accessible as `/user`, `/user/bob`, `/user/john/doe`, and any
+other path that starts with `/user/`.
+
+## Query Parameters
+
+Query parameters are another way to pass data to your components. They are
+specified in the URL after a `?` and separated by `&`. For example, the URL
+`/search?q=rio&limit=10` has two query parameters: `q` with value `rio` and
+`limit` with value `10`.
+
+Here's how to access query parameters in your components:
+
+```py
+@rio.page()
+class MyPage(rio.Component):
+    parameter: rio.QueryParameter[str] = "No Value"
+
+    def build(self) -> rio.Component:
+        return rio.Text(
+            f"The page was passed the parameter: {self.parameter}",
+            justify="center",
+        )
+```
+
+If you navigate to `/?parameter=Hello!`, you'll see the text "The page was
+passed the parameter: Hello!". If you leave out the query parameter and just
+navigate to `/`, you'll see "The page was passed the parameter: No Value", which
+is the default we specified in the component.
+
+Query parameters must be annotated as `rio.QueryParameter[...]` and have a
+default value.
+
+## Parameter Types
+
+Rio can parse some parameter types for you. Simply annotate your parameter with
+the desired type, for example:
+
+```py
+@rio.page(
+    url_segment="{int_param}/{literal_param}",
+)
+class MyPage(rio.Component):
+    int_param: int
+    literal_param: typing.Literal['foo', 'bar']
+    bool_param: rio.QueryParameter[bool] = False
+    float_param: rio.QueryParameter[float] = 0
+
+    def build(self) -> rio.Component:
+        ...
+```
+
+Supported types are:
+
+- `int`
+- `float`. Floats are parsed with the `.` character as the decimal separator,
+    regardless of the visitor's locale.
+- `bool`. Valid values for `True` are "true", "t", "yes", "y", and "1". Valid
+    values for `False` are "false", "f", "no", "n", and "0". Case insensitive.
+- `typing.Literal`. Mixing different types of values (like `Literal['foo',
+True]`) is not allowed.
+
+`None` is also allowed as a type annotation, but will never be parsed. You can
+only ever receive `None` as input if it's the default value for your parameter:
+
+```py
+@rio.page()
+class MyPage(rio.Component):
+    param: int | None = None
+```
+
+Unions are not supported, with the sole exception of `| None`.
+
+If a URL parameter can't be parsed (for example because someone tried to pass
+"foo" to a parameter of type `int`), different things will happen based on the
+type of the parameter:
+
+- If it's a query parameter, the default value will be used.
+- If it's a URL segment parameter, it will be treated like any other URL that
+    doesn't match your page's URL segment. It will either match a different
+    page, or result in a "page not found" error.
+
+## More Control
+
+Finally, if the built-in ways to get parameters aren't enough, you can always
+get the currently active URL from `self.session.active_page_url` and run
+arbitrary logic to get the data you need. Here's an example that displays
+information about a user based on the URL, without using dynamic routes:
+
+```py
+@rio.page(
+    url_segment="",
+)
+class MyPage(rio.Component):
+    def build(self) -> rio.Component:
+        # We can get the active URL from the session
+        active_url = self.session.active_page_url
+
+        # Run arbitrary logic with the active URL
+        return rio.Text(
+            f"You're currently on the page: {active_url}. The path is {active_url.path} and query parameters are {active_url.query}",
+            justify="center",
+        )
+```

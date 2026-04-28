@@ -1,0 +1,129 @@
+# Introduction to Dataclasses
+
+The `dataclass` module provides a decorator and functions for automatically
+generating special methods such as `__init__`, `__repr__`, `__eq__`, and others
+for simple classes. This makes it easier to create simple without writing a lot
+of boilerplate code.
+
+## Why Use Dataclasses?
+
+Normally, when defining a class that stores data, you would write something like
+this:
+
+```python
+class Person:
+    def __init__(self, name: str, age: int):
+        self.name = name
+        self.age = age
+
+    def __repr__(self):
+        return f"Person(name={self.name}, age={self.age})"
+
+    def __eq__(self, other):
+        if isinstance(other, Person):
+            return self.name == other.name and self.age == other.age
+        return False
+```
+
+That's a lot of code for a simple data container. With `@dataclasses.dataclass`,
+this can be simplified:
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class Person:
+    name: str
+    age: int
+```
+
+This automatically generates some methods for you:
+
+-   `__init__`
+-   `__repr__`
+-   `__eq__`
+-   (and more)
+
+## Dataclasses in Rio
+
+All Rio components are automatically dataclasses. That's why you don't write
+(**and shouldn't write**) `__init__`. Just define the attributes you need and
+Rio takes care of the rest:
+
+```py
+class MyComponent(rio.Component):
+    name: str
+    age: int
+
+    def on_press(self) -> None:
+        print('Hello!')
+
+    def build(self) -> rio.Component:
+        return rio.Button(
+            "Click me",
+            on_press=self.on_press,
+        )
+```
+
+Notice how similar this is to the `Person` class above. This is the standard
+pattern for Rio components:
+
+1. `class` header
+1. Attributes
+1. Any custom methods, such as event handlers
+1. `build` method
+
+## Adding Default Values
+
+You can assign default values like this:
+
+```python
+@dataclass
+class Person:
+    name: str
+    age: int = 30  # Default age is 30
+
+p = Person("Alice")
+print(p)  # Output: Person(name='Alice', age=30)
+```
+
+Rio also supports mutable default values (like lists, dicts, etc.), which
+regular dataclasses don't:
+
+```python
+class MyComponent(rio.Component):
+    name: str
+    grades: list = []  # No need to write `field(default_factory=list)`
+```
+
+Dataclasses don't allow this because all instances would share the same list
+object. Rio solves this problem by automatically creating a deepcopy of the
+default value, which ensures that every component gets its own list.
+
+## Controlling Field Behavior
+
+The `field()` function allows more control over individual fields:
+
+```python
+from dataclasses import field
+
+@dataclass
+class Car:
+    model: str
+    year: int
+
+    # By setting `init=False`, the field is not included in the `__init__`
+    # method. It will always start off with the default value we set.
+    price: float = field(default=10000.0, init=False)
+
+car = Car("Toyota", 2020)
+print(car.price)  # Output: 10000.0
+```
+
+In summary, dataclasses provide a concise way to define simple data structures
+in Python. They reduce boilerplate code, improve readability, and integrate
+seamlessly with type hints. Whether you're working with configurations, records,
+or simple data containers, `dataclass` is a great choice.
+
+See also the [Official
+Documentation](https://docs.python.org/3/library/dataclasses.html).

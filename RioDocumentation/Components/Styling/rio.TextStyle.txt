@@ -1,121 +1,142 @@
 TextStyle
+
 A collection of styling properties for text.
 
-Stores styling information for text - font, size, color, etc.
+This is a simple storage class that holds information about how text should
+be styled. You can use it to specify the font, fill, size, and other
+properties of text in your rio app.
+
+All parameters are optional. Omitting a parameter will leave that setting
+unchanged (i.e. as if you hadn't applied the style at all). For example:
+
+```py
+theme = rio.Theme.from_colors(text_color=rio.Color.PURPLE)
+highlighted_style = rio.TextStyle(font_weight="bold", italic=True)
+
+...  # Somewhere later
+
+# This text will be purple, as defined in the theme, but also bold and
+# italic.
+rio.Text("Hello, World!", style=highlighted_style)
+```
 
 Constructor
+
+```python
 TextStyle(
-    *, 
-    font: rio.Font | None = None, 
-    fill: rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.Color | None = None, 
-    font_size: float = 1.0, 
-    italic: bool = False, 
-    font_weight: Literal['normal', 'bold'] = 'normal', 
-    underlined: bool = False, 
-    strikethrough: bool = False, 
-    all_caps: bool = False, 
+    *,
+    font: rio.Font | None = None,
+    fill: rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.Color | rio.RadialGradientFill | None = None,
+    font_size: float | None = None,
+    italic: bool | None = None,
+    font_weight: Literal['normal', 'bold'] | None = None,
+    underlined: bool | None = None,
+    strikethrough: bool | None = None,
+    all_caps: bool | None = None,
 )
+```
 
 font
-rio.Font | None
-The Font to use for the text. When set to None, the default font for the current context (heading or regular text, etc) will be used.
+`rio.Font | None`
+
+The [`Font`](/docs/api/font) to use for the text.
 
 fill
-rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.Color | None
+`rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.Color | rio.RadialGradientFill | None`
+
 The fill (color, gradient, etc.) for the text.
 
 font_size
-float
+`float | None`
+
 The font size.
 
 italic
-bool
-Whether the text is italic or not.
+`bool | None`
+
+Whether the text is *italic* or not.
 
 font_weight
-Literal['normal', 'bold']
-Whether the text is normal or bold.
+`Literal['normal', 'bold'] | None`
+
+Whether the text is normal or **bold**.
 
 underlined
-bool
+`bool | None`
+
 Whether the text is underlined or not.
 
 strikethrough
-bool
-Whether the text should have ~~a line through it~~.
+`bool | None`
+
+Whether the text should have a line through it.
 
 all_caps
-bool
-Whether the text is transformed to ALL CAPS or not.
+`bool | None`
 
-Attributes
-font
-rio.Font | None
-The Font to use for the text. When set to None, the default font for the current context (heading or regular text, etc) will be used.
-
-fill
-rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.Color | None
-The fill (color, gradient, etc.) for the text.
-
-font_size
-float
-The font size.
-
-italic
-bool
-Whether the text is italic or not.
-
-font_weight
-Literal['normal', 'bold']
-Whether the text is normal or bold.
-
-underlined
-bool
-Whether the text is underlined or not.
-
-strikethrough
-bool
-Whether the text should have ~~a line through it~~.
-
-all_caps
-bool
 Whether the text is transformed to ALL CAPS or not.
 
 Functions
+
 TextStyle.replace
+
+Returns an updated copy of the style.
+
+This function allows you to create a new `TextStyle` object with the
+same properties as this one, except for the ones you specify.
+
 Signature
+
+```python
 def replace(
-    *, 
-    font: rio.Font | None = None, 
-    fill: rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.Color | None | rio.utils.NotGiven = <rio.utils.NotGiven object at 0x7f108b2adfa0>, 
-    font_size: float | None = None, 
-    italic: bool | None = None, 
-    font_weight: Literal['normal', 'bold'] | None = None, 
-    underlined: bool | None = None, 
-    strikethrough: bool | None = None, 
-    all_caps: bool | None = None, 
+    *,
+    font: rio.Font | None = ...,
+    fill: rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.Color | rio.RadialGradientFill | None = ...,
+    font_size: float | None = ...,
+    italic: bool | None = ...,
+    font_weight: Literal['normal', 'bold'] | None = ...,
+    underlined: bool | None = ...,
+    strikethrough: bool | None = ...,
+    all_caps: bool | None = ...,
 ) -> rio.TextStyle
+```
+
 font
-rio.Font | None
-The Font to use for the text. When set to None, the default font for the current context (heading or regular text, etc) will be used.
+`rio.Font | None`
+
+The [`Font`](/docs/api/font) to use for the text.
+
 fill
-rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.Color | None | rio.utils.NotGiven
+`rio.SolidFill | rio.LinearGradientFill | rio.ImageFill | rio.Color | rio.RadialGradientFill | None`
+
 The fill (color, gradient, etc.) for the text.
+
 font_size
-float | None
+`float | None`
+
 The font size.
+
 italic
-bool | None
-Whether the text is italic or not.
+`bool | None`
+
+Whether the text is *italic* or not.
+
 font_weight
-Literal['normal', 'bold'] | None
-Whether the text is normal or bold.
+`Literal['normal', 'bold'] | None`
+
+Whether the text is normal or **bold**.
+
 underlined
-bool | None
+`bool | None`
+
 Whether the text is underlined or not.
+
 strikethrough
-bool | None
-Whether the text should have ~~a line through it~~.
+`bool | None`
+
+Whether the text should have a line through it.
+
 all_caps
-bool | None
+`bool | None`
+
 Whether the text is transformed to ALL CAPS or not.

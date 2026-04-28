@@ -1,0 +1,26 @@
+TablePressEvent
+
+Holds information about a table press event.
+
+This is a simple dataclass that stores information about which cell in a
+table was clicked. You'll receive this as an argument in `on_press` events
+of [`rio.Table`](/docs/api/table) components.
+
+Attributes
+
+row
+`int | Literal['header']`
+
+The row index of the clicked cell. This will be "header" if a header
+cell was clicked, otherwise it will be a zero-based integer index.
+
+column
+`int`
+
+The column index of the clicked cell (zero-based).
+
+column_name
+`str | None`
+
+If the table has headers, this will be the name of the
+pressed column. It's `None` otherwise.

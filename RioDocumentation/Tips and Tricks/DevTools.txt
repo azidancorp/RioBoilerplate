@@ -1,0 +1,89 @@
+# Development Tools
+
+Rio's Dev Tools are designed to make developing with the Rio framework intuitive
+and efficient. Here's a breakdown of the main features to help you get started:
+
+[Media: https://rio.dev/rio/assets/temp/f-e93aeeabf289817f7469ca005ef3c262baafe6612af063dce9afd61ff403972f]
+
+The dev tools are only visible in debug mode. To get rid of them, run your app
+with the `--release` flag: `rio run --release`.
+
+## The Component Tree
+
+The "Tree" tab displays the entire hierarchy of components in your app. When you
+create a `rio.App` instance, a build function is used to define the root
+component, which is the first component visible in the tree. Hovering over a
+component highlights it both in the tree and in the app, allowing you to easily
+orient yourself. This feature is particularly helpful for verifying the layout,
+margins, spacing, and alignment of components. If you click on a collapsed
+component in the tree, it will expand to reveal its child components. By
+selecting a component and using the buttons below, you can view additional
+details about that component. It can even explain the component's layout to you
+in english sentences:
+
+[Image](https://rio.dev/rio/assets/temp/f-346092962eb2432e5a07f9c3f4b6fd35ed503f0f648bc31fbbb23c2d0b271122)
+
+Plain english explanation of a component's layout
+
+## Attributes View
+
+The Attributes View shows all the attributes you have assigned to a component in
+your code. At the top of the Attributes View, you can see the specific line of
+code where the component was created, making it easy to locate and edit in your
+codebase. For built-in components, this view also provides a direct link to the
+official documentation, which is helpful if you need a quick refresher on how
+the component works.
+
+## Layout View
+
+The Layout View provides a detailed visualization of how a component is
+positioned in relation to its parent and siblings. This view also explains why a
+component is laid out the way it is. For example, if a rio.Button is placed
+inside a Column, the Layout View might explain that the button takes up the full
+width of its parent because that is the default behavior of components in a
+Column. Additionally, the Layout View provides tips for common layout
+operations, such as resizing the width or height of a component. This feature is
+especially valuable when you are just starting out with Rio, as it helps you
+understand and refine the framework's layout system.
+
+## Icons Tab
+
+Rio includes thousands of beautifully designed icons to enhance your app's user
+interface. However, finding the right icon can be challenging, which is why the
+Icons Tab includes a search feature to help you narrow down your options. Once
+you select an icon, the tab displays the code needed to use that icon in your
+app. It also shows other variants and available fill styles, making it easy to
+customize the icon to fit your design needs.
+
+## Theme Tab
+
+The Theme Tab allows you to customize the look and feel of your app. It provides
+a visual interface for changing primary and secondary colors, and any changes
+you make are instantly applied to your running app, giving you a live preview.
+In addition to color customization, you can adjust other design elements such as
+corner radii and toggle between light and dark themes. The bottom of the Theme
+Tab displays the code required to implement your selected theme, ensuring that
+your customizations can be easily replicated or shared.
+
+## Deploy Tab
+
+The Deploy Tab streamlines the process of preparing and deploying your app. This
+tab includes tools that simplify pushing your app into production, saving you
+time and effort. With the Deploy Tab, you can focus on refining your app while
+the deployment tools handle the technical details.
+
+## Bonus for Contributors: Rio Dev Tab
+
+If you contribute to Rio itself, you will gain access to an additional tab
+called the "Rio Dev" tab. This tab is only visible when you are working on the
+Rio framework rather than building an app with Rio. It includes advanced tools
+for contributors, such as a profiling tool to optimize performance and a
+debugging tool to improve the layout engine. These features enable contributors
+to enhance Rio's functionality and ensure it remains a high-performance
+framework.
+
+With these features, Rio Dev Tools are designed to simplify app development
+while offering powerful capabilities for both beginners and experienced
+developers. Whether you are creating a simple app or contributing to the Rio
+framework, these tools will help you work efficiently and confidently. Happy
+coding!

@@ -1,0 +1,45 @@
+RadialGradientFill
+
+Fills a shape with a circular gradient.
+
+`RadialGradientFill` fills the shape with a circular gradient that emanates
+from a center point. The gradient can have any number of stops, each with a
+color and a position. The gradient will smoothly transition between the
+colors at the given positions. The positions are given as fractions, where 0
+is the center of the gradient and 1 is the edge.
+
+Constructor
+
+```python
+RadialGradientFill(
+    *stops: rio.Color | tuple[rio.Color, float],
+    center_x: float = 0.5,
+    center_y: float = 0.5,
+)
+```
+
+stops
+`rio.Color | tuple[rio.Color, float]`
+
+The different colors that comprise the gradient, along with where
+they are positioned.
+
+The stops are given as tuples. Each tuple contains a color and a
+position. The position is a fraction, where 0 is the center of the
+gradient and 1 is the edge.
+
+The order of the stops has no effect.
+
+There must be at least one stop.
+
+center_x
+`float`
+
+The x-coordinate of the center of the gradient, as a fraction
+of the shape's width. 0.5 is the center of the shape.
+
+center_y
+`float`
+
+The y-coordinate of the center of the gradient, as a fraction
+of the shape's height. 0.5 is the center of the shape.

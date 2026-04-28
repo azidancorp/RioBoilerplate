@@ -1,11 +1,18 @@
 Fill
+
+Deprecated since 0.8.5
+
+The `Fill` base class will be removed.
+
 Base class for how shapes are filled.
 
-This is a base class for all fills. Fills determine how the inside of a shape is colored.
+This is a base class for all fills. Fills determine how the inside of a
+shape is colored.
 
-This class is abstract and cannot be instantiated directly. Instead, use one of its subclasses:
+This class is abstract and cannot be instantiated directly. Instead, use one
+of its subclasses:
 
-SolidFill
-ImageFill
-LinearGradientFill
-FrostedGlassFill
+- [`SolidFill`](/docs/api/solidfill)
+- [`ImageFill`](/docs/api/imagefill)
+- [`LinearGradientFill`](/docs/api/lineargradientfill)
+- [`FrostedGlassFill`](/docs/api/frostedglassfill)

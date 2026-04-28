@@ -1,0 +1,130 @@
+# Introduction to Type Hints
+
+Type hints (also called type annotations) in Python are a way to specify the
+expected types of variables, function parameters, class attributes and return
+values. They do not change how the code runs but serve as documentation and help
+tools like linters and IDEs catch potential errors before runtime.
+
+## Why Use Type Hints?
+
+Python is dynamically typed, meaning you can assign any type of value to a
+variable without declaring its type. You can even change values on the fly:
+First assign a string, then an integer, and finally a list. This flexibility is
+powerful but can sometimes lead to confusion and even bugs. Consider this
+function:
+
+```python
+def repeat(text, times):
+    return text * times
+```
+
+At first glance, it might not be clear what types `text` and `times` are
+supposed to be. If `text` is a string and `times` is an integer, it works as
+expected (`"hi" * 3` → `"hihihi"`). But if `times` is a string, it causes an
+error.
+
+By adding type hints, we clarify the intended use:
+
+```python
+def repeat(text: str, times: int) -> str:
+    return text * times
+```
+
+Now, tools like linters and IDEs can warn us if we try to call `repeat("hi",
+"3")`, helping catch errors early. Not only that, but since they now understand
+what the function returns, all of your code below will receive better help from
+the type checker as well.
+
+## How to Use Type Hints
+
+### Basic Type Annotations
+
+You can specify types for function arguments and return values:
+
+```python
+def add(a: int, b: int) -> int:
+    return a + b
+```
+
+Here, `a` and `b` are expected to be integers, and the function should return an
+integer.
+
+### Annotating Variables
+
+You can also annotate variables outside of functions:
+
+```python
+age: int = 25
+name: str = "Alice"
+```
+
+This helps document your code but does not enforce types at runtime.
+
+### Multiple Possible Types
+
+If a variable or argument can be more than one type, you can use `|` (Python
+3.10+) to specify multiple options:
+
+```python
+def to_string(value: int | float) -> str:
+    return str(value)
+```
+
+This means `value` can be an `int` or a `float`.
+
+### 4. **Lists, Dictionaries, and Other Collections**
+
+You can specify the types of elements inside lists, dictionaries, and other
+collections:
+
+```python
+def names_list() -> list[str]:
+    return ["Alice", "Bob", "Charlie"]
+
+def word_count() -> dict[str, int]:
+    return {"hello": 3, "world": 5}
+```
+
+Here, `list[str]` means a list containing only strings, and `dict[str, int]`
+means a dictionary where keys are strings and values are integers.
+
+### 5. **Optional Values**
+
+Sometimes, a function might return `None` in some cases. You can make this explicit:
+
+```python
+def find_user(name: str) -> str | None:
+    users = {"Alice": "User1", "Bob": "User2"}
+    return users.get(name)
+```
+
+The return type `str | None` means the function might return either a `str` or
+`None` if the user isn't found.
+
+## Type Hints in Rio
+
+Rio makes heavy use of type hints. For example, virtually every component starts
+off with type hints for its attributes:
+
+```py
+class MyComponent(rio.Component):
+    # Notice the type hint here. This is **required** for the component to
+    # function
+    label: str = 'Click Me!'
+
+    # It's good practice to add type hints to methods as well, but this is not
+    # required.
+    async def on_button_press(self) -> None:
+        self.label = 'Button Pressed!'
+
+    # Same here. Nice, but not necessary.
+    def build(self) -> rio.Component:
+        return rio.Button(
+            self.label,
+            on_press=self.on_button_press,
+        )
+```
+
+We strongly recommend you strive to use type hints in your Code, both with and
+without Rio. It makes your code easier to understand and maintain, helps your
+linter find bugs, makes your IDE smarter and only takes a few extra keystrokes.

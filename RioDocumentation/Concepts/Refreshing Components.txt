@@ -1,0 +1,99 @@
+# My App doesn't Update Even Though I've Changed a Value
+
+Rio automatically detects assignments to components and rebuilds them. However,
+sometimes you may find that your app doesn't update even though you've changed
+a value. What's going on?
+
+Rio very specifically detects **assignments** to state variables. For example,
+if you retrieve a value from a database, and assign it to your component, Rio
+_will_ detect the change:
+
+```py
+class MyComponent(rio.Component):
+    label: str = 'Click Me!'
+
+    async def on_button_press(self) -> None
+        # Before the button was pressed, label was "Click Me!". Let's change it
+        # to something else.
+        self.label = 'Button Pressed!'
+
+    def build(self) -> rio.Component:
+        return rio.Button(
+            self.label,
+            on_press=self.on_button_press,
+        )
+```
+
+Rio will always detect this change and update the component. That's because it
+**assigns** a new value to `self`. Other types of changes are not automatically
+detectable in Python. For example, appending to a list:
+
+```py
+class MyComponent(rio.Component):
+    counter: list[int] = [0]
+
+    async def on_button_press(self) -> None
+        # Append a new value to the list. Note that we aren't assigning a new
+        # value to `self`, so Rio can't detect this.
+        self.counter.append(len(self.counter))
+
+    def build(self) -> rio.Component:
+        return rio.Column(
+            rio.Text(str(self.counter)),
+            rio.Button(
+                'Add Value',
+                on_press=self.on_button_press,
+            ),
+        )
+```
+
+To make Rio refresh in this case, you can add a `self.force_refresh()` after
+modifying the list:
+
+```py
+class MyComponent(rio.Component):
+    counter: list[int] = [0]
+
+    async def on_button_press(self) -> None
+        self.counter.append(len(self.counter))
+        self.force_refresh()  # Add this to force a rebuild
+
+    def build(self) -> rio.Component:
+        return rio.Column(
+            rio.Text(str(self.counter)),
+            rio.Button(
+                'Add Value',
+                on_press=self.on_button_press,
+            ),
+        )
+```
+
+Finally, a technicality to be aware of. You must assign specifically to `self`
+to trigger a rebuild. Assigning to another value _in_ `self` will not trigger a
+rebuild:
+
+```py
+@dataclass
+class Person:
+    name: str
+
+class MyComponent(rio.Component):
+    person: Person
+
+    async def on_button_press(self) -> None
+        # This will not trigger a rebuild because we're assigning to `person`,
+        # not `self`.
+        self.person.name = "Eve"
+
+        # Again, you could fix this by adding a `self.force_refresh()` here.
+        # self.force_refresh()
+
+    def build(self) -> rio.Component:
+        return rio.Column(
+            rio.Text(self.person.name),
+            rio.Button(
+                'Change Name',
+                on_press=self.on_button_press,
+            ),
+        )
+```

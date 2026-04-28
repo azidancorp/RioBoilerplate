@@ -86,7 +86,7 @@ class CurrencyStatePanel(rio.Component):
             )
         else:
             header_rows.append(
-                rio.Text("No authenticated user attached", style="danger")
+                rio.Text("No authenticated user attached", fill=rio.Color.RED)
             )
 
         config_card = (

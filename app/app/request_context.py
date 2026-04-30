@@ -121,3 +121,30 @@ def context_from_rio_session(
         identifier=identifier,
         source="rio",
     )
+
+
+def context_from_fastapi_request(
+    request: Any,
+    *,
+    identifier: str = "",
+    user: AppUser | None = None,
+    user_session: UserSession | None = None,
+) -> RequestContext:
+    peer_ip = ""
+    if getattr(request, "client", None) and request.client.host:
+        peer_ip = str(request.client.host)
+
+    headers = getattr(request, "headers", {}) or {}
+    session_id = user_session.id if user_session else ""
+    user_id = str(user.id if user else user_session.user_id if user_session else "")
+    if not identifier and user:
+        identifier = user.email
+
+    return RequestContext(
+        client_ip=resolve_client_ip(peer_ip=peer_ip, headers=headers),
+        user_agent=str(headers.get("user-agent", "") or ""),
+        session_id=session_id,
+        user_id=user_id,
+        identifier=identifier,
+        source="fastapi",
+    )

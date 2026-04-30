@@ -19,16 +19,45 @@ from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status, Header
+from fastapi import Depends, HTTPException, Request, status, Header
 
 from app.data_models import AppUser, UserSession
 from app.persistence import Persistence
 from app.permissions import get_role_level, is_privileged_role
+from app.request_context import context_from_fastapi_request
+from app.rate_limits import api_auth_ip_policy, rate_limit_key, rate_limited_message
 
 
 # ============================================================================
 # Authentication Dependencies
 # ============================================================================
+
+def _auth_failure(
+    *,
+    request: Request,
+    db: Persistence,
+    detail: str,
+) -> HTTPException:
+    context = context_from_fastapi_request(request)
+    decision = db.check_rate_limit(
+        policy=api_auth_ip_policy(),
+        key=rate_limit_key("ip", context.client_ip),
+    )
+    if not decision.allowed:
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=rate_limited_message(
+                "Too many authentication attempts.",
+                decision.retry_after_seconds,
+            ),
+            headers={"Retry-After": str(decision.retry_after_seconds or 1)},
+        )
+
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 async def get_persistence() -> AsyncGenerator[Persistence, None]:
     """
@@ -45,6 +74,7 @@ async def get_persistence() -> AsyncGenerator[Persistence, None]:
 
 
 async def get_current_session(
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
     db: Persistence = Depends(get_persistence)
 ) -> UserSession:
@@ -55,19 +85,19 @@ async def get_current_session(
     """
     # Check if Authorization header is present
     if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+        raise _auth_failure(
+            request=request,
+            db=db,
             detail="Missing authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
     # Extract the Bearer token
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+        raise _auth_failure(
+            request=request,
+            db=db,
             detail="Invalid authentication credentials format. Expected: 'Bearer <token>'",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
     token = parts[1]
@@ -76,18 +106,18 @@ async def get_current_session(
     try:
         user_session = await db.get_session_by_auth_token(token)
     except KeyError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+        raise _auth_failure(
+            request=request,
+            db=db,
             detail="Invalid or expired authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
     # Check if the session is still valid
     if user_session.valid_until <= datetime.now(tz=timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+        raise _auth_failure(
+            request=request,
+            db=db,
             detail="Authentication token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
     return user_session

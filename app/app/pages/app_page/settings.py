@@ -6,6 +6,8 @@ import rio
 from app.persistence import Persistence
 from app.persistence_auth import TwoFactorFailure
 from app.data_models import AppUser, UserSession, RecoveryCodeUsage
+from app.request_context import context_from_rio_session
+from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.components.center_component import CenterComponent
 from app.components.currency_summary import CurrencySummary, CurrencyOverview as CurrencySnapshot
 from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
@@ -64,6 +66,18 @@ class Settings(ResponsiveComponent):
 
     # Currency overview
     currency_overview: CurrencySnapshot | None = None
+
+    def _sensitive_action_limited(
+        self,
+        persistence: Persistence,
+        scope: str,
+    ):
+        context = context_from_rio_session(self.session)
+        key_basis = context.user_id or context.session_id or context.client_ip
+        return persistence.check_rate_limit(
+            policy=sensitive_action_policy(scope),
+            key=rate_limit_key(scope, key_basis),
+        )
 
     @rio.event.on_populate
     async def on_populate(self):
@@ -183,6 +197,17 @@ class Settings(ResponsiveComponent):
             if self.change_password_new_password != self.change_password_confirm_password:
                 self.error_message = "New passwords do not match"
                 return
+
+            decision = self._sensitive_action_limited(
+                persistence,
+                "settings_password_change",
+            )
+            if not decision.allowed:
+                self.error_message = rate_limited_message(
+                    "Too many password change attempts.",
+                    decision.retry_after_seconds,
+                )
+                return
                 
             # Verify current password
             if not user.verify_password(self.change_password_current_password):
@@ -224,6 +249,10 @@ class Settings(ResponsiveComponent):
             self.change_password_new_password_strength = 0
             self.change_password_passwords_match = False
             self.error_message = ""
+            persistence.clear_rate_limit(
+                scope=sensitive_action_policy("settings_password_change").scope,
+                key=rate_limit_key("settings_password_change", user_session.user_id),
+            )
             
             # Force refresh to update UI
             self.force_refresh()
@@ -297,6 +326,17 @@ class Settings(ResponsiveComponent):
 
         user_session = self.session[UserSession]
         persistence = self.session[Persistence]
+
+        decision = self._sensitive_action_limited(
+            persistence,
+            "settings_delete_account",
+        )
+        if not decision.allowed:
+            self.delete_account_error = rate_limited_message(
+                "Too many account deletion attempts.",
+                decision.retry_after_seconds,
+            )
+            return
 
         success = await persistence.delete_user(
             user_id=user_session.user_id,

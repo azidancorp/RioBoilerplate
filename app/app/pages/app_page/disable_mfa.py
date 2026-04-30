@@ -5,6 +5,8 @@ import rio
 from app.data_models import UserSession
 from app.persistence import Persistence
 from app.persistence_auth import TwoFactorFailure
+from app.request_context import context_from_rio_session
+from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.components.center_component import CenterComponent
 from app.components.responsive import WIDTH_COMFORTABLE
 
@@ -46,6 +48,19 @@ class DisableMFA(rio.Component):
         user_session = self.session[UserSession]
         persistence = self.session[Persistence]
         user = await persistence.get_user_by_id(user_session.user_id)
+        context = context_from_rio_session(self.session, user_id=user_session.user_id)
+        limit_key = rate_limit_key("mfa_disable", context.user_id or context.session_id or context.client_ip)
+        decision = persistence.check_rate_limit(
+            policy=sensitive_action_policy("mfa_disable"),
+            key=limit_key,
+        )
+        if not decision.allowed:
+            self.error_message = rate_limited_message(
+                "Too many two-factor disable attempts.",
+                decision.retry_after_seconds,
+            )
+            self.force_refresh()
+            return
 
         if not user.verify_password(self.password):
             self.error_message = "Invalid password. Please try again."
@@ -66,6 +81,10 @@ class DisableMFA(rio.Component):
             self.force_refresh()
             return
 
+        persistence.clear_rate_limit(
+            scope=sensitive_action_policy("mfa_disable").scope,
+            key=limit_key,
+        )
         self.disable_2fa()
 
     def disable_2fa(self):

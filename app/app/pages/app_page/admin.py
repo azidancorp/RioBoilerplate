@@ -10,6 +10,8 @@ import rio
 from app.persistence import Persistence
 from app.data_models import AppUser
 from app.permissions import can_manage_role, check_access, get_manageable_roles, get_default_role
+from app.request_context import context_from_rio_session
+from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.session_validation import detach_auth_attachments, refresh_attached_user_session
 from app.currency import major_to_minor, format_minor_amount, attach_currency_name
 from app.validation import SecuritySanitizer
@@ -88,6 +90,20 @@ class AdminPage(ResponsiveComponent):
         self.session.attach(current_user)
         self.current_user = current_user
         return True
+
+    def _check_sensitive_limit(
+        self,
+        persistence: Persistence,
+        scope: str,
+        *,
+        target: str = "",
+    ):
+        context = context_from_rio_session(self.session)
+        actor = context.user_id or (str(self.current_user.id) if self.current_user else "") or context.client_ip
+        return persistence.check_rate_limit(
+            policy=sensitive_action_policy(scope),
+            key=rate_limit_key(scope, f"{actor}:{target}"),
+        )
 
     async def _load_user_data(self) -> None:
         """Populate component state with the latest user data."""
@@ -170,9 +186,25 @@ class AdminPage(ResponsiveComponent):
             )
             return False
 
+        decision = self._check_sensitive_limit(
+            persistence,
+            "admin_change_role",
+            target=str(target_user.id),
+        )
+        if not decision.allowed:
+            self.change_role_error = rate_limited_message(
+                "Too many role-change attempts.",
+                decision.retry_after_seconds,
+            )
+            return False
+
         try:
             self.change_role_error = ""
             await persistence.update_user_role(target_user.id, new_role)
+            persistence.clear_rate_limit(
+                scope=sensitive_action_policy("admin_change_role").scope,
+                key=rate_limit_key("admin_change_role", f"{self.current_user.id}:{target_user.id}"),
+            )
             return True
         except Exception as exc:
             self.change_role_error = f"Error updating role: {str(exc)}"
@@ -234,6 +266,20 @@ class AdminPage(ResponsiveComponent):
             self.force_refresh()
             return
 
+        decision = self._check_sensitive_limit(
+            persistence,
+            "admin_delete_user",
+            target=str(target_user.id),
+        )
+        if not decision.allowed:
+            self.delete_user_error = rate_limited_message(
+                "Too many user deletion attempts.",
+                decision.retry_after_seconds,
+            )
+            self.delete_user_success = ""
+            self.force_refresh()
+            return
+
         if self.delete_user_password != config.ADMIN_DELETION_PASSWORD:
             self.delete_user_error = "Incorrect admin deletion password"
             self.delete_user_success = ""
@@ -258,6 +304,10 @@ class AdminPage(ResponsiveComponent):
                 self.delete_user_confirmation = ""
                 self.delete_user_password = ""
                 self.delete_user_error = ""
+                persistence.clear_rate_limit(
+                    scope=sensitive_action_policy("admin_delete_user").scope,
+                    key=rate_limit_key("admin_delete_user", f"{self.current_user.id}:{target_user.id}"),
+                )
                 # Refresh the page to show updated user list
                 await self._load_user_data()
                 self.force_refresh()
@@ -320,6 +370,20 @@ class AdminPage(ResponsiveComponent):
         ):
             self.currency_error = (
                 f"You do not have permission to update balances for users with role {target_user.role}."
+            )
+            self.currency_success = ""
+            self.force_refresh()
+            return
+
+        decision = self._check_sensitive_limit(
+            persistence,
+            "admin_currency",
+            target=str(target_user.id),
+        )
+        if not decision.allowed:
+            self.currency_error = rate_limited_message(
+                "Too many currency update attempts.",
+                decision.retry_after_seconds,
             )
             self.currency_success = ""
             self.force_refresh()

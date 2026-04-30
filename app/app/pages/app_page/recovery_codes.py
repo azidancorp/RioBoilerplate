@@ -8,6 +8,8 @@ from app.components.responsive import WIDTH_COMFORTABLE
 from app.data_models import UserSession
 from app.persistence import Persistence
 from app.persistence_auth import TwoFactorFailure
+from app.request_context import context_from_rio_session
+from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 
 
 @rio.page(
@@ -65,6 +67,20 @@ class ManageRecoveryCodes(rio.Component):
             self.force_refresh()
             return
 
+        context = context_from_rio_session(self.session, user_id=user_session.user_id)
+        limit_key = rate_limit_key("recovery_codes_regenerate", context.user_id or context.session_id or context.client_ip)
+        decision = persistence.check_rate_limit(
+            policy=sensitive_action_policy("recovery_codes_regenerate"),
+            key=limit_key,
+        )
+        if not decision.allowed:
+            self.error_message = rate_limited_message(
+                "Too many recovery-code attempts.",
+                decision.retry_after_seconds,
+            )
+            self.force_refresh()
+            return
+
         if not user.verify_password(self.password):
             self.error_message = "Invalid password. Please try again."
             self.force_refresh()
@@ -84,6 +100,10 @@ class ManageRecoveryCodes(rio.Component):
             self.force_refresh()
             return
 
+        persistence.clear_rate_limit(
+            scope=sensitive_action_policy("recovery_codes_regenerate").scope,
+            key=limit_key,
+        )
         codes = persistence.generate_recovery_codes(user_session.user_id)
         self.recovery_codes = tuple(codes)
         self.show_recovery_codes = True

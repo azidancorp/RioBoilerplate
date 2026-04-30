@@ -9,7 +9,7 @@ from app.data_models import AppUser, UserSettings
 from app.pages import contact as contact_page_module
 from app.pages import login as login_page_module
 from app.pages.contact import ContactPage
-from app.pages.login import LoginForm, ResetPasswordForm
+from app.pages.login import LoginForm, ResetPasswordForm, SignUpForm
 from app.persistence import Persistence
 
 
@@ -34,6 +34,8 @@ def rate_limit_config():
         "RATE_LIMIT_PASSWORD_RESET_TOKEN_ATTEMPTS": config.RATE_LIMIT_PASSWORD_RESET_TOKEN_ATTEMPTS,
         "RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS": config.RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS,
         "RATE_LIMIT_CONTACT_IP_ATTEMPTS": config.RATE_LIMIT_CONTACT_IP_ATTEMPTS,
+        "RATE_LIMIT_SIGNUP_EMAIL_ATTEMPTS": config.RATE_LIMIT_SIGNUP_EMAIL_ATTEMPTS,
+        "RATE_LIMIT_SIGNUP_IP_ATTEMPTS": config.RATE_LIMIT_SIGNUP_IP_ATTEMPTS,
         "RATE_LIMIT_VERIFICATION_EMAIL_ATTEMPTS": config.RATE_LIMIT_VERIFICATION_EMAIL_ATTEMPTS,
         "RATE_LIMIT_VERIFICATION_IP_ATTEMPTS": config.RATE_LIMIT_VERIFICATION_IP_ATTEMPTS,
     }
@@ -45,6 +47,8 @@ def rate_limit_config():
     config.RATE_LIMIT_PASSWORD_RESET_TOKEN_ATTEMPTS = 2
     config.RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS = 100
     config.RATE_LIMIT_CONTACT_IP_ATTEMPTS = 2
+    config.RATE_LIMIT_SIGNUP_EMAIL_ATTEMPTS = 2
+    config.RATE_LIMIT_SIGNUP_IP_ATTEMPTS = 100
     config.RATE_LIMIT_VERIFICATION_EMAIL_ATTEMPTS = 2
     config.RATE_LIMIT_VERIFICATION_IP_ATTEMPTS = 100
     yield
@@ -108,6 +112,12 @@ def _mount_component(component_cls, session: _FakeSession, **attributes):
         component.error_message = ""
         component.banner_style = "danger"
         component.acknowledge_weak_password = False
+    if component_cls is SignUpForm:
+        component.error_message = ""
+        component.banner_style = "danger"
+        component.is_email_valid = False
+        component.passwords_valid = False
+        component.acknowledge_weak_password = False
     for key, value in attributes.items():
         setattr(component, key, value)
     return component
@@ -128,6 +138,16 @@ def _reset_token_hashes(persistence: Persistence, user_id) -> list[str]:
         row[0]
         for row in persistence.conn.execute(
             "SELECT token_hash FROM password_reset_tokens WHERE user_id = ? ORDER BY created_at",
+            (str(user_id),),
+        )
+    ]
+
+
+def _verification_token_hashes(persistence: Persistence, user_id) -> list[str]:
+    return [
+        row[0]
+        for row in persistence.conn.execute(
+            "SELECT token_hash FROM email_verification_tokens WHERE user_id = ? ORDER BY created_at",
             (str(user_id),),
         )
     ]
@@ -196,6 +216,67 @@ def test_rate_limited_reset_request_does_not_rotate_token_or_send_email(
         assert "Too many password reset requests." in form.error_message
         assert _reset_token_hashes(temp_db, user.id) == allowed_hashes
         assert len(sent) == 1
+
+    asyncio.run(scenario())
+
+
+def test_verification_resend_rate_limit_does_not_rotate_token_or_send_email(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config.RATE_LIMIT_VERIFICATION_EMAIL_ATTEMPTS = 1
+    sent: list[dict] = []
+    monkeypatch.setattr(login_page_module, "send_email_verification_email", lambda **kwargs: sent.append(kwargs))
+
+    async def scenario():
+        user = await _create_user(temp_db, "verify-limit@example.com")
+        original_token = await temp_db.create_email_verification_token(user.id)
+        assert original_token.token
+
+        form = _mount_component(
+            LoginForm,
+            _FakeSession(temp_db, "198.51.100.27"),
+            identifier=user.email,
+            pending_verification_email=user.email,
+        )
+        await LoginForm.resend_verification_email(form)
+        allowed_hashes = _verification_token_hashes(temp_db, user.id)
+        assert form.banner_style == "success"
+        assert len(sent) == 1
+
+        await LoginForm.resend_verification_email(form)
+
+        assert "Too many verification email requests." in form.error_message
+        assert _verification_token_hashes(temp_db, user.id) == allowed_hashes
+        assert len(sent) == 1
+
+    asyncio.run(scenario())
+
+
+def test_signup_rate_limit_blocks_repeated_duplicate_identifier_attempts(temp_db: Persistence):
+    config.RATE_LIMIT_SIGNUP_EMAIL_ATTEMPTS = 1
+
+    async def scenario():
+        existing = await _create_user(temp_db, "signup-limit@example.com")
+        form = _mount_component(
+            SignUpForm,
+            _FakeSession(temp_db, "198.51.100.28"),
+            email=existing.email,
+            password="VeryStrongPass!9",
+            confirm_password="VeryStrongPass!9",
+        )
+
+        await SignUpForm.on_sign_up_pressed(form)
+        assert form.error_message == "This email is already registered"
+
+        await SignUpForm.on_sign_up_pressed(form)
+
+        assert "Too many sign-up attempts." in form.error_message
+        count = temp_db.conn.execute(
+            "SELECT COUNT(*) FROM users WHERE email = ?",
+            (existing.email,),
+        ).fetchone()[0]
+        assert count == 1
 
     asyncio.run(scenario())
 

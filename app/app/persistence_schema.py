@@ -22,6 +22,7 @@ def initialize_schema(persistence: SchemaPersistence) -> None:
     create_profiles_table(persistence)
     create_recovery_codes_table(persistence)
     create_currency_ledger_table(persistence)
+    create_rate_limit_tables(persistence)
 
 
 def _get_connection(persistence: SchemaPersistence) -> sqlite3.Connection:
@@ -108,6 +109,62 @@ def create_currency_ledger_table(persistence: SchemaPersistence) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_currency_ledger_user_id_created
         ON user_currency_ledger(user_id, created_at DESC)
+        """
+    )
+    conn.commit()
+
+
+def create_rate_limit_tables(persistence: SchemaPersistence) -> None:
+    """Ensure shared rate-limit enforcement and sparse event tables exist."""
+    cursor = persistence._get_cursor()
+    conn = _get_connection(persistence)
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+            scope TEXT NOT NULL,
+            key_hash TEXT NOT NULL,
+            bucket_start INTEGER NOT NULL,
+            bucket_seconds INTEGER NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            first_seen_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            expires_at REAL NOT NULL,
+            PRIMARY KEY (scope, key_hash, bucket_start, bucket_seconds)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_rate_limit_buckets_expires
+        ON rate_limit_buckets(expires_at)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_rate_limit_buckets_scope_key
+        ON rate_limit_buckets(scope, key_hash, bucket_start)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rate_limit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT NOT NULL,
+            key_hash TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            count_after INTEGER NOT NULL,
+            limit_count INTEGER NOT NULL,
+            retry_after_seconds INTEGER,
+            metadata TEXT,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_rate_limit_events_created
+        ON rate_limit_events(created_at)
         """
     )
     conn.commit()

@@ -14,9 +14,11 @@ from app.data_models import (
 from app.validation import SecuritySanitizer
 from app.config import config
 from app.permissions import get_first_user_role, validate_role, get_all_roles
+from app.rate_limits import RateLimitDecision, RateLimitPolicy
 import app.persistence_auth as persistence_auth
 import app.persistence_currency as persistence_currency
 import app.persistence_profiles as persistence_profiles
+import app.persistence_rate_limits as persistence_rate_limits
 import app.persistence_users as persistence_users
 from app.persistence_schema import initialize_schema
 
@@ -100,6 +102,30 @@ class Persistence:
 
     def get_user_count(self) -> int:
         return persistence_users.get_user_count(self)
+
+    def check_rate_limit(
+        self,
+        *,
+        policy: RateLimitPolicy,
+        key: str,
+        cost: int = 1,
+        now: datetime | None = None,
+        metadata: t.Mapping[str, object] | None = None,
+    ) -> RateLimitDecision:
+        return persistence_rate_limits.check_rate_limit(
+            self,
+            policy=policy,
+            key=key,
+            cost=cost,
+            now=now,
+            metadata=metadata,
+        )
+
+    def clear_rate_limit(self, *, scope: str, key: str) -> None:
+        persistence_rate_limits.clear_rate_limit(self, scope=scope, key=key)
+
+    def cleanup_rate_limits(self, *, now: datetime | None = None) -> int:
+        return persistence_rate_limits.cleanup_rate_limits(self, now=now)
 
     # Spans users + profiles + currency ledger; must stay transactional.
     async def create_user(self, user: AppUser) -> None:

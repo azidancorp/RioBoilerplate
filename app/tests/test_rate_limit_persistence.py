@@ -22,11 +22,9 @@ def temp_db(tmp_path: Path):
 @pytest.fixture(autouse=True)
 def rate_limit_config():
     original = {
-        "RATE_LIMIT_HMAC_SECRET": config.RATE_LIMIT_HMAC_SECRET,
         "RATE_LIMIT_BUCKET_GRACE_SECONDS": config.RATE_LIMIT_BUCKET_GRACE_SECONDS,
         "RATE_LIMIT_EVENT_RETENTION_SECONDS": config.RATE_LIMIT_EVENT_RETENTION_SECONDS,
     }
-    config.RATE_LIMIT_HMAC_SECRET = "unit-test-rate-limit-secret"
     config.RATE_LIMIT_BUCKET_GRACE_SECONDS = 30
     config.RATE_LIMIT_EVENT_RETENTION_SECONDS = 3600
     yield
@@ -114,7 +112,7 @@ def test_rate_limit_scopes_are_independent(temp_db: Persistence):
     assert reset_decision.count_after == 1
 
 
-def test_rate_limit_stores_hmac_keys_not_raw_identifiers(temp_db: Persistence):
+def test_rate_limit_stores_hashed_keys_not_raw_identifiers(temp_db: Persistence):
     policy = _policy()
     raw_email = "Victim@Example.com"
     key = rate_limit_key("identifier", raw_email)

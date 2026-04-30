@@ -35,11 +35,9 @@ def api_test_setup(tmp_path: Path):
 @pytest.fixture(autouse=True)
 def rate_limit_config():
     original = {
-        "RATE_LIMIT_HMAC_SECRET": config.RATE_LIMIT_HMAC_SECRET,
         "RATE_LIMIT_CONTACT_IP_ATTEMPTS": config.RATE_LIMIT_CONTACT_IP_ATTEMPTS,
         "RATE_LIMIT_API_AUTH_IP_ATTEMPTS": config.RATE_LIMIT_API_AUTH_IP_ATTEMPTS,
     }
-    config.RATE_LIMIT_HMAC_SECRET = "api-flow-test-secret"
     config.RATE_LIMIT_CONTACT_IP_ATTEMPTS = 2
     config.RATE_LIMIT_API_AUTH_IP_ATTEMPTS = 2
     yield

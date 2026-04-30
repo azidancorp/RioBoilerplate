@@ -26,10 +26,8 @@ def temp_db(tmp_path: Path):
 @pytest.fixture(autouse=True)
 def rate_limit_config():
     original = {
-        "RATE_LIMIT_HMAC_SECRET": config.RATE_LIMIT_HMAC_SECRET,
         "RATE_LIMIT_SENSITIVE_ACTION_ATTEMPTS": config.RATE_LIMIT_SENSITIVE_ACTION_ATTEMPTS,
     }
-    config.RATE_LIMIT_HMAC_SECRET = "sensitive-flow-test-secret"
     config.RATE_LIMIT_SENSITIVE_ACTION_ATTEMPTS = 2
     yield
     for key, value in original.items():

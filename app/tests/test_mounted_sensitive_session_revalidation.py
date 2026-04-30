@@ -5,7 +5,6 @@ from pathlib import Path
 import pyotp
 import pytest
 
-from app.config import config
 from app.data_models import AppUser, UserSettings, UserSession
 from app.components.navbar import Navbar
 from app.pages.app_page.dashboard import Overview
@@ -28,14 +27,6 @@ def temp_db(tmp_path: Path):
         yield persistence
     finally:
         persistence.close()
-
-
-@pytest.fixture(autouse=True)
-def rate_limit_config():
-    original_secret = config.RATE_LIMIT_HMAC_SECRET
-    config.RATE_LIMIT_HMAC_SECRET = "mounted-session-revalidation-secret"
-    yield
-    config.RATE_LIMIT_HMAC_SECRET = original_secret
 
 
 class _FakeEvent:

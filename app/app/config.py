@@ -76,8 +76,7 @@ class AppConfig:
 
     # Rate Limiting
     # -------------
-    # Non-secret behavior knobs. The HMAC secret below is loaded from env.
-    RATE_LIMIT_HMAC_SECRET: str = ""
+    # Non-secret behavior knobs.
     RATE_LIMIT_BUCKET_GRACE_SECONDS: int = 120
     RATE_LIMIT_EVENT_RETENTION_SECONDS: int = 7 * 24 * 60 * 60
     RATE_LIMIT_LOGIN_IDENTIFIER_ATTEMPTS: int = 5
@@ -125,7 +124,6 @@ class AppConfig:
         """
         return cls(
             ADMIN_DELETION_PASSWORD=os.getenv("ADMIN_DELETION_PASSWORD", ""),
-            RATE_LIMIT_HMAC_SECRET=os.getenv("RATE_LIMIT_HMAC_SECRET", ""),
         )
 
 
@@ -134,9 +132,6 @@ config = AppConfig.from_env()
 
 if not config.ADMIN_DELETION_PASSWORD:
     print("WARNING: ADMIN_DELETION_PASSWORD is not set. User deletion operations will be unavailable.", file=sys.stderr)
-
-if not config.RATE_LIMIT_HMAC_SECRET:
-    print("WARNING: RATE_LIMIT_HMAC_SECRET is not set. Rate-limit keys will use a development-only fallback.", file=sys.stderr)
 
 if "localhost" in config.APP_URL or "127.0.0.1" in config.APP_URL:
     print("WARNING: APP_URL is set to a localhost address. Password-reset and email-verification links will not work in production. Update APP_URL in config.py before deploying.", file=sys.stderr)

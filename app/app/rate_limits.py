@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
 
 from app.config import config
-
-
-_DEVELOPMENT_HMAC_SECRET = "rio-boilerplate-development-rate-limit-secret"
 
 
 @dataclass(frozen=True)
@@ -55,12 +51,11 @@ def rate_limit_key(kind: str, value: object) -> str:
 
 
 def hash_rate_limit_key(key: str) -> str:
-    secret = config.RATE_LIMIT_HMAC_SECRET or _DEVELOPMENT_HMAC_SECRET
-    return hmac.new(
-        secret.encode("utf-8"),
-        normalize_rate_limit_value(key).encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
+    # This is a stable bucket identifier, not a secrecy boundary. The main user
+    # table stores emails directly; if a future deployment needs pseudonymous
+    # rate-limit keys, reintroduce a keyed HMAC here with explicit production
+    # configuration.
+    return hashlib.sha256(normalize_rate_limit_value(key).encode("utf-8")).hexdigest()
 
 
 def token_rate_limit_key(token: str) -> str:

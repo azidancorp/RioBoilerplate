@@ -357,6 +357,23 @@ server {
 }
 ```
 
+**Client IPs for rate limits:**
+
+The nginx configuration above sends the original client address with
+`X-Real-IP` and `X-Forwarded-For`. The documented `rio run --port 8000 --release`
+path runs on Uvicorn, which trusts proxy headers from `127.0.0.1` by default, so
+Rio/FastAPI sees the real client IP before application rate-limit checks run.
+
+If you run the app under a different ASGI server, disable Uvicorn proxy-header
+handling, or proxy through a non-loopback address, verify that trusted proxy
+headers are handled before deployment. Otherwise IP-based rate limits can share
+one proxy address across all users. In that non-standard setup, either enable
+trusted proxy-header handling in the ASGI server or set
+`RATE_LIMIT_TRUST_PROXY_HEADERS = True` and update `RATE_LIMIT_TRUSTED_PROXIES`
+in `app/app/config.py` to the private IPs of proxies you control. Do not enable
+trusted proxy headers for requests that can arrive directly from the public
+internet.
+
 **Enable the site:**
 ```bash
 # Create symlink to enable site

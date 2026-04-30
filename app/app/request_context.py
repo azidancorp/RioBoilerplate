@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,9 @@ class RequestContext:
     user_id: str = ""
     identifier: str = ""
     source: str = "unknown"
+
+
+_ignored_proxy_headers_warning_emitted = False
 
 
 def _headers_to_lower(headers: Mapping[str, Any] | None) -> dict[str, str]:
@@ -44,6 +48,30 @@ def _is_trusted_proxy(peer_ip: str) -> bool:
         return False
 
 
+def _has_forwarded_client_headers(headers: Mapping[str, Any] | None) -> bool:
+    lower_headers = _headers_to_lower(headers)
+    return "x-real-ip" in lower_headers or "x-forwarded-for" in lower_headers
+
+
+def _warn_ignored_proxy_headers(*, peer_ip: str, headers: Mapping[str, Any] | None) -> None:
+    global _ignored_proxy_headers_warning_emitted
+
+    if _ignored_proxy_headers_warning_emitted:
+        return
+
+    if not _is_trusted_proxy(peer_ip) or not _has_forwarded_client_headers(headers):
+        return
+
+    _ignored_proxy_headers_warning_emitted = True
+    print(
+        "WARNING: Proxy client-IP headers are present from a trusted proxy, "
+        "but RATE_LIMIT_TRUST_PROXY_HEADERS is False. Ensure the ASGI server "
+        "already handles trusted proxy headers, or IP-based rate limits will "
+        "use the proxy address.",
+        file=sys.stderr,
+    )
+
+
 def _parse_forwarded_candidate(candidate: str) -> str | None:
     candidate = candidate.strip()
     if not candidate:
@@ -64,7 +92,10 @@ def resolve_client_ip(
     headers: Mapping[str, Any] | None = None,
 ) -> str:
     fallback = normalize_rate_limit_value(peer_ip or "unknown")
-    if not config.RATE_LIMIT_TRUST_PROXY_HEADERS or not _is_trusted_proxy(fallback):
+    if not config.RATE_LIMIT_TRUST_PROXY_HEADERS:
+        _warn_ignored_proxy_headers(peer_ip=fallback, headers=headers)
+        return fallback
+    if not _is_trusted_proxy(fallback):
         return fallback
 
     lower_headers = _headers_to_lower(headers)

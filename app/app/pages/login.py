@@ -19,6 +19,25 @@ from app.scripts.message_utils import (
     send_email_verification_email,
     send_password_reset_email,
 )
+from app.request_context import context_from_rio_session
+from app.rate_limits import (
+    first_blocked,
+    login_identifier_policy,
+    login_ip_policy,
+    login_mfa_policy,
+    password_reset_completion_ip_policy,
+    password_reset_email_policy,
+    password_reset_ip_policy,
+    password_reset_mfa_policy,
+    password_reset_token_policy,
+    rate_limit_key,
+    rate_limited_message,
+    signup_email_policy,
+    signup_ip_policy,
+    token_rate_limit_key,
+    verification_email_policy,
+    verification_ip_policy,
+)
 from app.validation import SecuritySanitizer
 from app.config import config
 
@@ -35,6 +54,24 @@ def guard(event: rio.GuardEvent) -> str | None:
         return None
 
     return "/"
+
+
+def _consume_rate_limits(
+    pers: Persistence,
+    checks: t.Iterable[tuple[object, str]],
+):
+    decisions = [
+        pers.check_rate_limit(policy=policy, key=key)
+        for policy, key in checks
+    ]
+    return first_blocked(decisions)
+
+
+def _generic_reset_message() -> str:
+    return (
+        "If an account exists with that email, we've sent a reset link. "
+        "Check your inbox and enter the token below with your new password."
+    )
 
 
 ################################################################################
@@ -66,11 +103,35 @@ class LoginForm(rio.Component):
         """
         Attempt to log in the user, checking 2FA if necessary.
         """
+        if self._currently_logging_in:
+            return
+
         try:
             self._currently_logging_in = True
             self.force_refresh()
 
             pers = self.session[Persistence]
+            request_context = context_from_rio_session(
+                self.session,
+                identifier=self.identifier,
+            )
+            login_identifier_key = rate_limit_key("identifier", self.identifier)
+            login_ip_key = rate_limit_key("ip", request_context.client_ip)
+            blocked = _consume_rate_limits(
+                pers,
+                (
+                    (login_identifier_policy(), login_identifier_key),
+                    (login_ip_policy(), login_ip_key),
+                ),
+            )
+            if blocked:
+                self.pending_verification_email = ""
+                self.banner_style = "danger"
+                self.error_message = rate_limited_message(
+                    "Too many login attempts.",
+                    blocked.retry_after_seconds,
+                )
+                return
 
             #  Try to find a user with this identifier (email first, username fallback)
             try:
@@ -105,17 +166,35 @@ class LoginForm(rio.Component):
             # Check if 2FA is enabled for this user
             recovery_code_used = False
             if user_info.two_factor_enabled:
+                mfa_key = rate_limit_key("user", user_info.id)
+                blocked = _consume_rate_limits(
+                    pers,
+                    ((login_mfa_policy(), mfa_key),),
+                )
+                if blocked:
+                    self.banner_style = "danger"
+                    self.error_message = rate_limited_message(
+                        "Too many two-factor attempts.",
+                        blocked.retry_after_seconds,
+                    )
+                    return
+
                 result = pers.verify_two_factor_challenge(user_info.id, self.verification_code)
                 if not result.ok:
                     self.banner_style = "danger"
                     self.error_message = result.get_error_message()
                     return
                 recovery_code_used = result.used_recovery_code
+                pers.clear_rate_limit(scope=login_mfa_policy().scope, key=mfa_key)
 
             # The login was successful
             self.pending_verification_email = ""
             self.banner_style = "danger"
             self.error_message = ""
+            pers.clear_rate_limit(
+                scope=login_identifier_policy().scope,
+                key=login_identifier_key,
+            )
 
             # Create and store a session
             user_session = await pers.create_session(user_id=user_info.id)
@@ -154,6 +233,25 @@ class LoginForm(rio.Component):
         )
 
         pers = self.session[Persistence]
+        request_context = context_from_rio_session(
+            self.session,
+            identifier=target_identifier,
+        )
+        blocked = _consume_rate_limits(
+            pers,
+            (
+                (verification_email_policy(), rate_limit_key("identifier", target_identifier)),
+                (verification_ip_policy(), rate_limit_key("ip", request_context.client_ip)),
+            ),
+        )
+        if blocked:
+            self.banner_style = "danger"
+            self.error_message = rate_limited_message(
+                "Too many verification email requests.",
+                blocked.retry_after_seconds,
+            )
+            return
+
         try:
             user_info = await pers.get_user_by_identity(identifier=target_identifier)
         except KeyError:
@@ -344,6 +442,22 @@ class SignUpForm(rio.Component):
                 self.banner_style = "danger"
                 self.error_message = "Your password is weak. Please acknowledge this below or choose a stronger password."
                 return
+
+        request_context = context_from_rio_session(self.session, identifier=self.email)
+        blocked = _consume_rate_limits(
+            pers,
+            (
+                (signup_email_policy(), rate_limit_key("identifier", self.email)),
+                (signup_ip_policy(), rate_limit_key("ip", request_context.client_ip)),
+            ),
+        )
+        if blocked:
+            self.banner_style = "danger"
+            self.error_message = rate_limited_message(
+                "Too many sign-up attempts.",
+                blocked.retry_after_seconds,
+            )
+            return
 
         # Check if the email is already registered
         try:
@@ -617,6 +731,16 @@ class ResetPasswordForm(rio.Component):
         self.banner_style = style
         self.error_message = message
 
+    def _show_reset_token_entry(self, sanitized_email: str) -> None:
+        self.email = sanitized_email
+        self.require_two_factor = False
+        self.code_sent = True
+        self.reset_token = ""
+        self.new_password = ""
+        self.confirm_password = ""
+        self.verification_code = ""
+        self._set_banner("success", _generic_reset_message())
+
     async def on_primary_action(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
         Handle the primary button or enter key presses.
@@ -664,28 +788,43 @@ class ResetPasswordForm(rio.Component):
             return
 
         pers = self.session[Persistence]
-
-        _generic_reset_msg = (
-            "If an account exists with that email, we've sent a reset link. "
-            "Check your inbox and enter the token below with your new password."
+        request_context = context_from_rio_session(
+            self.session,
+            identifier=sanitized_email,
         )
+        blocked = _consume_rate_limits(
+            pers,
+            (
+                (password_reset_email_policy(), rate_limit_key("identifier", sanitized_email)),
+                (password_reset_ip_policy(), rate_limit_key("ip", request_context.client_ip)),
+            ),
+        )
+        if blocked:
+            self._set_banner(
+                "danger",
+                rate_limited_message(
+                    "Too many password reset requests.",
+                    blocked.retry_after_seconds,
+                ),
+            )
+            return
 
         try:
             user_info = await pers.get_user_by_identity(identifier=sanitized_email)
         except KeyError:
             # Don't reveal whether the account exists
-            self._set_banner("success", _generic_reset_msg)
+            self._show_reset_token_entry(sanitized_email)
             return
 
         if user_info.auth_provider != "password":
             # Don't reveal auth provider details
-            self._set_banner("success", _generic_reset_msg)
+            self._show_reset_token_entry(sanitized_email)
             return
 
         try:
             reset_token = await pers.create_reset_token(user_info.id)
         except Exception:
-            self._set_banner("danger", "Something went wrong. Please try again.")
+            self._show_reset_token_entry(sanitized_email)
             return
 
         try:
@@ -695,20 +834,13 @@ class ResetPasswordForm(rio.Component):
                 valid_until=reset_token.valid_until,
             )
         except HTTPException:
-            self._set_banner("danger", "Something went wrong. Please try again.")
+            self._show_reset_token_entry(sanitized_email)
             return
         except Exception:
-            self._set_banner("danger", "Something went wrong. Please try again.")
+            self._show_reset_token_entry(sanitized_email)
             return
 
-        self.email = sanitized_email
-        self.require_two_factor = bool(user_info.two_factor_secret)
-        self.code_sent = True
-        self.reset_token = ""
-        self.new_password = ""
-        self.confirm_password = ""
-        self.verification_code = ""
-        self._set_banner("success", _generic_reset_msg)
+        self._show_reset_token_entry(sanitized_email)
 
     async def _update_password(self) -> None:
         """
@@ -749,6 +881,26 @@ class ResetPasswordForm(rio.Component):
             return
 
         pers = self.session[Persistence]
+        request_context = context_from_rio_session(
+            self.session,
+            identifier=sanitized_email,
+        )
+        blocked = _consume_rate_limits(
+            pers,
+            (
+                (password_reset_completion_ip_policy(), rate_limit_key("ip", request_context.client_ip)),
+                (password_reset_token_policy(), token_rate_limit_key(sanitized_token)),
+            ),
+        )
+        if blocked:
+            self._set_banner(
+                "danger",
+                rate_limited_message(
+                    "Too many password reset attempts.",
+                    blocked.retry_after_seconds,
+                ),
+            )
+            return
 
         try:
             user = await pers.get_user_by_reset_token(sanitized_token)
@@ -757,16 +909,32 @@ class ResetPasswordForm(rio.Component):
             return
 
         if user.email.lower() != sanitized_email:
-            self._set_banner("danger", "Reset token does not match this email address.")
+            self._set_banner("danger", "Invalid or expired reset token. Please request a new one.")
             return
 
         self.require_two_factor = bool(user.two_factor_secret)
 
         if user.two_factor_secret:
+            mfa_key = rate_limit_key("user", user.id)
+            blocked = _consume_rate_limits(
+                pers,
+                ((password_reset_mfa_policy(), mfa_key),),
+            )
+            if blocked:
+                self._set_banner(
+                    "danger",
+                    rate_limited_message(
+                        "Too many two-factor attempts.",
+                        blocked.retry_after_seconds,
+                    ),
+                )
+                return
+
             result = pers.verify_two_factor_challenge(user.id, self.verification_code)
             if not result.ok:
                 self._set_banner("danger", result.get_error_message())
                 return
+            pers.clear_rate_limit(scope=password_reset_mfa_policy().scope, key=mfa_key)
 
         consumed = await pers.consume_reset_token(sanitized_token, user.id)
         if not consumed:

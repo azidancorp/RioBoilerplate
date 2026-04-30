@@ -3,6 +3,9 @@ from __future__ import annotations
 import rio
 from fastapi import HTTPException
 
+from app.persistence import Persistence
+from app.request_context import context_from_rio_session
+from app.rate_limits import contact_ip_policy, rate_limit_key, rate_limited_message
 from app.scripts.message_utils import create_contact_submission
 from app.validation import SecuritySanitizer
 from app.components.center_component import CenterComponent
@@ -47,6 +50,23 @@ class ContactPage(ResponsiveComponent):
             sanitized_message = SecuritySanitizer.sanitize_string(self.message, 10000)
             if not sanitized_message:
                 self.error_message = "Please enter a valid message."
+                self.banner_style = "danger"
+                return
+
+            pers = self.session[Persistence]
+            request_context = context_from_rio_session(
+                self.session,
+                identifier=sanitized_email,
+            )
+            decision = pers.check_rate_limit(
+                policy=contact_ip_policy(),
+                key=rate_limit_key("ip", request_context.client_ip),
+            )
+            if not decision.allowed:
+                self.error_message = rate_limited_message(
+                    "Too many messages sent.",
+                    decision.retry_after_seconds,
+                )
                 self.banner_style = "danger"
                 return
 

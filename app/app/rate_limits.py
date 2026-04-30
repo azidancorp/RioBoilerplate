@@ -97,3 +97,123 @@ def first_blocked(decisions: Iterable[RateLimitDecision]) -> RateLimitDecision |
         if not decision.allowed:
             return decision
     return None
+
+
+def login_identifier_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="login_identifier",
+        limit=config.RATE_LIMIT_LOGIN_IDENTIFIER_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_LOGIN_IDENTIFIER_WINDOW_SECONDS,
+    )
+
+
+def login_ip_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="login_ip",
+        limit=config.RATE_LIMIT_LOGIN_IP_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_LOGIN_IP_WINDOW_SECONDS,
+    )
+
+
+def login_mfa_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="login_mfa",
+        limit=config.RATE_LIMIT_MFA_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_MFA_WINDOW_SECONDS,
+    )
+
+
+def password_reset_mfa_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="password_reset_mfa",
+        limit=config.RATE_LIMIT_MFA_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_MFA_WINDOW_SECONDS,
+    )
+
+
+def signup_ip_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="signup_ip",
+        limit=config.RATE_LIMIT_SIGNUP_IP_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_SIGNUP_IP_WINDOW_SECONDS,
+    )
+
+
+def signup_email_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="signup_email",
+        limit=config.RATE_LIMIT_SIGNUP_EMAIL_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_SIGNUP_EMAIL_WINDOW_SECONDS,
+    )
+
+
+def verification_email_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="verification_email",
+        limit=config.RATE_LIMIT_VERIFICATION_EMAIL_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_VERIFICATION_EMAIL_WINDOW_SECONDS,
+    )
+
+
+def verification_ip_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="verification_ip",
+        limit=config.RATE_LIMIT_VERIFICATION_IP_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_VERIFICATION_IP_WINDOW_SECONDS,
+    )
+
+
+def password_reset_email_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="password_reset_email",
+        limit=config.RATE_LIMIT_PASSWORD_RESET_EMAIL_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_PASSWORD_RESET_EMAIL_WINDOW_SECONDS,
+    )
+
+
+def password_reset_ip_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="password_reset_ip",
+        limit=config.RATE_LIMIT_PASSWORD_RESET_IP_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_PASSWORD_RESET_IP_WINDOW_SECONDS,
+    )
+
+
+def password_reset_completion_ip_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="password_reset_completion_ip",
+        limit=config.RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_WINDOW_SECONDS,
+    )
+
+
+def password_reset_token_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="password_reset_token",
+        limit=config.RATE_LIMIT_PASSWORD_RESET_TOKEN_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_PASSWORD_RESET_TOKEN_WINDOW_SECONDS,
+    )
+
+
+def contact_ip_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="contact_ip",
+        limit=config.RATE_LIMIT_CONTACT_IP_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_CONTACT_IP_WINDOW_SECONDS,
+    )
+
+
+def api_auth_ip_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope="api_auth_ip",
+        limit=config.RATE_LIMIT_API_AUTH_IP_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_API_AUTH_IP_WINDOW_SECONDS,
+    )
+
+
+def sensitive_action_policy(scope: str) -> RateLimitPolicy:
+    return RateLimitPolicy(
+        scope=scope,
+        limit=config.RATE_LIMIT_SENSITIVE_ACTION_ATTEMPTS,
+        window_seconds=config.RATE_LIMIT_SENSITIVE_ACTION_WINDOW_SECONDS,
+    )

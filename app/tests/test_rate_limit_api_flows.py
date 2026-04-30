@@ -85,6 +85,7 @@ def test_invalid_bearer_attempts_are_rate_limited_by_ip(api_test_setup):
             headers={"Authorization": "Bearer invalid-token"},
         )
         assert response.status_code == 401
+        assert response.headers["WWW-Authenticate"] == "Bearer"
 
     blocked = client.get(
         "/api/currency/balance",

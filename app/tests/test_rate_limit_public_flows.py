@@ -2,6 +2,7 @@ import asyncio
 from collections import defaultdict
 from pathlib import Path
 
+import pyotp
 import pytest
 
 from app.config import config
@@ -32,6 +33,7 @@ def rate_limit_config():
         "RATE_LIMIT_PASSWORD_RESET_IP_ATTEMPTS": config.RATE_LIMIT_PASSWORD_RESET_IP_ATTEMPTS,
         "RATE_LIMIT_PASSWORD_RESET_TOKEN_ATTEMPTS": config.RATE_LIMIT_PASSWORD_RESET_TOKEN_ATTEMPTS,
         "RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS": config.RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS,
+        "RATE_LIMIT_MFA_ATTEMPTS": config.RATE_LIMIT_MFA_ATTEMPTS,
         "RATE_LIMIT_CONTACT_IP_ATTEMPTS": config.RATE_LIMIT_CONTACT_IP_ATTEMPTS,
         "RATE_LIMIT_SIGNUP_EMAIL_ATTEMPTS": config.RATE_LIMIT_SIGNUP_EMAIL_ATTEMPTS,
         "RATE_LIMIT_SIGNUP_IP_ATTEMPTS": config.RATE_LIMIT_SIGNUP_IP_ATTEMPTS,
@@ -44,6 +46,7 @@ def rate_limit_config():
     config.RATE_LIMIT_PASSWORD_RESET_IP_ATTEMPTS = 100
     config.RATE_LIMIT_PASSWORD_RESET_TOKEN_ATTEMPTS = 2
     config.RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS = 100
+    config.RATE_LIMIT_MFA_ATTEMPTS = 2
     config.RATE_LIMIT_CONTACT_IP_ATTEMPTS = 2
     config.RATE_LIMIT_SIGNUP_EMAIL_ATTEMPTS = 2
     config.RATE_LIMIT_SIGNUP_IP_ATTEMPTS = 100
@@ -304,6 +307,63 @@ def test_login_rate_limit_blocks_even_valid_password_after_failures(temp_db: Per
     asyncio.run(scenario())
 
 
+def test_login_ip_rate_limit_blocks_varied_identifiers_from_same_ip(temp_db: Persistence):
+    config.RATE_LIMIT_LOGIN_IDENTIFIER_ATTEMPTS = 100
+    config.RATE_LIMIT_LOGIN_IP_ATTEMPTS = 2
+
+    async def scenario():
+        user = await _create_user(temp_db, "login-ip-limit@example.com")
+        session = _FakeSession(temp_db, "198.51.100.31")
+        form = _mount_component(LoginForm, session, password="wrong-password")
+
+        for index in range(config.RATE_LIMIT_LOGIN_IP_ATTEMPTS):
+            form.identifier = f"missing-{index}@example.com"
+            await LoginForm.login(form)
+            assert form.error_message == "Invalid email or password. Please try again."
+
+        form.identifier = user.email
+        form.password = "VeryStrongPass!9"
+        await LoginForm.login(form)
+
+        assert "Too many login attempts." in form.error_message
+        assert session.navigation_target is None
+        assert session[UserSettings].auth_token == ""
+
+    asyncio.run(scenario())
+
+
+def test_login_mfa_rate_limit_blocks_valid_code_after_bad_codes(temp_db: Persistence):
+    config.RATE_LIMIT_LOGIN_IDENTIFIER_ATTEMPTS = 100
+    config.RATE_LIMIT_LOGIN_IP_ATTEMPTS = 100
+
+    async def scenario():
+        user = await _create_user(temp_db, "login-mfa-limit@example.com")
+        secret = pyotp.random_base32()
+        temp_db.set_2fa_secret(user.id, secret)
+
+        session = _FakeSession(temp_db, "198.51.100.32")
+        form = _mount_component(
+            LoginForm,
+            session,
+            identifier=user.email,
+            password="VeryStrongPass!9",
+            verification_code="000000",
+        )
+
+        for _ in range(config.RATE_LIMIT_MFA_ATTEMPTS):
+            await LoginForm.login(form)
+            assert "Invalid verification or recovery code." in form.error_message
+
+        form.verification_code = pyotp.TOTP(secret).now()
+        await LoginForm.login(form)
+
+        assert "Too many two-factor attempts." in form.error_message
+        assert session.navigation_target is None
+        assert session[UserSettings].auth_token == ""
+
+    asyncio.run(scenario())
+
+
 def test_reset_token_rate_limit_blocks_valid_token_after_guessing(temp_db: Persistence):
     async def scenario():
         user = await _create_user(temp_db, "reset-token-limit@example.com")
@@ -331,6 +391,100 @@ def test_reset_token_rate_limit_blocks_valid_token_after_guessing(temp_db: Persi
         refreshed_user = await temp_db.get_user_by_id(user.id)
         assert refreshed_user.verify_password("EvenStrongerPass!7") is False
         assert _reset_token_hashes(temp_db, user.id)
+
+    asyncio.run(scenario())
+
+
+def test_verification_ip_rate_limit_blocks_varied_emails_from_same_ip(temp_db: Persistence):
+    config.RATE_LIMIT_VERIFICATION_EMAIL_ATTEMPTS = 100
+    config.RATE_LIMIT_VERIFICATION_IP_ATTEMPTS = 2
+
+    async def scenario():
+        session = _FakeSession(temp_db, "198.51.100.33")
+        form = _mount_component(LoginForm, session)
+
+        for index in range(config.RATE_LIMIT_VERIFICATION_IP_ATTEMPTS):
+            form.identifier = f"missing-verify-{index}@example.com"
+            await LoginForm.resend_verification_email(form)
+            assert form.banner_style == "success"
+
+        form.identifier = "missing-verify-final@example.com"
+        await LoginForm.resend_verification_email(form)
+
+        assert "Too many verification email requests." in form.error_message
+
+    asyncio.run(scenario())
+
+
+def test_password_reset_completion_ip_rate_limit_blocks_varied_tokens(
+    temp_db: Persistence,
+):
+    config.RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS = 2
+    config.RATE_LIMIT_PASSWORD_RESET_TOKEN_ATTEMPTS = 100
+
+    async def scenario():
+        user = await _create_user(temp_db, "reset-completion-ip-limit@example.com")
+        reset_token = await temp_db.create_reset_token(user.id)
+        session = _FakeSession(temp_db, "198.51.100.34")
+        form = _mount_component(
+            ResetPasswordForm,
+            session,
+            code_sent=True,
+            email=user.email,
+            new_password="EvenStrongerPass!7",
+            confirm_password="EvenStrongerPass!7",
+            acknowledge_weak_password=False,
+        )
+
+        for index in range(config.RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS):
+            form.reset_token = f"wrong-token-{index}"
+            await ResetPasswordForm._update_password(form)
+            assert "Invalid or expired reset token." in form.error_message
+
+        form.reset_token = reset_token.token
+        await ResetPasswordForm._update_password(form)
+
+        assert "Too many password reset attempts." in form.error_message
+        refreshed_user = await temp_db.get_user_by_id(user.id)
+        assert refreshed_user.verify_password("EvenStrongerPass!7") is False
+
+    asyncio.run(scenario())
+
+
+def test_password_reset_mfa_rate_limit_blocks_valid_code_after_bad_codes(
+    temp_db: Persistence,
+):
+    config.RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS = 100
+    config.RATE_LIMIT_PASSWORD_RESET_TOKEN_ATTEMPTS = 100
+
+    async def scenario():
+        user = await _create_user(temp_db, "reset-mfa-limit@example.com")
+        secret = pyotp.random_base32()
+        temp_db.set_2fa_secret(user.id, secret)
+        reset_token = await temp_db.create_reset_token(user.id)
+        session = _FakeSession(temp_db, "198.51.100.35")
+        form = _mount_component(
+            ResetPasswordForm,
+            session,
+            code_sent=True,
+            email=user.email,
+            reset_token=reset_token.token,
+            new_password="EvenStrongerPass!7",
+            confirm_password="EvenStrongerPass!7",
+            verification_code="000000",
+            acknowledge_weak_password=False,
+        )
+
+        for _ in range(config.RATE_LIMIT_MFA_ATTEMPTS):
+            await ResetPasswordForm._update_password(form)
+            assert "Invalid verification or recovery code." in form.error_message
+
+        form.verification_code = pyotp.TOTP(secret).now()
+        await ResetPasswordForm._update_password(form)
+
+        assert "Too many two-factor attempts." in form.error_message
+        refreshed_user = await temp_db.get_user_by_id(user.id)
+        assert refreshed_user.verify_password("EvenStrongerPass!7") is False
 
     asyncio.run(scenario())
 

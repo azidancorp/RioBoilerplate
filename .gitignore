@@ -175,6 +175,10 @@ pyrightconfig.json
 
 *.db
 
+# Local runtime data that may contain user PII or email reset tokens
+app/app/data/email_outbox/
+app/app/data/contact_messages/
+
 mfa_qr_codes
 server_sync.py
 move_files.py

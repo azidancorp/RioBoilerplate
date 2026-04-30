@@ -26,6 +26,10 @@ async def on_app_start(app: rio.App) -> None:
     pers = Persistence(allow_username_login=config.ALLOW_USERNAME_LOGIN)
 
     if pers.get_user_count() == 0:
+        # TODO(security): For production, prefer an explicit setup token or
+        # bootstrap script for creating the first root account. The persistence
+        # layer makes first-user assignment race-safe, but public signup is
+        # still a policy-sensitive way to establish the initial administrator.
         print(
             "WARNING: No users are registered yet. The first account created "
             "will be granted the 'root' role.",

@@ -101,6 +101,13 @@ def _assert_logged_out(session: _FakeSession) -> None:
     assert session.navigation_target == "/"
 
 
+def _bucket_count(persistence: Persistence, scope: str) -> int:
+    return persistence.conn.execute(
+        "SELECT COUNT(*) FROM rate_limit_buckets WHERE scope = ?",
+        (scope,),
+    ).fetchone()[0]
+
+
 def _mount_settings(session: _FakeSession, **attributes) -> Settings:
     component = object.__new__(Settings)
     component._session_ = session
@@ -276,6 +283,37 @@ def test_successful_mounted_password_change_logs_out_invalidated_session(temp_db
         refreshed = await temp_db.get_user_by_id(user.id)
         assert not refreshed.verify_password(PASSWORD)
         assert refreshed.verify_password(NEW_PASSWORD)
+        _assert_logged_out(session)
+
+    asyncio.run(scenario())
+
+
+def test_successful_mounted_password_change_clears_rate_limit_bucket(
+    temp_db: Persistence,
+):
+    async def scenario():
+        user, _, session = await _create_user_with_session(
+            temp_db,
+            "fresh-mounted-password-clear@example.com",
+        )
+        page = _mount_settings(
+            session,
+            change_password_current_password="wrong-password",
+            change_password_new_password=NEW_PASSWORD,
+            change_password_confirm_password=NEW_PASSWORD,
+            change_password_passwords_match=True,
+        )
+
+        await Settings._on_confirm_password_change_pressed(page)
+        assert page.error_message == "Current password is incorrect"
+        assert _bucket_count(temp_db, "settings_password_change") == 1
+
+        page.change_password_current_password = PASSWORD
+        await Settings._on_confirm_password_change_pressed(page)
+
+        refreshed = await temp_db.get_user_by_id(user.id)
+        assert refreshed.verify_password(NEW_PASSWORD)
+        assert _bucket_count(temp_db, "settings_password_change") == 0
         _assert_logged_out(session)
 
     asyncio.run(scenario())

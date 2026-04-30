@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import rio
 
-from app.data_models import AppUser, UserSession
+from app.data_models import AppUser, UserSession, UserSettings
 from app.persistence import Persistence
 
 
@@ -10,7 +10,7 @@ def detach_auth_attachments(session: rio.Session) -> None:
     for attachment_type in (AppUser, UserSession):
         try:
             session.detach(attachment_type)
-        except (AttributeError, KeyError):
+        except KeyError:
             pass
 
 
@@ -21,3 +21,30 @@ def refresh_attached_user_session(session: rio.Session) -> tuple[UserSession, Ap
     session.attach(user_session)
     session.attach(user)
     return user_session, user
+
+
+def reject_stale_user_session(session: rio.Session, *, redirect_to: str | None = "/") -> None:
+    detach_auth_attachments(session)
+
+    try:
+        user_settings = session[UserSettings]
+    except KeyError:
+        pass
+    else:
+        user_settings.auth_token = ""
+        session.attach(user_settings)
+
+    if redirect_to is not None:
+        session.navigate_to(redirect_to)
+
+
+def require_fresh_user_session(
+    session: rio.Session,
+    *,
+    redirect_to: str | None = "/",
+) -> tuple[UserSession, AppUser] | None:
+    try:
+        return refresh_attached_user_session(session)
+    except KeyError:
+        reject_stale_user_session(session, redirect_to=redirect_to)
+        return None

@@ -7,9 +7,8 @@ import rio
 
 from app.components.center_component import CenterComponent
 from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
-from app.persistence import Persistence
-from app.data_models import UserSession
 from app.currency import get_currency_config
+from app.session_validation import require_fresh_user_session
 
 
 def get_sample_notifications() -> list[dict[str, str | int]]:
@@ -110,8 +109,10 @@ class NotificationsPage(ResponsiveComponent):
         and populate the notifications list with some sample data.
         """
         try:
-            user_session = self.session[UserSession]
-            persistence = self.session[Persistence]
+            fresh_session = require_fresh_user_session(self.session)
+            if fresh_session is None:
+                self.notification_data = []
+                return
             now = datetime.now()
 
             # Example: Replace with your actual model/method for fetching notifications:
@@ -143,8 +144,9 @@ class NotificationsPage(ResponsiveComponent):
         then refreshes the list. Adjust to match your actual logic.
         """
         try:
-            user_session = self.session[UserSession]
-            persistence = self.session[Persistence]
+            fresh_session = require_fresh_user_session(self.session)
+            if fresh_session is None:
+                return
 
             # Placeholder for marking notifications as read in the DB.
             # e.g., await persistence.mark_all_notifications_as_read(user_session.user_id)
@@ -160,8 +162,9 @@ class NotificationsPage(ResponsiveComponent):
         Clears (deletes) all notifications for the user, then refreshes the list.
         """
         try:
-            user_session = self.session[UserSession]
-            persistence = self.session[Persistence]
+            fresh_session = require_fresh_user_session(self.session)
+            if fresh_session is None:
+                return
 
             # Placeholder for clearing notifications in the DB.
             # e.g., await persistence.clear_all_notifications(user_session.user_id)

@@ -5,10 +5,10 @@ import qrcode
 import pyotp
 import rio
 
-from app.data_models import UserSession
 from app.persistence import Persistence
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
+from app.session_validation import require_fresh_user_session
 from app.components.center_component import CenterComponent
 from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
 from app.validation import SecuritySanitizer
@@ -34,9 +34,10 @@ class EnableMFA(ResponsiveComponent):
 
     @rio.event.on_populate
     async def on_populate(self):
-        user_session = self.session[UserSession]
-        persistence = self.session[Persistence]
-        user = await persistence.get_user_by_id(user_session.user_id)
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        _, user = fresh_session
 
         # If the user already has a 2FA secret, redirect them
         if user.two_factor_secret:
@@ -69,16 +70,18 @@ class EnableMFA(ResponsiveComponent):
         Called when user presses "Verify" button.
         Requires password verification before enabling 2FA.
         """
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, user = fresh_session
+        persistence = self.session[Persistence]
+
         # Validate password first
         if not self.password:
             self.error_message = "Please enter your password to enable 2FA."
             self.force_refresh()
             return
 
-        # Get user and verify password
-        user_session = self.session[UserSession]
-        persistence = self.session[Persistence]
-        user = await persistence.get_user_by_id(user_session.user_id)
         context = context_from_rio_session(self.session, user_id=user_session.user_id)
         limit_key = rate_limit_key("mfa_enable", context.user_id or context.session_id or context.client_ip)
         decision = persistence.check_rate_limit(
@@ -124,13 +127,15 @@ class EnableMFA(ResponsiveComponent):
             self.error_message = "Invalid verification code. Please try again."
             self.force_refresh()
 
-    def set_totp_secret_in_db(self, _=None):
+    def set_totp_secret_in_db(self, _=None) -> None:
         """
         Persists the user's TOTP secret.
         """
-
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, _ = fresh_session
         secret = self.temporary_two_factor_secret
-        user_session = self.session[UserSession]
         persistence = self.session[Persistence]
         persistence.set_2fa_secret(user_session.user_id, secret)
 

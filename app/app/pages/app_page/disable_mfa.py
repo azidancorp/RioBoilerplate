@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import rio
 
-from app.data_models import UserSession
 from app.persistence import Persistence
 from app.persistence_auth import TwoFactorFailure
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
+from app.session_validation import require_fresh_user_session
 from app.components.center_component import CenterComponent
 from app.components.responsive import WIDTH_COMFORTABLE
 
@@ -25,9 +25,10 @@ class DisableMFA(rio.Component):
 
     @rio.event.on_populate
     async def on_populate(self):
-        user_session = self.session[UserSession]
-        persistence = self.session[Persistence]
-        user = await persistence.get_user_by_id(user_session.user_id)
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        _, user = fresh_session
         self.two_factor_enabled = user.two_factor_enabled
 
         # If the user does not have a secret, redirect them
@@ -38,16 +39,18 @@ class DisableMFA(rio.Component):
         """
         Verify password and 2FA or recovery code before disabling 2FA.
         """
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, user = fresh_session
+        persistence = self.session[Persistence]
+
         # Validate password first
         if not self.password:
             self.error_message = "Please enter your password to disable 2FA."
             self.force_refresh()
             return
 
-        # Get user and verify password
-        user_session = self.session[UserSession]
-        persistence = self.session[Persistence]
-        user = await persistence.get_user_by_id(user_session.user_id)
         context = context_from_rio_session(self.session, user_id=user_session.user_id)
         limit_key = rate_limit_key("mfa_disable", context.user_id or context.session_id or context.client_ip)
         decision = persistence.check_rate_limit(
@@ -87,8 +90,11 @@ class DisableMFA(rio.Component):
         )
         self.disable_2fa()
 
-    def disable_2fa(self):
-        user_session = self.session[UserSession]
+    def disable_2fa(self) -> None:
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, _ = fresh_session
         persistence = self.session[Persistence]
         persistence.set_2fa_secret(user_session.user_id, None)
         self.session.navigate_to("/app/settings")

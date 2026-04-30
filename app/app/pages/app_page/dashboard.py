@@ -13,7 +13,7 @@ from app.components.dashboard_components import DeltaCard
 from app.components.currency_summary import CurrencySummary, CurrencyOverview as CurrencySnapshot
 from app.components.responsive import ResponsiveComponent, WIDTH_FULL
 from app.persistence import Persistence
-from app.data_models import UserSession
+from app.session_validation import require_fresh_user_session
 
 # -----------------------------
 # Component Definitions
@@ -25,12 +25,12 @@ class Overview(rio.Component):
 
     @rio.event.on_populate
     async def on_populate(self):
-        try:
-            user_session = self.session[UserSession]
-            persistence = self.session[Persistence]
-        except KeyError:
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
             self.currency_overview = None
             return
+        user_session, _ = fresh_session
+        persistence = self.session[Persistence]
 
         overview_data = await persistence.get_currency_overview(user_session.user_id)
         updated_at = overview_data.get("updated_at")

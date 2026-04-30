@@ -12,7 +12,7 @@ from app.data_models import AppUser
 from app.permissions import can_manage_role, check_access, get_manageable_roles, get_default_role
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
-from app.session_validation import detach_auth_attachments, refresh_attached_user_session
+from app.session_validation import refresh_attached_user_session, reject_stale_user_session
 from app.currency import major_to_minor, format_minor_amount, attach_currency_name
 from app.validation import SecuritySanitizer
 from app.config import config
@@ -67,16 +67,15 @@ class AdminPage(ResponsiveComponent):
         self.selected_role = {}
         self.df = pd.DataFrame([])
 
-    def _detach_auth_attachments(self) -> None:
-        detach_auth_attachments(self.session)
+    def _reject_stale_auth_session(self) -> None:
+        reject_stale_user_session(self.session)
 
     def _refresh_current_user_authorization(self) -> bool:
         try:
             user_session, current_user = refresh_attached_user_session(self.session)
         except KeyError:
             self._clear_user_data()
-            self._detach_auth_attachments()
-            self.session.navigate_to("/")
+            self._reject_stale_auth_session()
             return False
 
         if not check_access("/app/admin", current_user.role):

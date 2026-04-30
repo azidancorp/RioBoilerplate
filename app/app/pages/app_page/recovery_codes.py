@@ -5,11 +5,11 @@ import rio
 
 from app.components.center_component import CenterComponent
 from app.components.responsive import WIDTH_COMFORTABLE
-from app.data_models import UserSession
 from app.persistence import Persistence
 from app.persistence_auth import TwoFactorFailure
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
+from app.session_validation import require_fresh_user_session
 
 
 @rio.page(
@@ -32,9 +32,11 @@ class ManageRecoveryCodes(rio.Component):
 
     @rio.event.on_populate
     async def on_populate(self) -> None:
-        user_session = self.session[UserSession]
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, user = fresh_session
         persistence = self.session[Persistence]
-        user = await persistence.get_user_by_id(user_session.user_id)
 
         if not user.two_factor_secret:
             # Recovery codes are only relevant when 2FA is enabled.
@@ -58,9 +60,11 @@ class ManageRecoveryCodes(rio.Component):
             self.last_generated_label = "Never generated"
 
     async def _on_generate_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
-        user_session = self.session[UserSession]
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, user = fresh_session
         persistence = self.session[Persistence]
-        user = await persistence.get_user_by_id(user_session.user_id)
 
         if not self.password:
             self.error_message = "Please enter your account password."

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.data_models import AppUser, UserSession
+from app.data_models import AppUser, UserSession, UserSettings
 from app.persistence import Persistence
 
 
@@ -32,8 +32,10 @@ class FakeRioSession:
     def __init__(self, persistence: Persistence, user_session: UserSession):
         self.attachments = {
             Persistence: persistence,
+            UserSettings: UserSettings(auth_token=user_session.id),
             UserSession: user_session,
         }
+        self.navigation_target: str | None = None
 
     def __getitem__(self, attachment_type):
         try:
@@ -46,6 +48,9 @@ class FakeRioSession:
 
     def detach(self, attachment_type):
         del self.attachments[attachment_type]
+
+    def navigate_to(self, target_url: str, *, replace: bool = False) -> None:
+        self.navigation_target = target_url
 
 
 @pytest.fixture
@@ -87,6 +92,8 @@ def test_guard_rejects_live_session_after_database_revocation(temp_db: Persisten
         assert _load_app_page_guard()(event) == "/"
         assert UserSession not in event.session.attachments
         assert AppUser not in event.session.attachments
+        assert event.session[UserSettings].auth_token == ""
+        assert event.session.navigation_target is None
 
     asyncio.run(scenario())
 
@@ -121,5 +128,7 @@ def test_guard_rejects_live_session_after_database_expiry(temp_db: Persistence):
         assert _load_app_page_guard()(event) == "/"
         assert UserSession not in event.session.attachments
         assert AppUser not in event.session.attachments
+        assert event.session[UserSettings].auth_token == ""
+        assert event.session.navigation_target is None
 
     asyncio.run(scenario())

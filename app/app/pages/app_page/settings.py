@@ -5,9 +5,10 @@ from datetime import timezone
 import rio
 from app.persistence import Persistence
 from app.persistence_auth import TwoFactorFailure
-from app.data_models import AppUser, UserSession, RecoveryCodeUsage
+from app.data_models import RecoveryCodeUsage
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
+from app.session_validation import reject_stale_user_session, require_fresh_user_session
 from app.components.center_component import CenterComponent
 from app.components.currency_summary import CurrencySummary, CurrencyOverview as CurrencySnapshot
 from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
@@ -82,11 +83,12 @@ class Settings(ResponsiveComponent):
     @rio.event.on_populate
     async def on_populate(self):
         """Load user data from database when page loads."""
-        user_session = self.session[UserSession]
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, user = fresh_session
         persistence = self.session[Persistence]
 
-        # Load user data
-        user = await persistence.get_user_by_id(user_session.user_id)
         self.two_factor_enabled = bool(user.two_factor_secret)
         self.email_notifications_enabled = user.email_notifications_enabled
         self.sms_notifications_enabled = user.sms_notifications_enabled
@@ -129,9 +131,13 @@ class Settings(ResponsiveComponent):
 
     async def _on_email_notifications_switch_pressed(self, event: rio.SwitchChangeEvent):
         """Handle email notification toggle and save to database."""
-        self.email_notifications_enabled = event.is_on
-        user_session = self.session[UserSession]
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, _ = fresh_session
         persistence = self.session[Persistence]
+
+        self.email_notifications_enabled = event.is_on
         await persistence.update_notification_preferences(
             user_session.user_id,
             email_notifications_enabled=event.is_on
@@ -139,9 +145,13 @@ class Settings(ResponsiveComponent):
 
     async def _on_sms_notifications_switch_pressed(self, event: rio.SwitchChangeEvent):
         """Handle SMS notification toggle and save to database."""
-        self.sms_notifications_enabled = event.is_on
-        user_session = self.session[UserSession]
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, _ = fresh_session
         persistence = self.session[Persistence]
+
+        self.sms_notifications_enabled = event.is_on
         await persistence.update_notification_preferences(
             user_session.user_id,
             sms_notifications_enabled=event.is_on
@@ -178,14 +188,13 @@ class Settings(ResponsiveComponent):
 
     async def _on_confirm_password_change_pressed(self) -> None:
         """Handle the password change process."""
-        # Get required instances
-        user_session = self.session[UserSession]
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, user = fresh_session
         persistence = self.session[Persistence]
-        
+
         try:
-            # Get current user
-            user = await persistence.get_user_by_id(user_session.user_id)
-            
             # Validate inputs
             if not (self.change_password_current_password and 
                    self.change_password_new_password and 
@@ -253,16 +262,17 @@ class Settings(ResponsiveComponent):
                 scope=sensitive_action_policy("settings_password_change").scope,
                 key=rate_limit_key("settings_password_change", user_session.user_id),
             )
-            
-            # Force refresh to update UI
-            self.force_refresh()
+            reject_stale_user_session(self.session)
             
         except Exception as e:
             self.error_message = f"Failed to update password: {str(e)}"
 
     async def _on_save_profile_pressed(self) -> None:
         """Handle saving profile information to the database."""
-        user_session = self.session[UserSession]
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, _ = fresh_session
         persistence = self.session[Persistence]
 
         try:
@@ -300,6 +310,13 @@ class Settings(ResponsiveComponent):
 
     async def _on_delete_account_pressed(self) -> None:
         """Handle the account deletion process."""
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, user = fresh_session
+        persistence = self.session[Persistence]
+        two_factor_enabled = user.two_factor_enabled
+
         # Validate confirmation text
         try:
             sanitized_confirmation = SecuritySanitizer.sanitize_string(self.delete_account_confirmation, 50)
@@ -311,7 +328,7 @@ class Settings(ResponsiveComponent):
             return
 
         # Validate 2FA code if provided
-        if self.two_factor_enabled and self.delete_account_2fa:
+        if two_factor_enabled and self.delete_account_2fa:
             try:
                 sanitized_2fa = SecuritySanitizer.sanitize_auth_code(self.delete_account_2fa)
             except Exception:
@@ -323,9 +340,6 @@ class Settings(ResponsiveComponent):
                 return
 
             self.delete_account_2fa = sanitized_2fa
-
-        user_session = self.session[UserSession]
-        persistence = self.session[Persistence]
 
         decision = self._sensitive_action_limited(
             persistence,
@@ -341,30 +355,27 @@ class Settings(ResponsiveComponent):
         success = await persistence.delete_user(
             user_id=user_session.user_id,
             password=self.delete_account_password,
-            two_factor_code=self.delete_account_2fa if self.two_factor_enabled else None
+            two_factor_code=self.delete_account_2fa if two_factor_enabled else None
         )
 
         if success:
             print("Account deleted successfully")
-            # Redirect to login page
-            self.session.navigate_to("/")
+            reject_stale_user_session(self.session)
         else:
             self.delete_account_error = "Failed to delete account. Please check your password and 2FA code."
 
     async def _on_logout_all_devices_pressed(self) -> None:
         """Handle the logout all devices button click."""
-        user_session = self.session[UserSession]
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, _ = fresh_session
         persistence = self.session[Persistence]
 
         # Invalidate all sessions for this user
         await persistence.invalidate_all_sessions(user_session.user_id)
 
-        # Detach everything from the current session
-        self.session.detach(AppUser)
-        self.session.detach(UserSession)
-
-        # Navigate to the login page
-        self.session.navigate_to("/")
+        reject_stale_user_session(self.session)
 
     def build(self) -> rio.Component:
         return CenterComponent(

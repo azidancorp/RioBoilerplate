@@ -5,9 +5,10 @@ from datetime import datetime, timezone
 
 import rio
 from app.persistence import Persistence
-from app.data_models import AppUser, UserSession
+from app.data_models import AppUser
 from app.components.responsive import ResponsiveComponent
 from app.navigation import get_public_desktop_links, get_public_login_link
+from app.session_validation import reject_stale_user_session, require_fresh_user_session
 
 
 class NavBarLink(rio.Component):
@@ -47,7 +48,10 @@ class Navbar(ResponsiveComponent):
         self.force_refresh()
 
     async def on_logout(self) -> None:
-        user_session = self.session[UserSession]
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, _ = fresh_session
 
         # Expire the session
         pers = self.session[Persistence]
@@ -57,14 +61,7 @@ class Navbar(ResponsiveComponent):
             new_valid_until=datetime.now(tz=timezone.utc),
         )
 
-        # Detach everything from the session. This informs all components that
-        # nobody is logged in.
-        self.session.detach(AppUser)
-        self.session.detach(UserSession)
-
-        # Navigate to the login page to prevent the user being on a page that is
-        # prohibited without being logged in.
-        self.session.navigate_to("/")
+        reject_stale_user_session(self.session)
 
     def build(self) -> rio.Component:
         # Check if the user is logged in and display the appropriate buttons

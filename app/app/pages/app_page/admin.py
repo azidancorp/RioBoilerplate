@@ -374,20 +374,6 @@ class AdminPage(ResponsiveComponent):
             self.force_refresh()
             return
 
-        decision = self._check_sensitive_limit(
-            persistence,
-            "admin_currency",
-            target=str(target_user.id),
-        )
-        if not decision.allowed:
-            self.currency_error = rate_limited_message(
-                "Too many currency update attempts.",
-                decision.retry_after_seconds,
-            )
-            self.currency_success = ""
-            self.force_refresh()
-            return
-
         reason = None
         if self.currency_reason:
             try:

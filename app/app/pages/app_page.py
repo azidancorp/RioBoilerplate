@@ -4,8 +4,8 @@ import logging
 
 import rio
 
-from app.data_models import UserSession
 from app.permissions import check_access
+from app.session_validation import detach_auth_attachments, refresh_attached_user_session
 
 logger = logging.getLogger(__name__)
 
@@ -13,12 +13,10 @@ logger = logging.getLogger(__name__)
 def guard(event: rio.GuardEvent) -> str | None:
     # This website allows access to sensitive information. Enforce stringent
     # access control to all in-app pages.
-    
-    
 
     # Check if the user is authenticated by looking for a user session
     try:
-        session = event.session[UserSession]
+        session, _ = refresh_attached_user_session(event.session)
         prefix = "/app/"
 
         # Get the current page path
@@ -38,6 +36,7 @@ def guard(event: rio.GuardEvent) -> str | None:
 
     except KeyError:
         # User is not logged in, redirect to the login page
+        detach_auth_attachments(event.session)
         logger.info("Unauthenticated user attempted to access protected page. Redirecting to login.")
         return "/"
 

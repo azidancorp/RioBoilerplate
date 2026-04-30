@@ -22,7 +22,9 @@ from app.currency import get_currency_config
 from app.components.center_component import CenterComponent
 from app.components.currency_summary import CurrencySummary, CurrencyOverview
 from app.data_models import AppUser
+from app.permissions import check_access
 from app.persistence import Persistence
+from app.session_validation import detach_auth_attachments, refresh_attached_user_session
 from app.validation import (
     CurrencyAdjustmentRequest,
     CurrencyBalanceResponse,
@@ -596,10 +598,18 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
 
     def _require_context(self) -> tuple[AppUser, Persistence] | None:
         try:
-            current_user = self.session[AppUser]
+            _, current_user = refresh_attached_user_session(self.session)
         except KeyError:
+            detach_auth_attachments(self.session)
             self._record_input_error("Log in to exercise the currency API endpoints.")
+            self.session.navigate_to("/")
             return None
+
+        if not check_access("/app/currency-playground", current_user.role):
+            self._record_input_error("You no longer have access to the currency playground.")
+            self.session.navigate_to("/")
+            return None
+
         persistence = self.session[Persistence]
         return current_user, persistence
 

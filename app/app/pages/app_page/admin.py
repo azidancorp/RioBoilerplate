@@ -8,8 +8,9 @@ import pandas as pd
 
 import rio
 from app.persistence import Persistence
-from app.data_models import AppUser, UserSession
-from app.permissions import can_manage_role, get_manageable_roles, get_default_role
+from app.data_models import AppUser
+from app.permissions import can_manage_role, check_access, get_manageable_roles, get_default_role
+from app.session_validation import detach_auth_attachments, refresh_attached_user_session
 from app.currency import major_to_minor, format_minor_amount, attach_currency_name
 from app.validation import SecuritySanitizer
 from app.config import config
@@ -58,20 +59,42 @@ class AdminPage(ResponsiveComponent):
         """Load all users when the page is populated."""
         await self._load_user_data()
 
+    def _clear_user_data(self) -> None:
+        self.current_user = None
+        self.users = []
+        self.selected_role = {}
+        self.df = pd.DataFrame([])
+
+    def _detach_auth_attachments(self) -> None:
+        detach_auth_attachments(self.session)
+
+    def _refresh_current_user_authorization(self) -> bool:
+        try:
+            user_session, current_user = refresh_attached_user_session(self.session)
+        except KeyError:
+            self._clear_user_data()
+            self._detach_auth_attachments()
+            self.session.navigate_to("/")
+            return False
+
+        if not check_access("/app/admin", current_user.role):
+            self._clear_user_data()
+            self.session.attach(user_session)
+            self.session.attach(current_user)
+            self.session.navigate_to("/")
+            return False
+
+        self.session.attach(user_session)
+        self.session.attach(current_user)
+        self.current_user = current_user
+        return True
+
     async def _load_user_data(self) -> None:
         """Populate component state with the latest user data."""
-        persistence = self.session[Persistence]
-        user_session = self.session[UserSession]
-
-        try:
-            self.current_user = await persistence.get_user_by_id(user_session.user_id)
-        except KeyError:
-            self.current_user = None
-            self.users = []
-            self.selected_role = {}
-            self.df = pd.DataFrame([])
+        if not self._refresh_current_user_authorization():
             return
 
+        persistence = self.session[Persistence]
         self.users = await persistence.list_users()
         self.selected_role = {str(user.id): user.role for user in self.users}
 
@@ -116,6 +139,9 @@ class AdminPage(ResponsiveComponent):
 
     async def _update_role(self, identifier: str, new_role: str) -> bool:
         """Update a user's role."""
+        if not self._refresh_current_user_authorization():
+            return False
+
         if not self.current_user:
             self.change_role_error = "You must be logged in to perform this action"
             return False
@@ -154,6 +180,9 @@ class AdminPage(ResponsiveComponent):
 
     async def _on_delete_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """Handle the user deletion process from admin panel."""
+        if not self._refresh_current_user_authorization():
+            return
+
         if not self.current_user:
             self.delete_user_error = "You must be logged in to perform this action"
             self.delete_user_success = ""
@@ -243,6 +272,9 @@ class AdminPage(ResponsiveComponent):
 
     async def _on_currency_submit(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """Handle currency adjustments or absolute updates."""
+        if not self._refresh_current_user_authorization():
+            return
+
         if not self.current_user:
             self.currency_error = "You must be logged in to perform this action"
             self.currency_success = ""

@@ -7,13 +7,33 @@ from app.currency import get_currency_config
 from app.data_models import AppUser
 
 
-USER_SELECT_COLUMNS = (
-    "id, email, username, created_at, password_hash, password_salt, "
-    "auth_provider, auth_provider_id, role, is_verified, "
-    "two_factor_secret, referral_code, "
-    "email_notifications_enabled, sms_notifications_enabled, "
-    "primary_currency_balance, primary_currency_updated_at"
+USER_SELECT_COLUMN_NAMES = (
+    "id",
+    "email",
+    "username",
+    "created_at",
+    "password_hash",
+    "password_salt",
+    "auth_provider",
+    "auth_provider_id",
+    "role",
+    "is_verified",
+    "two_factor_secret",
+    "referral_code",
+    "email_notifications_enabled",
+    "sms_notifications_enabled",
+    "primary_currency_balance",
+    "primary_currency_updated_at",
 )
+USER_SELECT_COLUMNS = ", ".join(USER_SELECT_COLUMN_NAMES)
+
+
+def get_user_select_columns(table_alias: str | None = None) -> str:
+    if table_alias is None:
+        return USER_SELECT_COLUMNS
+    return ", ".join(
+        f"{table_alias}.{column_name}" for column_name in USER_SELECT_COLUMN_NAMES
+    )
 
 
 class UsersPersistence(Protocol):

@@ -289,6 +289,9 @@ class Persistence:
     async def get_session_by_auth_token(self, auth_token: str) -> UserSession:
         return await persistence_auth.get_session_by_auth_token(self, auth_token)
 
+    def get_valid_session_by_auth_token(self, auth_token: str) -> tuple[UserSession, AppUser]:
+        return persistence_auth.get_valid_session_by_auth_token(self, auth_token)
+
     def verify_two_factor_challenge(
         self, user_id: uuid.UUID, code: str | None, *, consume_recovery_code: bool = True,
     ) -> persistence_auth.TwoFactorChallengeResult:

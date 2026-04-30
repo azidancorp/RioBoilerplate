@@ -17,6 +17,7 @@ from app.data_models import (
     RecoveryCodeRecord,
     UserSession,
 )
+from app.persistence_users import get_user_select_columns, _row_to_app_user
 from app.validation import SecuritySanitizer
 
 
@@ -400,6 +401,55 @@ async def get_session_by_auth_token(
         valid_until=datetime.fromtimestamp(row[3], tz=timezone.utc),
         role=row[4],
     )
+
+
+def get_valid_session_by_auth_token(
+    persistence: AuthPersistence,
+    auth_token: str,
+) -> tuple[UserSession, AppUser]:
+    """
+    Retrieve a non-expired user session and its current user row.
+
+    This is intentionally synchronous so Rio page guards can revalidate
+    already-attached sessions before allowing protected navigation.
+    """
+    cursor = persistence._get_cursor()
+    cursor.execute(
+        f"""
+        SELECT
+            s.id,
+            s.user_id,
+            s.created_at,
+            s.valid_until,
+            s.role,
+            {get_user_select_columns("u")}
+        FROM user_sessions AS s
+        JOIN users AS u ON u.id = s.user_id
+        WHERE s.id = ?
+        ORDER BY s.created_at
+        LIMIT 1
+        """,
+        (auth_token,),
+    )
+
+    row = cursor.fetchone()
+    if row is None:
+        raise KeyError(f"No session found with auth token {auth_token}")
+
+    valid_until = datetime.fromtimestamp(row[3], tz=timezone.utc)
+    if valid_until <= datetime.now(tz=timezone.utc):
+        raise KeyError(f"Session expired for auth token {auth_token}")
+
+    user = _row_to_app_user(row[5:])
+    session = UserSession(
+        id=row[0],
+        user_id=uuid.UUID(row[1]),
+        created_at=datetime.fromtimestamp(row[2], tz=timezone.utc),
+        valid_until=valid_until,
+        role=user.role,
+    )
+
+    return session, user
 
 
 def _get_two_factor_secret(

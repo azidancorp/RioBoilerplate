@@ -98,6 +98,21 @@ def test_rate_limit_expires_after_rolling_window(temp_db: Persistence):
     assert allowed.allowed is True
 
 
+def test_allowed_reset_at_is_earliest_active_bucket_expiry(temp_db: Persistence):
+    policy = _policy()
+    key = rate_limit_key("identifier", "victim@example.com")
+    first_now = _base_time()
+    second_now = first_now + timedelta(seconds=policy.bucket_seconds + 1)
+
+    first = temp_db.check_rate_limit(policy=policy, key=key, now=first_now)
+    second = temp_db.check_rate_limit(policy=policy, key=key, now=second_now)
+
+    assert first.allowed is True
+    assert second.allowed is True
+    assert second.reset_at == first.reset_at
+    assert second.reset_at > second_now
+
+
 def test_rate_limit_scopes_are_independent(temp_db: Persistence):
     key = rate_limit_key("identifier", "victim@example.com")
     now = _base_time()

@@ -52,6 +52,8 @@ def _decision_from_rows(
     total: int,
 ) -> tuple[bool, int | None, datetime]:
     if total <= policy.limit:
+        # For allowed requests, reset_at is the earliest active bucket expiry:
+        # the first moment any counted request ages out of the rolling window.
         reset_ts = (
             min((start + policy.window_seconds + policy.bucket_seconds for start, _ in rows), default=now_ts + policy.window_seconds)
         )

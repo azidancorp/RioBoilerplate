@@ -166,6 +166,9 @@ class LoginForm(rio.Component):
             # Check if 2FA is enabled for this user
             recovery_code_used = False
             if user_info.two_factor_enabled:
+                # Keep MFA attempts account-scoped: this limits code guessing even
+                # when an attacker rotates IPs, at the cost of a short account-level
+                # lockout if the password is already compromised.
                 mfa_key = rate_limit_key("user", user_info.id)
                 blocked = _consume_rate_limits(
                     pers,
@@ -889,6 +892,8 @@ class ResetPasswordForm(rio.Component):
             pers,
             (
                 (password_reset_completion_ip_policy(), rate_limit_key("ip", request_context.client_ip)),
+                # This caps retries of the same submitted token. Blind guessing is
+                # primarily bounded by the IP bucket above and reset-token entropy.
                 (password_reset_token_policy(), token_rate_limit_key(sanitized_token)),
             ),
         )

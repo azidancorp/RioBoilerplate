@@ -122,6 +122,8 @@ def context_from_rio_session(
     user_id: object = "",
 ) -> RequestContext:
     headers = getattr(session, "http_headers", {}) or {}
+    # Non-website Rio sessions may not expose a client IP. Use a stable shared
+    # fallback so dev/test/local-session traffic is bucketed predictably.
     peer_ip = getattr(session, "client_ip", "") or "local-session"
     session_id = str(getattr(session, "id", "") or getattr(session, "session_id", "") or "")
     resolved_user_id = str(user_id or "")

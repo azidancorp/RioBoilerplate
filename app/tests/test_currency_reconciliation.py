@@ -72,12 +72,9 @@ async def _calculate_ledger_sum(persistence: Persistence, user_id: uuid.UUID) ->
     return int(cursor.fetchone()[0])
 
 
-def _has_reconciliation_methods(persistence: Persistence) -> bool:
-    """Check if reconciliation methods are implemented."""
-    return (
-        hasattr(persistence, 'verify_currency_balance') and
-        callable(getattr(persistence, 'verify_currency_balance'))
-    )
+def _has_reconciliation_method(method_name: str) -> bool:
+    """Check if an optional reconciliation method is implemented."""
+    return callable(getattr(Persistence, method_name, None))
 
 
 # ============================================================================
@@ -279,7 +276,7 @@ def test_detects_missing_ledger_entries(temp_db: Persistence):
 # ============================================================================
 
 @pytest.mark.skipif(
-    not _has_reconciliation_methods(Persistence()),
+    not _has_reconciliation_method("verify_currency_balance"),
     reason="verify_currency_balance method not yet implemented"
 )
 def test_verify_currency_balance_detects_mismatch(temp_db: Persistence):
@@ -311,7 +308,7 @@ def test_verify_currency_balance_detects_mismatch(temp_db: Persistence):
 
 
 @pytest.mark.skipif(
-    not _has_reconciliation_methods(Persistence()),
+    not _has_reconciliation_method("verify_currency_balance"),
     reason="verify_currency_balance method not yet implemented"
 )
 def test_verify_currency_balance_auto_fix(temp_db: Persistence):
@@ -340,7 +337,7 @@ def test_verify_currency_balance_auto_fix(temp_db: Persistence):
 
 
 @pytest.mark.skipif(
-    not _has_reconciliation_methods(Persistence()),
+    not _has_reconciliation_method("verify_all_balances"),
     reason="verify_all_balances method not yet implemented"
 )
 def test_verify_all_balances_bulk_check(temp_db: Persistence):
@@ -375,7 +372,7 @@ def test_verify_all_balances_bulk_check(temp_db: Persistence):
 
 
 @pytest.mark.skipif(
-    not _has_reconciliation_methods(Persistence()),
+    not _has_reconciliation_method("verify_all_balances"),
     reason="verify_all_balances method not yet implemented"
 )
 def test_verify_all_balances_auto_fix_multiple(temp_db: Persistence):

@@ -5,16 +5,38 @@ triggering Rio's SSR path. This exercises page imports, guards, and build().
 import pytest
 from fastapi.testclient import TestClient
 
-from app import fastapi_app
+import app as app_module
 from app.navigation import PUBLIC_NAV_ROUTES, APP_ROUTES
+from app.persistence import Persistence
 
 CRAWLER_UA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 
 
 @pytest.fixture(scope="module")
-def client():
-    with TestClient(fastapi_app, raise_server_exceptions=False) as c:
-        yield c
+def client(tmp_path_factory):
+    smoke_db_path = tmp_path_factory.mktemp("smoke-db") / "app.db"
+    original_init = Persistence.__init__
+    original_attachments = list(app_module.app.default_attachments)
+    original_attachment_ids = {id(attachment) for attachment in original_attachments}
+
+    def init_with_smoke_db(self, db_path=None, *args, **kwargs):
+        if db_path is None:
+            db_path = smoke_db_path
+        original_init(self, db_path, *args, **kwargs)
+
+    Persistence.__init__ = init_with_smoke_db
+    try:
+        with TestClient(app_module.fastapi_app, raise_server_exceptions=False) as c:
+            yield c
+    finally:
+        Persistence.__init__ = original_init
+        for attachment in app_module.app.default_attachments:
+            if id(attachment) not in original_attachment_ids and isinstance(
+                attachment,
+                Persistence,
+            ):
+                attachment.close()
+        app_module.app.default_attachments[:] = original_attachments
 
 
 # Parametrize over public routes

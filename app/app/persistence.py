@@ -305,6 +305,25 @@ class Persistence:
             self, user_id, limit=limit, before=before, after=after,
         )
 
+    async def verify_currency_balance(
+        self,
+        user_id: uuid.UUID,
+        *,
+        auto_fix: bool = False,
+    ) -> dict[str, t.Any]:
+        return await persistence_currency.verify_currency_balance(
+            self, user_id, auto_fix=auto_fix,
+        )
+
+    async def verify_all_balances(
+        self,
+        *,
+        auto_fix: bool = False,
+    ) -> dict[str, t.Any]:
+        return await persistence_currency.verify_all_balances(
+            self, auto_fix=auto_fix,
+        )
+
     async def get_user_by_email_or_username(self, identifier: str) -> AppUser:
         return await persistence_users.get_user_by_email_or_username(self, identifier)
 

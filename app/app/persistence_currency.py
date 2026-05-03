@@ -47,6 +47,24 @@ def _row_to_currency_ledger_entry(row: tuple) -> CurrencyLedgerEntry:
     )
 
 
+def _build_reconciliation_result(
+    *,
+    user_id: uuid.UUID,
+    stored_balance: int,
+    ledger_balance: int,
+    fixed: bool = False,
+) -> dict[str, t.Any]:
+    discrepancy = stored_balance - ledger_balance
+    return {
+        "user_id": str(user_id),
+        "stored_balance": stored_balance,
+        "ledger_balance": ledger_balance,
+        "discrepancy": discrepancy,
+        "matches": discrepancy == 0,
+        "fixed": fixed,
+    }
+
+
 def append_currency_ledger_entry(
     persistence: CurrencyPersistence,
     *,
@@ -308,3 +326,144 @@ async def list_currency_ledger(
     cursor.execute(query, params)
     rows = cursor.fetchall()
     return [_row_to_currency_ledger_entry(row) for row in rows]
+
+
+async def verify_currency_balance(
+    persistence: CurrencyPersistence,
+    user_id: uuid.UUID,
+    *,
+    auto_fix: bool = False,
+) -> dict[str, t.Any]:
+    """Compare one user's stored currency balance against ledger deltas."""
+    conn = _get_connection(persistence)
+    cursor = persistence._get_cursor()
+    owns_transaction = auto_fix and not conn.in_transaction
+
+    try:
+        if owns_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+
+        cursor.execute(
+            """
+            SELECT
+                users.primary_currency_balance,
+                COALESCE(SUM(user_currency_ledger.delta), 0)
+            FROM users
+            LEFT JOIN user_currency_ledger
+                ON user_currency_ledger.user_id = users.id
+            WHERE users.id = ?
+            GROUP BY users.id, users.primary_currency_balance
+            """,
+            (str(user_id),),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise KeyError(user_id)
+
+        stored_balance = int(row[0] or 0)
+        ledger_balance = int(row[1] or 0)
+        discrepancy = stored_balance - ledger_balance
+        matches = discrepancy == 0
+        fixed = False
+
+        if auto_fix and not matches:
+            cursor.execute(
+                """
+                UPDATE users
+                SET primary_currency_balance = ?, primary_currency_updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    ledger_balance,
+                    datetime.now(timezone.utc).timestamp(),
+                    str(user_id),
+                ),
+            )
+            fixed = True
+
+        if owns_transaction:
+            conn.commit()
+
+        return _build_reconciliation_result(
+            user_id=user_id,
+            stored_balance=stored_balance,
+            ledger_balance=ledger_balance,
+            fixed=fixed,
+        )
+    except Exception:
+        if owns_transaction:
+            conn.rollback()
+        raise
+
+
+async def verify_all_balances(
+    persistence: CurrencyPersistence,
+    *,
+    auto_fix: bool = False,
+) -> dict[str, t.Any]:
+    """Verify currency reconciliation for every user."""
+    conn = _get_connection(persistence)
+    cursor = persistence._get_cursor()
+    owns_transaction = auto_fix and not conn.in_transaction
+
+    try:
+        if owns_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+
+        cursor.execute(
+            """
+            SELECT
+                users.id,
+                users.primary_currency_balance,
+                COALESCE(SUM(user_currency_ledger.delta), 0)
+            FROM users
+            LEFT JOIN user_currency_ledger
+                ON user_currency_ledger.user_id = users.id
+            GROUP BY users.id, users.primary_currency_balance
+            ORDER BY users.created_at ASC, users.id ASC
+            """
+        )
+        rows = cursor.fetchall()
+
+        details: list[dict[str, t.Any]] = []
+        updates: list[tuple[int, float, str]] = []
+        timestamp = datetime.now(timezone.utc).timestamp()
+
+        for row in rows:
+            user_id = uuid.UUID(row[0])
+            stored_balance = int(row[1] or 0)
+            ledger_balance = int(row[2] or 0)
+            result = _build_reconciliation_result(
+                user_id=user_id,
+                stored_balance=stored_balance,
+                ledger_balance=ledger_balance,
+                fixed=auto_fix and stored_balance != ledger_balance,
+            )
+            if not result["matches"]:
+                details.append(result)
+                if auto_fix:
+                    updates.append((ledger_balance, timestamp, str(user_id)))
+
+        if updates:
+            cursor.executemany(
+                """
+                UPDATE users
+                SET primary_currency_balance = ?, primary_currency_updated_at = ?
+                WHERE id = ?
+                """,
+                updates,
+            )
+
+        if owns_transaction:
+            conn.commit()
+
+        return {
+            "total_checked": len(rows),
+            "mismatches_found": len(details),
+            "fixed": len(updates),
+            "details": details,
+        }
+    except Exception:
+        if owns_transaction:
+            conn.rollback()
+        raise

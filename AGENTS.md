@@ -62,7 +62,7 @@ Do a quick boot check from `app/` (where `rio.toml` lives), e.g. `cd app && time
 
 ## Persistence & Currency Gotchas
 - SQLite FK enforcement is enabled in `app/app/persistence.py` (`PRAGMA foreign_keys = ON`). Keep multi-step writes transactional.
-- Currency invariant: stored balance must match ledger deltas. Relevant tests/docs: `app/tests/test_currency_reconciliation.py`, `app/tests/RECONCILIATION_QUICK_START.md`.
+- Currency invariant: stored balance must match ledger deltas. Relevant tests: `app/tests/test_currency_reconciliation.py`.
 - Currency storage: uses integer minor units with `Decimal` conversion. Config in `app/app/config.py` via `PRIMARY_CURRENCY_*` settings (name, symbol, decimal places, initial balance, allow negative).
 - 2FA: prefer the centralized verifier (`Persistence.verify_two_factor_challenge`); regression tests exist in `app/tests/test_two_factor_verification.py`.
 - Currency tests: `test_currency_*.py` covers API, persistence, and reconciliation tests.

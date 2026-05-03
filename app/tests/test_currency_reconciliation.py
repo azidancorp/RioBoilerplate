@@ -8,11 +8,11 @@ REQUIRED METHODS (to be implemented in app.persistence.Persistence):
     - verify_currency_balance(user_id, *, auto_fix=False) -> dict
     - verify_all_balances(*, auto_fix=False) -> dict
 
-If these methods don't exist yet, these tests will be skipped.
 """
 
 import asyncio
 from pathlib import Path
+import sqlite3
 import uuid
 
 import pytest
@@ -70,11 +70,6 @@ async def _calculate_ledger_sum(persistence: Persistence, user_id: uuid.UUID) ->
         (str(user_id),)
     )
     return int(cursor.fetchone()[0])
-
-
-def _has_reconciliation_method(method_name: str) -> bool:
-    """Check if an optional reconciliation method is implemented."""
-    return callable(getattr(Persistence, method_name, None))
 
 
 # ============================================================================
@@ -272,13 +267,9 @@ def test_detects_missing_ledger_entries(temp_db: Persistence):
 
 
 # ============================================================================
-# Reconciliation Method Tests (if implemented)
+# Reconciliation Method Tests
 # ============================================================================
 
-@pytest.mark.skipif(
-    not _has_reconciliation_method("verify_currency_balance"),
-    reason="verify_currency_balance method not yet implemented"
-)
 def test_verify_currency_balance_detects_mismatch(temp_db: Persistence):
     """Test verify_currency_balance method detects discrepancies."""
     config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
@@ -307,10 +298,6 @@ def test_verify_currency_balance_detects_mismatch(temp_db: Persistence):
     asyncio.run(scenario())
 
 
-@pytest.mark.skipif(
-    not _has_reconciliation_method("verify_currency_balance"),
-    reason="verify_currency_balance method not yet implemented"
-)
 def test_verify_currency_balance_auto_fix(temp_db: Persistence):
     """Test auto_fix parameter corrects discrepancies."""
     config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
@@ -336,10 +323,6 @@ def test_verify_currency_balance_auto_fix(temp_db: Persistence):
     asyncio.run(scenario())
 
 
-@pytest.mark.skipif(
-    not _has_reconciliation_method("verify_all_balances"),
-    reason="verify_all_balances method not yet implemented"
-)
 def test_verify_all_balances_bulk_check(temp_db: Persistence):
     """Test verify_all_balances checks multiple users."""
     config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
@@ -371,10 +354,6 @@ def test_verify_all_balances_bulk_check(temp_db: Persistence):
     asyncio.run(scenario())
 
 
-@pytest.mark.skipif(
-    not _has_reconciliation_method("verify_all_balances"),
-    reason="verify_all_balances method not yet implemented"
-)
 def test_verify_all_balances_auto_fix_multiple(temp_db: Persistence):
     """Test auto_fix corrects multiple users at once."""
     config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
@@ -401,6 +380,44 @@ def test_verify_all_balances_auto_fix_multiple(temp_db: Persistence):
             ledger_sum = await _calculate_ledger_sum(temp_db, user.id)
             assert fixed_user.primary_currency_balance == ledger_sum
             assert fixed_user.primary_currency_balance == 1000
+
+    asyncio.run(scenario())
+
+
+def test_verify_all_balances_auto_fix_rolls_back_on_failure(temp_db: Persistence):
+    """Bulk auto-fix should not leave earlier users fixed after a later failure."""
+    config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
+
+    async def scenario():
+        users = []
+        for i in range(3):
+            user = await _create_user(temp_db, f"rollback{i}@example.com")
+            await temp_db.adjust_currency_balance(user.id, 1000, reason="Init")
+            await _manually_corrupt_balance(temp_db, user.id, 500 + i)
+            users.append(user)
+
+        cursor = temp_db._get_cursor()
+        cursor.execute(
+            """
+            CREATE TRIGGER fail_second_reconciliation_update
+            BEFORE UPDATE OF primary_currency_balance ON users
+            WHEN OLD.email = 'rollback1@example.com'
+            BEGIN
+                SELECT RAISE(ABORT, 'forced reconciliation rollback');
+            END
+            """
+        )
+        temp_db.conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await temp_db.verify_all_balances(auto_fix=True)
+
+        for i, user in enumerate(users):
+            reloaded_user = await temp_db.get_user_by_id(user.id)
+            ledger_sum = await _calculate_ledger_sum(temp_db, user.id)
+            assert reloaded_user.primary_currency_balance == 500 + i
+            assert ledger_sum == 1000
+            assert reloaded_user.primary_currency_balance != ledger_sum
 
     asyncio.run(scenario())
 

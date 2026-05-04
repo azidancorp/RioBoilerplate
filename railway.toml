@@ -1,0 +1,2 @@
+[deploy]
+startCommand = "cd app && rio run --port ${PORT} --release --public"

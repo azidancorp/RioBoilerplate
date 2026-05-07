@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -168,6 +169,16 @@ def _bucket_count(persistence: Persistence, scope: str) -> int:
     ).fetchone()[0]
 
 
+def _stable_totp_now(secret: str, *, min_seconds_remaining: float = 2.0) -> str:
+    totp = pyotp.TOTP(secret)
+    interval = float(totp.interval)
+    while True:
+        remaining = interval - (time.time() % interval)
+        if remaining >= min_seconds_remaining:
+            return totp.now()
+        time.sleep(remaining + 0.05)
+
+
 def test_disable_mfa_is_rate_limited_after_repeated_bad_passwords(temp_db: Persistence):
     async def scenario():
         user = await _create_user(temp_db, "disable-mfa-limit@example.com")
@@ -187,7 +198,7 @@ def test_disable_mfa_is_rate_limited_after_repeated_bad_passwords(temp_db: Persi
             assert page.error_message == "Invalid password. Please try again."
 
         page.password = "VeryStrongPass!9"
-        page.verification_code = pyotp.TOTP(secret).now()
+        page.verification_code = _stable_totp_now(secret)
         await DisableMFA._on_totp_entered(page)
 
         assert "Too many two-factor disable attempts." in page.error_message
@@ -215,7 +226,7 @@ def test_disable_mfa_success_clears_rate_limit_bucket(temp_db: Persistence):
         assert _bucket_count(temp_db, "mfa_disable") == 1
 
         page.password = "VeryStrongPass!9"
-        page.verification_code = pyotp.TOTP(secret).now()
+        page.verification_code = _stable_totp_now(secret)
         await DisableMFA._on_totp_entered(page)
 
         assert _bucket_count(temp_db, "mfa_disable") == 0
@@ -243,7 +254,7 @@ def test_enable_mfa_is_rate_limited_after_repeated_bad_passwords(temp_db: Persis
             assert page.error_message == "Invalid password. Please try again."
 
         page.password = "VeryStrongPass!9"
-        page.verification_code = pyotp.TOTP(secret).now()
+        page.verification_code = _stable_totp_now(secret)
         await EnableMFA._on_totp_entered(page)
 
         assert "Too many two-factor setup attempts." in page.error_message
@@ -271,7 +282,7 @@ def test_enable_mfa_success_clears_rate_limit_bucket(temp_db: Persistence):
         assert _bucket_count(temp_db, "mfa_enable") == 1
 
         page.password = "VeryStrongPass!9"
-        page.verification_code = pyotp.TOTP(secret).now()
+        page.verification_code = _stable_totp_now(secret)
         await EnableMFA._on_totp_entered(page)
 
         assert _bucket_count(temp_db, "mfa_enable") == 0
@@ -302,7 +313,7 @@ def test_recovery_code_regeneration_is_rate_limited_after_bad_passwords(
             assert page.error_message == "Invalid password. Please try again."
 
         page.password = "VeryStrongPass!9"
-        page.verification_code = pyotp.TOTP(secret).now()
+        page.verification_code = _stable_totp_now(secret)
         await ManageRecoveryCodes._on_generate_pressed(page)
 
         assert "Too many recovery-code attempts." in page.error_message
@@ -332,7 +343,7 @@ def test_recovery_code_regeneration_success_clears_rate_limit_bucket(
         assert _bucket_count(temp_db, "recovery_codes_regenerate") == 1
 
         page.password = "VeryStrongPass!9"
-        page.verification_code = pyotp.TOTP(secret).now()
+        page.verification_code = _stable_totp_now(secret)
         await ManageRecoveryCodes._on_generate_pressed(page)
 
         assert _bucket_count(temp_db, "recovery_codes_regenerate") == 0

@@ -54,6 +54,7 @@ def create_user_table(persistence: SchemaPersistence) -> None:
             created_at REAL NOT NULL,
             password_hash BLOB,
             password_salt BLOB,
+            password_scheme TEXT NOT NULL DEFAULT 'pbkdf2_sha256',
             auth_provider TEXT NOT NULL DEFAULT 'password',
             auth_provider_id TEXT,
             role TEXT NOT NULL,
@@ -67,7 +68,20 @@ def create_user_table(persistence: SchemaPersistence) -> None:
         )
     """
     )
+    _ensure_user_password_scheme_column(cursor)
     conn.commit()
+
+
+def _ensure_user_password_scheme_column(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("PRAGMA table_info(users)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if "password_scheme" not in existing_columns:
+        cursor.execute(
+            """
+            ALTER TABLE users
+            ADD COLUMN password_scheme TEXT NOT NULL DEFAULT 'pbkdf2_sha256'
+            """
+        )
 
 
 def create_user_indexes(persistence: SchemaPersistence) -> None:

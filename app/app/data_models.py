@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import hashlib
-import os
-import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 import typing as t
 import rio
+from app import passwords as password_utils
 from app.permissions import get_default_role
 from app.currency import (
     get_currency_config,
@@ -62,6 +60,7 @@ class AppUser:
     # curious.
     password_hash: bytes | None
     password_salt: bytes | None
+    password_scheme: str = password_utils.HASH_SCHEME_PBKDF2_SHA256
     auth_provider: str = "password"
     auth_provider_id: str | None = None
     role: str = get_default_role()  # Dynamically set from permissions.ROLE_HIERARCHY
@@ -121,33 +120,42 @@ class AppUser:
             referral_code: Optional referral code used during sign-up
         """
 
-        password_salt = os.urandom(64)
+        password_hash, password_salt, password_scheme = password_utils.hash_password(password)
 
         return AppUser(
             id=uuid.uuid4(),
             email=email.lower().strip(),
             username=username,
             created_at=datetime.now(timezone.utc),
-        password_hash=cls.get_password_hash(password, password_salt),
-        password_salt=password_salt,
-        auth_provider="password",
-        role=get_default_role(),
-        is_verified=False,
-        referral_code=referral_code,
-        primary_currency_balance=get_currency_config().initial_balance,
-        primary_currency_updated_at=datetime.now(timezone.utc),
-    )
+            password_hash=password_hash,
+            password_salt=password_salt,
+            password_scheme=password_scheme,
+            auth_provider="password",
+            role=get_default_role(),
+            is_verified=False,
+            referral_code=referral_code,
+            primary_currency_balance=get_currency_config().initial_balance,
+            primary_currency_updated_at=datetime.now(timezone.utc),
+        )
 
     @classmethod
     def get_password_hash(cls, password, password_salt: bytes) -> bytes:
         """
         Compute the hash of a password using a given salt.
         """
-        return hashlib.pbkdf2_hmac(
-            hash_name="sha256",
-            password=password.encode("utf-8"),
-            salt=password_salt,
-            iterations=100000,
+        return password_utils.legacy_pbkdf2_password_hash(password, password_salt)
+
+    def verify_password_result(
+        self,
+        password: str,
+    ) -> password_utils.PasswordVerificationResult:
+        if self.auth_provider != "password":
+            return password_utils.PasswordVerificationResult(ok=False)
+        return password_utils.verify_password(
+            password,
+            self.password_hash,
+            self.password_salt,
+            self.password_scheme,
         )
 
     def verify_password(self, password: str) -> bool:
@@ -155,14 +163,7 @@ class AppUser:
         Safely compare a password to the stored hash. This differs slightly from
         the `==` operator in that it is resistant to timing attacks.
         """
-        if self.password_hash is None or self.password_salt is None:
-            return False
-        if self.auth_provider != "password":
-            return False
-        return secrets.compare_digest(
-            self.password_hash,
-            self.get_password_hash(password, self.password_salt),
-        )
+        return self.verify_password_result(password).ok
 
 
 @dataclass

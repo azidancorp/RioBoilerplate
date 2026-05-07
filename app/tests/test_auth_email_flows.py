@@ -109,8 +109,20 @@ def test_password_reset_token_is_hashed_and_single_use(temp_db: Persistence):
         owner = await temp_db.get_user_by_reset_token(reset_token.token)
         assert owner.id == user.id
 
-        assert await temp_db.consume_reset_token(reset_token.token, user.id) is True
-        assert await temp_db.consume_reset_token(reset_token.token, user.id) is False
+        assert await temp_db.consume_reset_token_and_update_password(
+            reset_token.token,
+            user.id,
+            "new-password",
+        ) is True
+        assert await temp_db.consume_reset_token_and_update_password(
+            reset_token.token,
+            user.id,
+            "another-password",
+        ) is False
+
+        refreshed_user = await temp_db.get_user_by_id(user.id)
+        assert refreshed_user.verify_password("new-password")
+        assert not refreshed_user.verify_password("password")
 
     asyncio.run(scenario())
 

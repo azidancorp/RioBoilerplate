@@ -11,3 +11,4 @@ matplotlib
 requests
 pytest
 httpx
+pwdlib[argon2]

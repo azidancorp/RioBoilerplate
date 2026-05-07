@@ -168,6 +168,7 @@ class Persistence:
                     created_at,
                     password_hash,
                     password_salt,
+                    password_scheme,
                     auth_provider,
                     auth_provider_id,
                     role,
@@ -179,7 +180,7 @@ class Persistence:
                     primary_currency_balance,
                     primary_currency_updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(user.id),
@@ -188,6 +189,7 @@ class Persistence:
                     user.created_at.timestamp(),
                     user.password_hash,
                     user.password_salt,
+                    user.password_scheme,
                     user.auth_provider,
                     user.auth_provider_id,
                     assigned_role,
@@ -385,6 +387,22 @@ class Persistence:
     async def update_password(self, user_id: uuid.UUID, new_password: str) -> None:
         await persistence_auth.update_password(self, user_id, new_password)
 
+    async def upgrade_user_password_hash(self, user_id: uuid.UUID, password: str) -> AppUser:
+        return await persistence_auth.upgrade_user_password_hash(self, user_id, password)
+
+    async def consume_reset_token_and_update_password(
+        self,
+        token: str,
+        user_id: uuid.UUID,
+        new_password: str,
+    ) -> bool:
+        return await persistence_auth.consume_reset_token_and_update_password(
+            self,
+            token,
+            user_id,
+            new_password,
+        )
+
     async def update_notification_preferences(
         self, user_id: uuid.UUID,
         email_notifications_enabled: bool | None = None,
@@ -401,9 +419,6 @@ class Persistence:
 
     async def get_user_by_reset_token(self, token: str) -> AppUser:
         return await persistence_auth.get_user_by_reset_token(self, token)
-
-    async def consume_reset_token(self, token: str, user_id: uuid.UUID) -> bool:
-        return await persistence_auth.consume_reset_token(self, token, user_id)
 
     async def clear_reset_tokens(self, user_id: uuid.UUID) -> None:
         await persistence_auth.clear_reset_tokens(self, user_id)

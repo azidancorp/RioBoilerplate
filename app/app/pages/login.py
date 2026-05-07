@@ -149,7 +149,8 @@ class LoginForm(rio.Component):
                 return
 
             # Make sure their password matches
-            if not user_info.verify_password(self.password):
+            password_result = user_info.verify_password_result(self.password)
+            if not password_result.ok:
                 self.pending_verification_email = ""
                 self.banner_style = "danger"
                 self.error_message = "Invalid email or password. Please try again."
@@ -191,6 +192,12 @@ class LoginForm(rio.Component):
                 pers.clear_rate_limit(scope=login_mfa_policy().scope, key=mfa_key)
 
             # The login was successful
+            if password_result.needs_rehash:
+                user_info = await pers.upgrade_user_password_hash(
+                    user_info.id,
+                    self.password,
+                )
+
             self.pending_verification_email = ""
             self.banner_style = "danger"
             self.error_message = ""
@@ -945,15 +952,18 @@ class ResetPasswordForm(rio.Component):
                 return
             pers.clear_rate_limit(scope=password_reset_mfa_policy().scope, key=mfa_key)
 
-        consumed = await pers.consume_reset_token(sanitized_token, user.id)
-        if not consumed:
-            self._set_banner("danger", "Reset token has already been used. Please request a new one.")
-            return
-
         try:
-            await pers.update_password(user.id, self.new_password)
+            consumed = await pers.consume_reset_token_and_update_password(
+                sanitized_token,
+                user.id,
+                self.new_password,
+            )
         except Exception:
             self._set_banner("danger", "Failed to update password. Please request a new token and try again.")
+            return
+
+        if not consumed:
+            self._set_banner("danger", "Reset token has already been used. Please request a new one.")
             return
 
         self._set_banner(

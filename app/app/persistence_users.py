@@ -14,6 +14,7 @@ USER_SELECT_COLUMN_NAMES = (
     "created_at",
     "password_hash",
     "password_salt",
+    "password_scheme",
     "auth_provider",
     "auth_provider_id",
     "role",
@@ -57,7 +58,11 @@ def _get_connection(persistence: UsersPersistence) -> sqlite3.Connection:
 def _row_to_app_user(row: tuple) -> AppUser:
     """Convert a database row into an AppUser instance."""
     cfg = get_currency_config()
-    updated_at_ts = row[15] if len(row) > 15 else None
+    has_password_scheme = len(row) >= len(USER_SELECT_COLUMN_NAMES)
+    password_scheme = row[6] if has_password_scheme else "pbkdf2_sha256"
+    auth_provider_index = 7 if has_password_scheme else 6
+    updated_at_index = 16 if has_password_scheme else 15
+    updated_at_ts = row[updated_at_index] if len(row) > updated_at_index else None
     updated_at = (
         datetime.fromtimestamp(updated_at_ts, tz=timezone.utc)
         if updated_at_ts
@@ -70,17 +75,27 @@ def _row_to_app_user(row: tuple) -> AppUser:
         created_at=datetime.fromtimestamp(row[3], tz=timezone.utc),
         password_hash=row[4],
         password_salt=row[5],
-        auth_provider=row[6],
-        auth_provider_id=row[7],
-        role=row[8],
-        is_verified=bool(row[9]),
-        two_factor_secret=row[10],
-        referral_code=row[11],
-        email_notifications_enabled=bool(row[12]) if len(row) > 12 else True,
-        sms_notifications_enabled=bool(row[13]) if len(row) > 13 else False,
+        password_scheme=password_scheme,
+        auth_provider=row[auth_provider_index],
+        auth_provider_id=row[auth_provider_index + 1],
+        role=row[auth_provider_index + 2],
+        is_verified=bool(row[auth_provider_index + 3]),
+        two_factor_secret=row[auth_provider_index + 4],
+        referral_code=row[auth_provider_index + 5],
+        email_notifications_enabled=(
+            bool(row[auth_provider_index + 6])
+            if len(row) > auth_provider_index + 6
+            else True
+        ),
+        sms_notifications_enabled=(
+            bool(row[auth_provider_index + 7])
+            if len(row) > auth_provider_index + 7
+            else False
+        ),
         primary_currency_balance=(
-            int(row[14])
-            if len(row) > 14 and row[14] is not None
+            int(row[auth_provider_index + 8])
+            if len(row) > auth_provider_index + 8
+            and row[auth_provider_index + 8] is not None
             else cfg.initial_balance
         ),
         primary_currency_updated_at=updated_at,

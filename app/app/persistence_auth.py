@@ -10,6 +10,7 @@ from typing import Protocol
 
 import pyotp
 
+from app import passwords as password_utils
 from app.config import config
 from app.data_models import (
     AppUser,
@@ -601,30 +602,157 @@ async def update_password(
 
     `KeyError`: If the user does not exist
     """
+    # Generate new password hash and salt using the current password scheme.
+    # TODO: Enforce minimum password strength once QA convenience window closes.
+    password_hash, password_salt, password_scheme = password_utils.hash_password(new_password)
+    conn = _get_connection(persistence)
+    cursor = persistence._get_cursor()
+    now = datetime.now(timezone.utc).timestamp()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, password_salt = ?, password_scheme = ?
+            WHERE id = ?
+            """,
+            (password_hash, password_salt, password_scheme, str(user_id)),
+        )
+        if cursor.rowcount == 0:
+            raise KeyError(user_id)
+
+        cursor.execute(
+            "UPDATE user_sessions SET valid_until = ? WHERE user_id = ?",
+            (now, str(user_id)),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+
+async def upgrade_user_password_hash(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+    password: str,
+) -> AppUser:
     conn = _get_connection(persistence)
     cursor = persistence._get_cursor()
 
-    # First verify the user exists
-    await persistence.get_user_by_id(user_id)
+    current_user = await persistence.get_user_by_id(user_id)
+    result = current_user.verify_password_result(password)
+    if not result.ok:
+        raise ValueError("Password verification failed during hash upgrade")
+    if not result.needs_rehash:
+        return current_user
 
-    # Generate new password hash and salt using AppUser's method
-    # TODO: Enforce minimum password strength once QA convenience window closes.
-    password_salt = secrets.token_bytes(64)
-    password_hash = AppUser.get_password_hash(new_password, password_salt)
+    password_hash, password_salt, password_scheme = password_utils.hash_password(password)
 
-    # Update the password in database
-    cursor.execute(
-        """
-        UPDATE users
-        SET password_hash = ?, password_salt = ?
-        WHERE id = ?
-        """,
-        (password_hash, password_salt, str(user_id)),
-    )
-    conn.commit()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            f"""
+            SELECT {get_user_select_columns()}
+            FROM users
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (str(user_id),),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise KeyError(user_id)
 
-    # Invalidate all existing sessions for security
-    await invalidate_all_sessions(persistence, user_id)
+        user = _row_to_app_user(row)
+        result = user.verify_password_result(password)
+        if not result.ok:
+            raise ValueError("Password verification failed during hash upgrade")
+        if not result.needs_rehash:
+            conn.rollback()
+            return user
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, password_salt = ?, password_scheme = ?
+            WHERE id = ?
+            """,
+            (password_hash, password_salt, password_scheme, str(user_id)),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+    return await persistence.get_user_by_id(user_id)
+
+
+async def consume_reset_token_and_update_password(
+    persistence: AuthPersistence,
+    token: str,
+    user_id: uuid.UUID,
+    new_password: str,
+) -> bool:
+    password_hash, password_salt, password_scheme = password_utils.hash_password(new_password)
+    token_hash = _hash_one_time_token(token)
+    now = datetime.now(timezone.utc)
+    now_ts = now.timestamp()
+    conn = _get_connection(persistence)
+    cursor = persistence._get_cursor()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            """
+            SELECT user_id, valid_until
+            FROM password_reset_tokens
+            WHERE token_hash = ?
+            """,
+            (token_hash,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+
+        token_user_id = uuid.UUID(row[0])
+        valid_until = datetime.fromtimestamp(row[1], tz=timezone.utc)
+        if token_user_id != user_id or valid_until <= now:
+            cursor.execute(
+                "DELETE FROM password_reset_tokens WHERE token_hash = ?",
+                (token_hash,),
+            )
+            conn.commit()
+            return False
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, password_salt = ?, password_scheme = ?
+            WHERE id = ?
+            """,
+            (password_hash, password_salt, password_scheme, str(user_id)),
+        )
+        if cursor.rowcount == 0:
+            raise KeyError(user_id)
+
+        cursor.execute(
+            "DELETE FROM password_reset_tokens WHERE token_hash = ?",
+            (token_hash,),
+        )
+        cursor.execute(
+            "UPDATE user_sessions SET valid_until = ? WHERE user_id = ?",
+            (now_ts, str(user_id)),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 async def create_reset_token(
@@ -726,42 +854,6 @@ async def get_user_by_reset_token(
 
     # Get and return the associated user
     return await persistence.get_user_by_id(uuid.UUID(row[0]))
-
-
-async def consume_reset_token(
-    persistence: AuthPersistence,
-    token: str,
-    user_id: uuid.UUID,
-) -> bool:
-    """
-    Delete a password reset token after successful use.
-
-    Returns True when the token was removed; False when the token was missing.
-    """
-    conn = _get_connection(persistence)
-    hashed_token = _hash_one_time_token(token)
-    cursor = persistence._get_cursor()
-
-    conn.execute("BEGIN IMMEDIATE")
-
-    try:
-        cursor.execute(
-            """
-            DELETE FROM password_reset_tokens
-            WHERE token_hash = ? AND user_id = ?
-            """,
-            (hashed_token, str(user_id)),
-        )
-
-        if cursor.rowcount != 1:
-            conn.rollback()
-            return False
-
-        conn.commit()
-        return True
-    except Exception:
-        conn.rollback()
-        raise
 
 
 async def clear_reset_tokens(

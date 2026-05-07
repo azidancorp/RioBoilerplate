@@ -129,8 +129,12 @@ class Persistence:
 
     # Spans users + profiles + currency ledger; must stay transactional.
     async def create_user(self, user: AppUser) -> None:
-        if config.REQUIRE_VALID_EMAIL:
-            SecuritySanitizer.validate_email_format(user.email, require_valid=True)
+        # Even future username-only/anonymous mode should pass through this
+        # validator; REQUIRE_VALID_EMAIL=False relaxes syntax, not safety checks.
+        user.email = SecuritySanitizer.validate_email_format(
+            user.email,
+            require_valid=config.REQUIRE_VALID_EMAIL,
+        )
 
         self._ensure_connection()
         if self.conn is None:

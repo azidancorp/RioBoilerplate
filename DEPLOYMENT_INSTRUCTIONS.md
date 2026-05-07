@@ -197,7 +197,8 @@ nano .env
 ADMIN_DELETION_PASSWORD="<strong admin password>"
 ```
 
-> **Note:** Other configuration settings (email validation, currency names, password policy) are hardcoded in `app/app/config.py`. Edit that file directly to customize behavior.
+> **Note:** Other behavior settings (email validation, username login, currency names, password policy) are hardcoded in `app/app/config.py`. Edit that file directly to customize behavior. See `docs/configuration/email-validation.md` for the email/username validation knobs.
+> **Note:** Email provider host/sender/TLS defaults also live in `app/app/config.py`; only credential/secret values such as `RIO_SMTP_PASSWORD` belong in `.env`.
 > **Note:** The SQLite database file is created locally on first run at `app/app/data/app.db` and is not intended to be committed.
 
 ## Step 4: Test Application
@@ -610,8 +611,8 @@ ufw allow OpenSSH
 /root/[APP_NAME]/
 ├── app/                    # Main application files
 │   ├── rio.toml           # Rio configuration
-│   ├── main.py            # Application entry point
-│   └── ...                # Other app files
+│   └── app/
+│       └── __init__.py    # Rio app bootstrap + FastAPI bridge
 └── venv/                  # Python virtual environment
     ├── bin/
     ├── lib/

@@ -74,7 +74,7 @@ async def get_profile(
     Any authenticated user can view any profile. Extension ideas: visibility settings,
     connection checks, metadata (connection status, mutual friends).
 
-    Raises: 401 (auth fails), 403 (private profile), 404 (not found), 422 (invalid ID).
+    Raises: 401 (auth fails), 404 (not found), 422 (invalid ID).
     """
     # Validate and sanitize user_id
     try:
@@ -91,9 +91,6 @@ async def get_profile(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid user ID format"
         )
-
-    # NOTE: For visibility: check profile.is_public, raise 403 if private and not
-    # (self-access or admin)
 
     profile = await db.get_profile_by_user_id(sanitized_user_id)
 

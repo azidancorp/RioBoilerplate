@@ -5,7 +5,7 @@ Production-ready Rio web application template featuring session-based authentica
 ## Highlights
 - Auth & security: login, password reset, role-based guards, MFA toggles, recovery codes, admin-only operations.
 - API layer: FastAPI routers for profile data, shared validation in `app/app/validation.py`, persistence helpers for SQLite.
-- UI experience: Rio pages for public marketing routes and protected app area, shared layout elements, Plotly/Matplotlib chart support.
+- UI experience: Rio pages for public marketing routes and protected app area, shared layout elements, and Plotly chart support.
 - Built-in primary currency system with configurable naming, precision, admin tooling, and ledger history.
 - Developer ergonomics: Example scripts, bundled Rio documentation, and deployment playbooks for quick onboarding.
 
@@ -56,6 +56,7 @@ Access the dev server at `http://localhost:8000`. Use `rio run --port 8000 --rel
 ## Configuration
 - `.env` is for secrets only. In the stock boilerplate, the main secret is `ADMIN_DELETION_PASSWORD`.
 - Non-secret behavior stays code-configured in `app/app/config.py`. Edit that file directly for app-specific defaults such as email validation, username login, password policy, and currency naming/precision.
+- Email validation and username-login behavior are documented in `docs/configuration/email-validation.md`.
 - The runtime SQLite database file `app/app/data/app.db` is created locally on first run and is ignored by git.
 
 ## Currency System
@@ -93,7 +94,7 @@ RioBoilerplate/
 Focus release verification on:
 - Registration, login, and role-based routing.
 - Enabling/disabling MFA and using recovery codes.
-- Profile CRUD via the UI and `/api/profiles`.
+- Profile update via the UI and profile CRUD via `/api/profiles`.
 - Error handling across contact flows and API responses.
 - Currency adjustments: verify admin operations, ledger history, and `/api/currency/*` behaviour (positive & negative paths).
 

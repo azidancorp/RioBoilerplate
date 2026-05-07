@@ -115,15 +115,15 @@ class SecuritySanitizer:
     @staticmethod
     def validate_email_format(email: str, require_valid: bool | None = None) -> str:
         """
-        Validate and normalize an email address.
+        Validate and normalize an email address or relaxed identifier.
         
         Args:
-            email: Email address to validate
+            email: Email address or identifier to validate.
             require_valid: If True, enforces strict email validation. If False, only checks
                           for dangerous patterns. If None, uses global config setting.
             
         Returns:
-            Validated email address
+            Normalized email address or identifier.
         """
         email = str(email).strip()
 
@@ -478,4 +478,3 @@ class CurrencySetBalanceRequest(BaseModel):
         if value is None:
             return None
         return SecuritySanitizer.sanitize_string(value, 200)
-

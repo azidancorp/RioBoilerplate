@@ -81,7 +81,8 @@ async def get_current_session(
     """
     Validate Bearer token from Authorization header and return UserSession.
 
-    Raises HTTPException 401 if token is missing, invalid, or expired.
+    Raises HTTPException 401 if token is missing, invalid, or expired. Repeated
+    authentication failures may raise 429 with a Retry-After header.
     """
     # Check if Authorization header is present
     if not authorization:

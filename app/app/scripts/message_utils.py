@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import smtplib
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -92,11 +91,12 @@ def _notify_contact_submission(submission: Dict[str, Any]) -> None:
 
     send_ntfy_message(
         message=f"{subject}\n\n{body}",
-        channel=os.getenv("RIO_CONTACT_NTFY_CHANNEL"),
-        priority=os.getenv("RIO_CONTACT_NTFY_PRIORITY"),
+        channel=config.CONTACT_NTFY_CHANNEL,
+        priority=config.CONTACT_NTFY_PRIORITY,
     )
 
 
+# TODO: Move reset/verification email bodies to Jinja templates with render tests; keep token-only links and outbox fallback.
 def send_email_verification_email(
     *,
     recipient: str,
@@ -172,7 +172,7 @@ def send_email(
             detail="Email subject must not be empty.",
         )
 
-    sender_address = (sender or os.getenv("RIO_DEFAULT_EMAIL_SENDER") or "no-reply@rio.local").strip()
+    sender_address = (sender or config.DEFAULT_EMAIL_SENDER or "no-reply@rio.local").strip()
     if not sender_address:
         sender_address = "no-reply@rio.local"
 
@@ -182,19 +182,14 @@ def send_email(
     message["Subject"] = subject
     message.set_content(body)
 
-    smtp_host = os.getenv("RIO_SMTP_HOST")
+    smtp_host = config.SMTP_HOST
     if smtp_host:
-        smtp_port = int(os.getenv("RIO_SMTP_PORT", "587"))
-        username = os.getenv("RIO_SMTP_USERNAME")
-        password = os.getenv("RIO_SMTP_PASSWORD")
-        use_tls = os.getenv("RIO_SMTP_USE_TLS", "true").lower() not in {"0", "false", "no"}
-
         try:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as smtp:
-                if use_tls:
+            with smtplib.SMTP(smtp_host, config.SMTP_PORT, timeout=10) as smtp:
+                if config.SMTP_USE_TLS:
                     smtp.starttls()
-                if username and password:
-                    smtp.login(username, password)
+                if config.SMTP_USERNAME and config.SMTP_PASSWORD:
+                    smtp.login(config.SMTP_USERNAME, config.SMTP_PASSWORD)
                 smtp.send_message(message)
                 logger.info("Sent email via SMTP to %s", sanitized_recipient)
                 return
@@ -230,16 +225,16 @@ def send_ntfy_message(
 ) -> None:
     """Send a notification to an ntfy topic.
 
-    Security: This function requires explicit configuration via environment variables.
-    When RIO_CONTACT_NTFY_CHANNEL is not set, notifications are disabled to prevent
+    Security: This function requires explicit channel configuration.
+    When CONTACT_NTFY_CHANNEL is not set, notifications are disabled to prevent
     accidental data leaks to public ntfy channels.
     """
     # Security: Require explicit channel configuration to prevent PII leaks
     if not channel:
         logger.warning(
-            "NTFY NOTIFICATIONS DISABLED: RIO_CONTACT_NTFY_CHANNEL environment variable "
-            "is not set. Contact form submissions will be saved locally but no notifications "
-            "will be sent. Set RIO_CONTACT_NTFY_CHANNEL to enable ntfy notifications."
+            "NTFY NOTIFICATIONS DISABLED: CONTACT_NTFY_CHANNEL is not configured. "
+            "Contact form submissions will be saved locally but no notifications "
+            "will be sent."
         )
         return
 

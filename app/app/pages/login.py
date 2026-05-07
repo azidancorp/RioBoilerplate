@@ -369,9 +369,9 @@ class SignUpForm(rio.Component):
     """
     Provides interface for users to sign up for a new account.
 
-    Email addresses are treated as the primary identifier. Usernames can be
-    layered on in future use-cases without rewriting this form because the
-    backend exposes both email and username lookups.
+    Email addresses are treated as the primary identifier. Username-only signup
+    is reserved for a deliberate future anonymous-app mode; it needs matching
+    UI copy plus reset/verification-flow changes before shipping.
     """
 
     # Fields
@@ -414,15 +414,19 @@ class SignUpForm(rio.Component):
             self.is_email_valid = False
             return
 
-        # BACKEND VALIDATION: Enforce email validation if configured
-        if config.REQUIRE_VALID_EMAIL:
-            try:
-                SecuritySanitizer.validate_email_format(self.email, require_valid=True)
-            except Exception as e:
-                self.banner_style = "danger"
-                self.error_message = f"Invalid email: {str(e.detail if hasattr(e, 'detail') else e)}"
-                self.is_email_valid = False
-                return
+        # BACKEND VALIDATION: Always run through the central email/identifier
+        # validator. The config controls strict email syntax, not safety checks.
+        # Relaxed identifier mode is not the default for current apps.
+        try:
+            self.email = SecuritySanitizer.validate_email_format(
+                self.email,
+                require_valid=config.REQUIRE_VALID_EMAIL,
+            )
+        except Exception as e:
+            self.banner_style = "danger"
+            self.error_message = f"Invalid email: {str(e.detail if hasattr(e, 'detail') else e)}"
+            self.is_email_valid = False
+            return
 
         # Check if the passwords match
         if self.password != self.confirm_password:
@@ -1033,8 +1037,8 @@ class ResetPasswordForm(rio.Component):
                     rio.Text(
                         f'Passwords match: {self.do_passwords_match}',
                         style=rio.TextStyle(
-                            fill=rio.Color.from_rgb(0, 1, 0)
-                            if self.do_passwords_match else rio.Color.from_rgb(1, 0, 0)
+                            fill=rio.Color.from_rgb(0, 1, 0, srgb=True)
+                            if self.do_passwords_match else rio.Color.from_rgb(1, 0, 0, srgb=True)
                         ),
                     ),
                     rio.Text(

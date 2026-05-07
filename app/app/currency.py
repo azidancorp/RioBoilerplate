@@ -20,7 +20,7 @@ getcontext().prec = 28
 
 @dataclass(frozen=True)
 class CurrencyConfig:
-    """Snapshot of currency metadata loaded from AppConfig/environment."""
+    """Snapshot of currency metadata loaded from AppConfig code defaults."""
 
     name: str
     name_plural: str

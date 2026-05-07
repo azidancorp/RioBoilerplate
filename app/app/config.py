@@ -27,21 +27,19 @@ class AppConfig:
     # Email Validation Settings
     # -------------------------
     # If True, enforces strict email validation during signup and profile updates.
-    # If False, allows any string as an email (useful for username-based apps).
+    # If False, allows non-email identifiers but still applies central length and
+    # suspicious-pattern checks in SecuritySanitizer.validate_email_format().
+    # Keep this True for current email-based apps. Set it False only for a
+    # deliberate future anonymous/identifier-only product, with UI copy,
+    # reset/verification flows, duplicate checks, and tests updated together.
     REQUIRE_VALID_EMAIL: bool = True
 
     # Authentication Settings
     # -----------------------
     # If True, users can log in using their username in addition to email.
-    # This is already supported in the backend via get_user_by_identity().
+    # This only affects lookup fallback for usernames already stored on users.
+    # The stock signup UI remains email-first.
     ALLOW_USERNAME_LOGIN: bool = False
-
-    # Primary Identifier
-    # ------------------
-    # Determines which field is the primary identifier for users.
-    # Options: "email" or "username"
-    # Note: Even if set to "username", email field is still stored but not validated.
-    PRIMARY_IDENTIFIER: str = "email"
 
     # Currency Settings
     # -----------------
@@ -73,6 +71,24 @@ class AppConfig:
     # -----------------------
     # REQUIRED for admin user deletion operations. Set via ADMIN_DELETION_PASSWORD env var.
     ADMIN_DELETION_PASSWORD: str = ""
+
+    # Email Delivery
+    # --------------
+    # Non-secret delivery defaults live here so deployments can review behavior
+    # in code. Only credential/secret values are loaded from .env.
+    DEFAULT_EMAIL_SENDER: str = "no-reply@rio.local"
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USE_TLS: bool = True
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+
+    # Contact Notifications
+    # ---------------------
+    # The ntfy channel can act like a secret destination for contact-message PII,
+    # so it is loaded from env. Non-secret display behavior stays code-configured.
+    CONTACT_NTFY_CHANNEL: str = ""
+    CONTACT_NTFY_PRIORITY: str = "default"
 
     # Rate Limiting
     # -------------
@@ -110,24 +126,21 @@ class AppConfig:
     RATE_LIMIT_TRUST_PROXY_HEADERS: bool = False
     RATE_LIMIT_TRUSTED_PROXIES: str = "127.0.0.1,::1"
 
-    # External Services
-    # -----------------
-    # NTFY notification channel (optional, set via env). If not set, contact notifications
-    # are disabled. Priority can also be set: RIO_CONTACT_NTFY_PRIORITY=default
-
     @classmethod
     def from_env(cls) -> "AppConfig":
         """
-        Create configuration from environment variables.
+        Create configuration with secrets loaded from environment variables.
 
-        This allows runtime configuration via .env file or system environment.
+        Non-secret behavior defaults are intentionally edited in this module.
         """
         return cls(
             ADMIN_DELETION_PASSWORD=os.getenv("ADMIN_DELETION_PASSWORD", ""),
+            SMTP_PASSWORD=os.getenv("RIO_SMTP_PASSWORD", ""),
+            CONTACT_NTFY_CHANNEL=os.getenv("RIO_CONTACT_NTFY_CHANNEL", ""),
         )
 
 
-# Global configuration instance — populated from environment variables
+# Global configuration instance with environment-provided secrets applied.
 config = AppConfig.from_env()
 
 if not config.ADMIN_DELETION_PASSWORD:

@@ -4,10 +4,9 @@ Tests for currency balance reconciliation and data integrity.
 These tests verify that the stored balance (users.primary_currency_balance)
 always matches the sum of ledger deltas (user_currency_ledger.delta).
 
-REQUIRED METHODS (to be implemented in app.persistence.Persistence):
+Covered Persistence methods:
     - verify_currency_balance(user_id, *, auto_fix=False) -> dict
     - verify_all_balances(*, auto_fix=False) -> dict
-
 """
 
 import asyncio

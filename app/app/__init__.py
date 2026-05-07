@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load secret values from .env file.
 load_dotenv()
 
 import rio

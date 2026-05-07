@@ -47,11 +47,12 @@ For detailed merge instructions and conflict resolution, see `UPSTREAM_MERGE_GUI
 5. Run the app from `app/`: `rio run`. The first registered user is promoted to the `root` role.
 6. On first run, the app creates a local SQLite database at `app/app/data/app.db`. This file is ignored by git and should remain a local runtime artifact.
 
-Access the dev server at `http://localhost:8000`. Use `rio run --port 8000 --release` to mirror production settings.
+Access the dev server at `http://localhost:8000`. Use `rio run --port 8000 --release` to mirror production settings. Replace `8000` with the port you actually chose when checking a different local run.
 
 ## Everyday Development
 - `rio run` – hot-reloading dev server.
 - `rio run --port 8000 --release` – release-mode smoke test.
+- `curl -fsS http://127.0.0.1:8000/api/health` – machine-readable health check for the running app and local SQLite schema.
 
 ## Configuration
 - `.env` is for secrets only. In the stock boilerplate, the main secret is `ADMIN_DELETION_PASSWORD`.
@@ -97,6 +98,7 @@ Focus release verification on:
 - Profile update via the UI and profile CRUD via `/api/profiles`.
 - Error handling across contact flows and API responses.
 - Currency adjustments: verify admin operations, ledger history, and `/api/currency/*` behaviour (positive & negative paths).
+- Release health check: `curl -fsS http://127.0.0.1:8000/api/health` against the port used for that run.
 
 ## Further Reading
 - `AGENTS.md` – contributor workflow and coding standards.

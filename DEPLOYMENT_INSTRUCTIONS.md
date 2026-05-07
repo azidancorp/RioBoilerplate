@@ -212,12 +212,15 @@ source venv/bin/activate
 cd app
 
 # Test application locally
-# Note: --release flag enables production optimizations (faster performance, 
+# Note: --release flag enables production optimizations (faster performance,
 # lower memory usage, and additional safety checks)
-rio run --port 8000 --release
+APP_PORT=8000
+rio run --port "$APP_PORT" --release
 
-# Verify it's working (from another terminal or check logs)
-curl -s http://127.0.0.1:8000 | head
+# Verify it's working from another terminal with the same port value.
+APP_PORT=8000
+curl -fsS "http://127.0.0.1:${APP_PORT}/api/health"
+curl -s "http://127.0.0.1:${APP_PORT}" | head
 
 # Stop the test (Ctrl+C)
 ```
@@ -236,7 +239,10 @@ Starting...
 Running in local mode. Only this device can access the app.
 The app is running at http://127.0.0.1:8000
 
-# curl test output
+# health check output
+{"status":"ok","checks":{"app":"ok","database":"ok","schema":"ok"}}
+
+# homepage curl test output
 <!doctype html>
 <html>
     <head>
@@ -579,6 +585,7 @@ nginx -t && systemctl reload nginx
 **2. Application Not Responding**
 ```bash
 # Check if Rio is binding to port 8000
+curl -fsS http://127.0.0.1:8000/api/health
 curl -s http://127.0.0.1:8000 | head
 
 # Check service logs

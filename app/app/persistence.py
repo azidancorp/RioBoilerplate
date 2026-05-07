@@ -23,12 +23,15 @@ import app.persistence_users as persistence_users
 from app.persistence_schema import initialize_schema
 
 
+DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "app.db"
+
+
 class Persistence:
     """Façade for all database operations. Delegates to persistence_* modules."""
 
     def __init__(
         self,
-        db_path: Path = Path(__file__).resolve().parent / "data" / "app.db",
+        db_path: Path = DEFAULT_DB_PATH,
         *,
         allow_username_login: bool = False,
     ) -> None:

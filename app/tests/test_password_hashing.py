@@ -66,7 +66,7 @@ def test_password_service_verifies_legacy_pbkdf2_and_marks_for_rehash():
     assert not wrong_result.needs_rehash
 
 
-def test_fresh_database_has_password_scheme_column(tmp_path: Path):
+def test_fresh_database_has_user_auth_state_columns(tmp_path: Path):
     persistence = Persistence(db_path=tmp_path / "fresh.db")
     try:
         cursor = persistence._get_cursor()
@@ -76,9 +76,10 @@ def test_fresh_database_has_password_scheme_column(tmp_path: Path):
         persistence.close()
 
     assert "password_scheme" in columns
+    assert "is_active" in columns
 
 
-def test_legacy_database_gets_password_scheme_column(tmp_path: Path):
+def test_legacy_database_gets_user_auth_state_columns(tmp_path: Path):
     db_path = tmp_path / "legacy.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -113,6 +114,7 @@ def test_legacy_database_gets_password_scheme_column(tmp_path: Path):
         persistence.close()
 
     assert "password_scheme" in columns
+    assert "is_active" in columns
 
 
 def test_legacy_database_row_maps_correctly_after_password_scheme_migration(tmp_path: Path):
@@ -188,6 +190,7 @@ def test_legacy_database_row_maps_correctly_after_password_scheme_migration(tmp_
             assert stored.auth_provider == "password"
             assert stored.role == "admin"
             assert stored.is_verified is True
+            assert stored.is_active is True
             assert stored.two_factor_secret == "ABCDEFGHIJKLMNOPQRSTUVWX23456789"
             assert stored.referral_code == "REF123"
             assert stored.email_notifications_enabled is False

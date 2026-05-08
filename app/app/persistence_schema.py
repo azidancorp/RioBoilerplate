@@ -59,6 +59,7 @@ def create_user_table(persistence: SchemaPersistence) -> None:
             auth_provider_id TEXT,
             role TEXT NOT NULL,
             is_verified BOOLEAN NOT NULL DEFAULT 0,
+            is_active BOOLEAN NOT NULL DEFAULT 1,
             two_factor_secret TEXT,
             referral_code TEXT DEFAULT '',
             email_notifications_enabled BOOLEAN NOT NULL DEFAULT 1,
@@ -69,6 +70,7 @@ def create_user_table(persistence: SchemaPersistence) -> None:
     """
     )
     _ensure_user_password_scheme_column(cursor)
+    _ensure_user_is_active_column(cursor)
     conn.commit()
 
 
@@ -80,6 +82,18 @@ def _ensure_user_password_scheme_column(cursor: sqlite3.Cursor) -> None:
             """
             ALTER TABLE users
             ADD COLUMN password_scheme TEXT NOT NULL DEFAULT 'pbkdf2_sha256'
+            """
+        )
+
+
+def _ensure_user_is_active_column(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("PRAGMA table_info(users)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if "is_active" not in existing_columns:
+        cursor.execute(
+            """
+            ALTER TABLE users
+            ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1
             """
         )
 

@@ -135,6 +135,12 @@ async def get_current_user(
     """
     try:
         user = await db.get_user_by_id(session.user_id)
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User account is inactive",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return user
     except KeyError:
         # This should never happen if the session is valid, but handle it anyway

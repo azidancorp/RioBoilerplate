@@ -88,3 +88,33 @@ def test_balance_and_adjust_endpoint(api_test_setup):
     assert response_after.status_code == 200
     data_after = response_after.json()
     assert data_after["balance_minor"] == 25
+
+
+def test_inactive_user_bearer_token_is_rejected(api_test_setup):
+    client, persistence = api_test_setup
+
+    async def scenario():
+        user = AppUser.create_new_user_with_default_settings(
+            email="inactive-api-user@example.com",
+            password="secret",
+        )
+        await persistence.create_user(user)
+        user = await persistence.get_user_by_id(user.id)
+        session = await persistence.create_session(user.id)
+        persistence.conn.execute(
+            "UPDATE users SET is_active = 0 WHERE id = ?",
+            (str(user.id),),
+        )
+        persistence.conn.commit()
+        return session.id
+
+    token = asyncio.run(scenario())
+
+    response = client.get(
+        "/api/currency/balance",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+    assert response.json()["detail"] == "User account is inactive"

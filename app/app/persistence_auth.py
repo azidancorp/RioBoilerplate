@@ -306,6 +306,8 @@ async def create_session(
     now = datetime.now(tz=timezone.utc)
 
     user = await persistence.get_user_by_id(user_id)
+    if not user.is_active:
+        raise KeyError(f"User account is inactive: {user_id}")
 
     session = UserSession(
         id=secrets.token_urlsafe(),
@@ -442,6 +444,9 @@ def get_valid_session_by_auth_token(
         raise KeyError(f"Session expired for auth token {auth_token}")
 
     user = _row_to_app_user(row[5:])
+    if not user.is_active:
+        raise KeyError(f"User account is inactive for auth token {auth_token}")
+
     session = UserSession(
         id=row[0],
         user_id=uuid.UUID(row[1]),
@@ -729,6 +734,19 @@ async def consume_reset_token_and_update_password(
             return False
 
         cursor.execute(
+            "SELECT is_active FROM users WHERE id = ?",
+            (str(user_id),),
+        )
+        user_row = cursor.fetchone()
+        if user_row is None or not bool(user_row[0]):
+            cursor.execute(
+                "DELETE FROM password_reset_tokens WHERE token_hash = ?",
+                (token_hash,),
+            )
+            conn.commit()
+            return False
+
+        cursor.execute(
             """
             UPDATE users
             SET password_hash = ?, password_salt = ?, password_scheme = ?
@@ -777,7 +795,9 @@ async def create_reset_token(
     conn = _get_connection(persistence)
 
     # First verify the user exists
-    await persistence.get_user_by_id(user_id)
+    user = await persistence.get_user_by_id(user_id)
+    if not user.is_active:
+        raise ValueError("Cannot create a reset token for an inactive user.")
 
     # Remove any existing tokens for this user to enforce single-use semantics
     await clear_reset_tokens(persistence, user_id)
@@ -853,7 +873,15 @@ async def get_user_by_reset_token(
         raise KeyError(f"Reset token has expired: {token}")
 
     # Get and return the associated user
-    return await persistence.get_user_by_id(uuid.UUID(row[0]))
+    user = await persistence.get_user_by_id(uuid.UUID(row[0]))
+    if not user.is_active:
+        cursor.execute(
+            "DELETE FROM password_reset_tokens WHERE token_hash = ?",
+            (hashed_token,),
+        )
+        conn.commit()
+        raise KeyError(f"Reset token belongs to an inactive user: {token}")
+    return user
 
 
 async def clear_reset_tokens(
@@ -962,6 +990,19 @@ async def consume_email_verification_token(
             )
             conn.commit()
             raise KeyError("Verification token has expired.")
+
+        cursor.execute(
+            "SELECT is_active FROM users WHERE id = ?",
+            (user_id_str,),
+        )
+        user_row = cursor.fetchone()
+        if user_row is None or not bool(user_row[0]):
+            cursor.execute(
+                "DELETE FROM email_verification_tokens WHERE token_hash = ?",
+                (token_hash,),
+            )
+            conn.commit()
+            raise KeyError("Verification token belongs to an inactive user.")
 
         cursor.execute(
             "DELETE FROM email_verification_tokens WHERE token_hash = ?",

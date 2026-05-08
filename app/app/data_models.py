@@ -65,6 +65,7 @@ class AppUser:
     auth_provider_id: str | None = None
     role: str = get_default_role()  # Dynamically set from permissions.ROLE_HIERARCHY
     is_verified: bool = False
+    is_active: bool = True
 
     # The referral code used during sign-up (if any)
     referral_code: str = ""

@@ -14,6 +14,7 @@ from app.data_models import (
 from app.validation import SecuritySanitizer
 from app.config import config
 from app.permissions import (
+    can_manage_role,
     get_default_role,
     get_first_user_role,
     validate_role,
@@ -150,6 +151,7 @@ class Persistence:
         user: AppUser,
         assigned_role: str,
         now_ts: float,
+        profile_full_name: str | None = None,
     ) -> None:
         if not validate_role(assigned_role):
             raise ValueError(
@@ -171,6 +173,7 @@ class Persistence:
                 auth_provider_id,
                 role,
                 is_verified,
+                is_active,
                 two_factor_secret,
                 referral_code,
                 email_notifications_enabled,
@@ -178,7 +181,7 @@ class Persistence:
                 primary_currency_balance,
                 primary_currency_updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(user.id),
@@ -192,6 +195,7 @@ class Persistence:
                 user.auth_provider_id,
                 assigned_role,
                 user.is_verified,
+                user.is_active,
                 user.two_factor_secret,
                 user.referral_code,
                 user.email_notifications_enabled,
@@ -219,7 +223,11 @@ class Persistence:
             """,
             (
                 str(user.id),
-                user.username or "",
+                (
+                    profile_full_name
+                    if profile_full_name is not None
+                    else user.username or ""
+                ),
                 user.email,
                 None,
                 None,
@@ -240,6 +248,18 @@ class Persistence:
                 actor_user_id=None,
                 created_at=now_ts,
                 commit=False,
+            )
+
+    @staticmethod
+    def _require_admin_actor_can_manage(
+        *,
+        actor: AppUser,
+        target_role: str,
+        action: str,
+    ) -> None:
+        if not can_manage_role(actor.role, target_role):
+            raise PermissionError(
+                f"User with role {actor.role} cannot {action} users with role {target_role}."
             )
 
     # Spans users + profiles + currency ledger; must stay transactional.
@@ -285,6 +305,298 @@ class Persistence:
             raise
 
         user.role = assigned_role
+
+    async def admin_create_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        role: str,
+        actor: AppUser,
+        username: str | None = None,
+        full_name: str | None = None,
+        is_verified: bool = False,
+    ) -> AppUser:
+        """Create a user from the admin surface without public root bootstrap."""
+        if not validate_role(role):
+            raise ValueError(
+                f"Invalid role: {role}. Must be one of: {', '.join(get_all_roles())}"
+            )
+        self._require_admin_actor_can_manage(
+            actor=actor,
+            target_role=role,
+            action="create",
+        )
+
+        if len((password or "").strip()) < 8:
+            raise ValueError("Password must be at least 8 characters.")
+
+        normalized_email = SecuritySanitizer.validate_email_format(
+            email,
+            require_valid=config.REQUIRE_VALID_EMAIL,
+        )
+        sanitized_username = (
+            SecuritySanitizer.sanitize_string(username, 100)
+            if username
+            else None
+        )
+        sanitized_full_name = (
+            SecuritySanitizer.sanitize_string(full_name, 100)
+            if full_name
+            else None
+        )
+
+        user = AppUser.create_new_user_with_default_settings(
+            email=normalized_email,
+            password=password,
+            username=sanitized_username,
+        )
+        user.role = role
+        user.is_verified = is_verified
+        user.is_active = True
+
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        cursor = conn.cursor()
+        now_ts = datetime.now(timezone.utc).timestamp()
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._insert_user_records(
+                cursor,
+                user=user,
+                assigned_role=role,
+                now_ts=now_ts,
+                profile_full_name=sanitized_full_name,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+        return await self.get_user_by_id(user.id)
+
+    async def admin_update_user_profile(
+        self,
+        user_id: uuid.UUID,
+        *,
+        actor: AppUser,
+        email: str | None = None,
+        username: str | None = None,
+        full_name: str | None = None,
+    ) -> AppUser:
+        """Update admin-managed identity fields and the matching profile row."""
+        current_user = await self.get_user_by_id(user_id)
+        self._require_admin_actor_can_manage(
+            actor=actor,
+            target_role=current_user.role,
+            action="edit",
+        )
+        normalized_email = (
+            SecuritySanitizer.validate_email_format(
+                email,
+                require_valid=config.REQUIRE_VALID_EMAIL,
+            )
+            if email is not None
+            else None
+        )
+        sanitized_username = (
+            SecuritySanitizer.sanitize_string(username, 100)
+            if username is not None and username.strip()
+            else None
+        )
+        sanitized_full_name = (
+            SecuritySanitizer.sanitize_string(full_name, 100)
+            if full_name is not None and full_name.strip()
+            else ("" if full_name is not None else None)
+        )
+        email_changed = (
+            normalized_email is not None
+            and normalized_email != current_user.email
+        )
+
+        if normalized_email is None and username is None and full_name is None:
+            return current_user
+
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        cursor = conn.cursor()
+        now_ts = datetime.now(timezone.utc).timestamp()
+        uid = str(user_id)
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            user_fields: list[str] = []
+            user_params: list[t.Any] = []
+            if normalized_email is not None:
+                user_fields.append("email = ?")
+                user_params.append(normalized_email)
+            if username is not None:
+                user_fields.append("username = ?")
+                user_params.append(sanitized_username)
+
+            if user_fields:
+                user_params.append(uid)
+                cursor.execute(
+                    f"UPDATE users SET {', '.join(user_fields)} WHERE id = ?",
+                    user_params,
+                )
+                if cursor.rowcount == 0:
+                    raise KeyError(user_id)
+
+            if email_changed:
+                # Tokens tied to the old address must die: reset links and
+                # verification codes were delivered to the previous mailbox
+                # and are now confused-deputy material.
+                cursor.execute(
+                    "DELETE FROM password_reset_tokens WHERE user_id = ?",
+                    (uid,),
+                )
+                cursor.execute(
+                    "DELETE FROM email_verification_tokens WHERE user_id = ?",
+                    (uid,),
+                )
+                # user_sessions is intentionally NOT cleared here. Email is
+                # the identifier primitive; is_active is the integrity
+                # primitive (see admin_set_user_active, which does revoke
+                # sessions). Treating a clerical email fix as a global
+                # forced-logout would punish typo corrections. If an admin
+                # is rotating the email because of compromise or account
+                # handover, the documented workflow is deactivate → edit →
+                # reactivate, which kills sessions via the deactivation path.
+
+            profile_fields: list[str] = []
+            profile_params: list[t.Any] = []
+            if sanitized_full_name is not None:
+                profile_fields.append("full_name = ?")
+                profile_params.append(sanitized_full_name)
+            if normalized_email is not None:
+                profile_fields.append("email = ?")
+                profile_params.append(normalized_email)
+
+            if profile_fields:
+                cursor.execute("SELECT id FROM profiles WHERE user_id = ?", (uid,))
+                if cursor.fetchone():
+                    profile_fields.append("updated_at = ?")
+                    profile_params.extend([now_ts, uid])
+                    profile_sql = (
+                        "UPDATE profiles "
+                        f"SET {', '.join(profile_fields)} "
+                        "WHERE user_id = ?"
+                    )
+                    cursor.execute(
+                        profile_sql,
+                        profile_params,
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO profiles
+                        (
+                            user_id,
+                            full_name,
+                            email,
+                            phone,
+                            address,
+                            bio,
+                            avatar_url,
+                            created_at,
+                            updated_at
+                        )
+                        VALUES (?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)
+                        """,
+                        (
+                            uid,
+                            sanitized_full_name or sanitized_username or "",
+                            normalized_email or current_user.email,
+                            now_ts,
+                            now_ts,
+                        ),
+                    )
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+        return await self.get_user_by_id(user_id)
+
+    async def admin_set_user_active(
+        self,
+        user_id: uuid.UUID,
+        is_active: bool,
+        *,
+        actor: AppUser,
+    ) -> AppUser:
+        """Activate or deactivate a user, invalidating sessions on deactivation."""
+        current_user = await self.get_user_by_id(user_id)
+        self._require_admin_actor_can_manage(
+            actor=actor,
+            target_role=current_user.role,
+            action="update account status for",
+        )
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        cursor = conn.cursor()
+        uid = str(user_id)
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                "UPDATE users SET is_active = ? WHERE id = ?",
+                (1 if is_active else 0, uid),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(user_id)
+
+            if not is_active:
+                cursor.execute(
+                    "DELETE FROM user_sessions WHERE user_id = ?",
+                    (uid,),
+                )
+                cursor.execute(
+                    "DELETE FROM password_reset_tokens WHERE user_id = ?",
+                    (uid,),
+                )
+                cursor.execute(
+                    "DELETE FROM email_verification_tokens WHERE user_id = ?",
+                    (uid,),
+                )
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+        return await self.get_user_by_id(user_id)
+
+    async def admin_issue_password_reset(
+        self,
+        user_id: uuid.UUID,
+        *,
+        actor: AppUser,
+    ) -> ExpirableVerificationToken:
+        """Create a reset token for an active password-authenticated user."""
+        user = await self.get_user_by_id(user_id)
+        self._require_admin_actor_can_manage(
+            actor=actor,
+            target_role=user.role,
+            action="reset password for",
+        )
+        if not user.is_active:
+            raise ValueError("Cannot issue a password reset for an inactive user.")
+        if user.auth_provider != "password":
+            raise ValueError("Cannot issue a password reset for an external-auth user.")
+        return await self.create_reset_token(user_id)
 
     async def create_verified_root_user_if_empty(self, user: AppUser) -> bool:
         """Create a verified root user only if the users table is still empty."""

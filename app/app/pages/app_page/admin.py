@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import field
 from decimal import Decimal, InvalidOperation
+import logging
+import sqlite3
 import uuid
 import typing as t
 import pandas as pd
@@ -16,8 +18,11 @@ from app.session_validation import refresh_attached_user_session, reject_stale_u
 from app.currency import major_to_minor, format_minor_amount, attach_currency_name
 from app.validation import SecuritySanitizer
 from app.config import config
+from app.scripts.message_utils import send_password_reset_email
 from app.components.center_component import CenterComponent
 from app.components.responsive import ResponsiveComponent, WIDTH_FULL
+
+logger = logging.getLogger(__name__)
 
 @rio.page(
     name="AdminPage",
@@ -40,6 +45,35 @@ class AdminPage(ResponsiveComponent):
     change_role_new_role: str = field(default_factory=get_default_role)
     change_role_error: str = ""
 
+    # User creation fields
+    create_user_email: str = ""
+    create_user_username: str = ""
+    create_user_full_name: str = ""
+    create_user_password: str = ""
+    create_user_role: str = field(default_factory=get_default_role)
+    create_user_is_verified: bool = False
+    create_user_error: str = ""
+    create_user_success: str = ""
+
+    # User profile edit fields
+    edit_user_identifier: str = ""
+    edit_user_email: str = ""
+    edit_user_username: str = ""
+    edit_user_full_name: str = ""
+    edit_user_error: str = ""
+    edit_user_success: str = ""
+
+    # User active-state fields
+    active_user_identifier: str = ""
+    active_user_is_active: bool = True
+    active_user_confirmation: str = ""
+    active_user_error: str = ""
+    active_user_success: str = ""
+
+    # Password reset fields
+    reset_user_identifier: str = ""
+    reset_user_error: str = ""
+    reset_user_success: str = ""
 
     # User deletion fields
     delete_user_identifier: str = ""
@@ -98,11 +132,372 @@ class AdminPage(ResponsiveComponent):
         target: str = "",
     ):
         context = context_from_rio_session(self.session)
-        actor = context.user_id or (str(self.current_user.id) if self.current_user else "") or context.client_ip
+        actor = (
+            context.user_id
+            or (str(self.current_user.id) if self.current_user else "")
+            or context.client_ip
+        )
         return persistence.check_rate_limit(
             policy=sensitive_action_policy(scope),
             key=rate_limit_key(scope, f"{actor}:{target}"),
         )
+
+    async def _get_target_user(self, identifier: str) -> AppUser:
+        persistence = self.session[Persistence]
+        try:
+            return await persistence.get_user_by_id(uuid.UUID(identifier))
+        except (ValueError, KeyError):
+            return await persistence.get_user_by_email_or_username(identifier)
+
+    def _can_manage_user(self, target_user: AppUser) -> bool:
+        if not self.current_user:
+            return False
+        try:
+            return can_manage_role(self.current_user.role, target_user.role)
+        except ValueError:
+            return False
+
+    def _clear_rate_limit(
+        self,
+        persistence: Persistence,
+        scope: str,
+        target: str,
+    ) -> None:
+        if not self.current_user:
+            return
+        persistence.clear_rate_limit(
+            scope=sensitive_action_policy(scope).scope,
+            key=rate_limit_key(scope, f"{self.current_user.id}:{target}"),
+        )
+
+    def _admin_error_message(self, action: str, exc: Exception) -> str:
+        if isinstance(exc, PermissionError):
+            return str(exc)
+        if isinstance(exc, ValueError):
+            return str(exc)
+        if isinstance(exc, sqlite3.IntegrityError):
+            message = str(exc)
+            if "users.email" in message:
+                return "A user with that email already exists."
+            if "users.username" in message:
+                return "A user with that username already exists."
+            if "profiles.email" in message:
+                return "A profile with that email already exists."
+        logger.exception("Admin error while %s", action)
+        return f"Error {action}. Please check the input and try again."
+
+    async def _on_create_user_pressed(self) -> None:
+        if not self._refresh_current_user_authorization():
+            return
+
+        if not self.current_user:
+            self.create_user_error = "You must be logged in to perform this action"
+            self.create_user_success = ""
+            self.force_refresh()
+            return
+
+        email = (self.create_user_email or "").strip()
+        password = self.create_user_password or ""
+        role = (self.create_user_role or "").strip()
+
+        if not email:
+            self.create_user_error = "Please enter an email"
+            self.create_user_success = ""
+            self.force_refresh()
+            return
+
+        if len(password.strip()) < 8:
+            self.create_user_error = "Password must be at least 8 characters"
+            self.create_user_success = ""
+            self.force_refresh()
+            return
+
+        try:
+            can_create_role = can_manage_role(self.current_user.role, role)
+        except ValueError:
+            can_create_role = False
+
+        if not can_create_role:
+            self.create_user_error = (
+                f"You do not have permission to create users with role: {role}"
+            )
+            self.create_user_success = ""
+            self.force_refresh()
+            return
+
+        persistence = self.session[Persistence]
+        decision = self._check_sensitive_limit(
+            persistence,
+            "admin_create_user",
+            target=email,
+        )
+        if not decision.allowed:
+            self.create_user_error = rate_limited_message(
+                "Too many user creation attempts.",
+                decision.retry_after_seconds,
+            )
+            self.create_user_success = ""
+            self.force_refresh()
+            return
+
+        try:
+            created = await persistence.admin_create_user(
+                email=email,
+                password=password,
+                role=role,
+                actor=self.current_user,
+                username=(self.create_user_username or "").strip() or None,
+                full_name=(self.create_user_full_name or "").strip() or None,
+                is_verified=self.create_user_is_verified,
+            )
+        except Exception as exc:
+            self.create_user_error = self._admin_error_message("creating user", exc)
+            self.create_user_success = ""
+            self.force_refresh()
+            return
+
+        self._clear_rate_limit(persistence, "admin_create_user", email)
+        self.create_user_success = f"Created user {created.email}"
+        self.create_user_error = ""
+        self.create_user_email = ""
+        self.create_user_username = ""
+        self.create_user_full_name = ""
+        self.create_user_password = ""
+        self.create_user_role = get_default_role()
+        self.create_user_is_verified = False
+        await self._load_user_data()
+        self.force_refresh()
+
+    async def _on_edit_user_pressed(self) -> None:
+        if not self._refresh_current_user_authorization():
+            return
+
+        identifier = (self.edit_user_identifier or "").strip()
+        if not identifier:
+            self.edit_user_error = "Please enter a user email, username, or ID"
+            self.edit_user_success = ""
+            self.force_refresh()
+            return
+
+        updates = {
+            "email": (self.edit_user_email or "").strip() or None,
+            "username": (self.edit_user_username or "").strip() or None,
+            "full_name": (self.edit_user_full_name or "").strip() or None,
+        }
+        if not any(updates.values()):
+            self.edit_user_error = "Enter at least one field to update"
+            self.edit_user_success = ""
+            self.force_refresh()
+            return
+
+        try:
+            target_user = await self._get_target_user(identifier)
+        except KeyError:
+            self.edit_user_error = f"User not found: {identifier}"
+            self.edit_user_success = ""
+            self.force_refresh()
+            return
+
+        if not self._can_manage_user(target_user):
+            self.edit_user_error = (
+                f"You do not have permission to edit users with role: {target_user.role}"
+            )
+            self.edit_user_success = ""
+            self.force_refresh()
+            return
+
+        persistence = self.session[Persistence]
+        decision = self._check_sensitive_limit(
+            persistence,
+            "admin_edit_user",
+            target=str(target_user.id),
+        )
+        if not decision.allowed:
+            self.edit_user_error = rate_limited_message(
+                "Too many user edit attempts.",
+                decision.retry_after_seconds,
+            )
+            self.edit_user_success = ""
+            self.force_refresh()
+            return
+
+        try:
+            updated = await persistence.admin_update_user_profile(
+                target_user.id,
+                actor=self.current_user,
+                email=updates["email"],
+                username=updates["username"],
+                full_name=updates["full_name"],
+            )
+        except Exception as exc:
+            self.edit_user_error = self._admin_error_message("updating user", exc)
+            self.edit_user_success = ""
+            self.force_refresh()
+            return
+
+        self._clear_rate_limit(persistence, "admin_edit_user", str(target_user.id))
+        self.edit_user_success = f"Updated user {updated.email}"
+        self.edit_user_error = ""
+        self.edit_user_identifier = ""
+        self.edit_user_email = ""
+        self.edit_user_username = ""
+        self.edit_user_full_name = ""
+        await self._load_user_data()
+        self.force_refresh()
+
+    async def _on_set_active_pressed(self) -> None:
+        if not self._refresh_current_user_authorization():
+            return
+
+        identifier = (self.active_user_identifier or "").strip()
+        if not identifier:
+            self.active_user_error = "Please enter a user email, username, or ID"
+            self.active_user_success = ""
+            self.force_refresh()
+            return
+
+        try:
+            target_user = await self._get_target_user(identifier)
+        except KeyError:
+            self.active_user_error = f"User not found: {identifier}"
+            self.active_user_success = ""
+            self.force_refresh()
+            return
+
+        if not self._can_manage_user(target_user):
+            self.active_user_error = (
+                f"You do not have permission to update users with role: {target_user.role}"
+            )
+            self.active_user_success = ""
+            self.force_refresh()
+            return
+
+        if not self.active_user_is_active:
+            expected_confirmation = f"DEACTIVATE {target_user.email}"
+            if self.active_user_confirmation.strip() != expected_confirmation:
+                self.active_user_error = (
+                    f'Type "{expected_confirmation}" to confirm deactivation.'
+                )
+                self.active_user_success = ""
+                self.force_refresh()
+                return
+
+        persistence = self.session[Persistence]
+        decision = self._check_sensitive_limit(
+            persistence,
+            "admin_set_user_active",
+            target=str(target_user.id),
+        )
+        if not decision.allowed:
+            self.active_user_error = rate_limited_message(
+                "Too many account status attempts.",
+                decision.retry_after_seconds,
+            )
+            self.active_user_success = ""
+            self.force_refresh()
+            return
+
+        try:
+            updated = await persistence.admin_set_user_active(
+                target_user.id,
+                self.active_user_is_active,
+                actor=self.current_user,
+            )
+        except Exception as exc:
+            self.active_user_error = self._admin_error_message(
+                "updating account status",
+                exc,
+            )
+            self.active_user_success = ""
+            self.force_refresh()
+            return
+
+        self._clear_rate_limit(persistence, "admin_set_user_active", str(target_user.id))
+        status_text = "activated" if updated.is_active else "deactivated"
+        self.active_user_success = f"User {updated.email} has been {status_text}"
+        self.active_user_error = ""
+        self.active_user_identifier = ""
+        self.active_user_confirmation = ""
+        self.active_user_is_active = True
+        await self._load_user_data()
+        self.force_refresh()
+
+    async def _on_send_reset_pressed(self) -> None:
+        if not self._refresh_current_user_authorization():
+            return
+
+        identifier = (self.reset_user_identifier or "").strip()
+        if not identifier:
+            self.reset_user_error = "Please enter a user email, username, or ID"
+            self.reset_user_success = ""
+            self.force_refresh()
+            return
+
+        try:
+            target_user = await self._get_target_user(identifier)
+        except KeyError:
+            self.reset_user_error = f"User not found: {identifier}"
+            self.reset_user_success = ""
+            self.force_refresh()
+            return
+
+        if not self._can_manage_user(target_user):
+            self.reset_user_error = (
+                f"You do not have permission to reset users with role: {target_user.role}"
+            )
+            self.reset_user_success = ""
+            self.force_refresh()
+            return
+
+        if not target_user.is_active:
+            self.reset_user_error = "Reactivate this user before sending a password reset"
+            self.reset_user_success = ""
+            self.force_refresh()
+            return
+
+        persistence = self.session[Persistence]
+        decision = self._check_sensitive_limit(
+            persistence,
+            "admin_send_password_reset",
+            target=str(target_user.id),
+        )
+        if not decision.allowed:
+            self.reset_user_error = rate_limited_message(
+                "Too many password reset attempts.",
+                decision.retry_after_seconds,
+            )
+            self.reset_user_success = ""
+            self.force_refresh()
+            return
+
+        try:
+            reset_token = await persistence.admin_issue_password_reset(
+                target_user.id,
+                actor=self.current_user,
+            )
+            send_password_reset_email(
+                recipient=target_user.email,
+                token=reset_token.token,
+                valid_until=reset_token.valid_until,
+            )
+        except Exception as exc:
+            self.reset_user_error = self._admin_error_message(
+                "sending password reset",
+                exc,
+            )
+            self.reset_user_success = ""
+            self.force_refresh()
+            return
+
+        self._clear_rate_limit(
+            persistence,
+            "admin_send_password_reset",
+            str(target_user.id),
+        )
+        self.reset_user_success = f"Password reset email sent to {target_user.email}"
+        self.reset_user_error = ""
+        self.reset_user_identifier = ""
+        self.force_refresh()
 
     async def _load_user_data(self) -> None:
         """Populate component state with the latest user data."""
@@ -120,6 +515,7 @@ class AdminPage(ResponsiveComponent):
                 "Username": user.username or "",
                 "Created At": user.created_at.strftime("%Y-%m-%d %H:%M:%S"),
                 "Role": user.role,
+                "Active": "✓" if user.is_active else "✗",
                 "Verified": "✓" if user.is_verified else "✗",
                 "Balance": attach_currency_name(
                     format_minor_amount(user.primary_currency_balance),
@@ -206,7 +602,7 @@ class AdminPage(ResponsiveComponent):
             )
             return True
         except Exception as exc:
-            self.change_role_error = f"Error updating role: {str(exc)}"
+            self.change_role_error = self._admin_error_message("updating role", exc)
             return False
 
     async def _on_delete_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
@@ -315,7 +711,7 @@ class AdminPage(ResponsiveComponent):
                 self.delete_user_success = ""
                 self.force_refresh()
         except Exception as e:
-            self.delete_user_error = f"Error deleting user: {str(e)}"
+            self.delete_user_error = self._admin_error_message("deleting user", e)
             self.delete_user_success = ""
             self.force_refresh()
 
@@ -436,6 +832,14 @@ class AdminPage(ResponsiveComponent):
         self.currency_mode_is_set = event.is_on
         self.force_refresh()
 
+    def _on_create_verified_toggle(self, event: rio.SwitchChangeEvent) -> None:
+        self.create_user_is_verified = event.is_on
+        self.force_refresh()
+
+    def _on_active_status_toggle(self, event: rio.SwitchChangeEvent) -> None:
+        self.active_user_is_active = event.is_on
+        self.force_refresh()
+
     def _responsive_form_layout(
         self,
         *children: rio.Component,
@@ -458,8 +862,6 @@ class AdminPage(ResponsiveComponent):
     def build(self) -> rio.Component:
         if not self.current_user or self.df is None:
             return rio.Text("Error: Could not load user information")
-
-        mobile = self.is_mobile
 
         return CenterComponent(
             rio.Column(
@@ -493,6 +895,203 @@ class AdminPage(ResponsiveComponent):
             ),
 
             rio.Text(
+                "Create User",
+                style="heading3",
+                margin_top=2,
+                margin_bottom=1,
+            ),
+
+            self._responsive_form_layout(
+                rio.TextInput(
+                    label="Email",
+                    text=self.bind().create_user_email,
+                ),
+                rio.TextInput(
+                    label="Username (optional)",
+                    text=self.bind().create_user_username,
+                ),
+                rio.TextInput(
+                    label="Full Name (optional)",
+                    text=self.bind().create_user_full_name,
+                ),
+                proportions=[1, 1, 1],
+            ),
+
+            self._responsive_form_layout(
+                rio.TextInput(
+                    label="Temporary Password",
+                    text=self.bind().create_user_password,
+                    is_secret=True,
+                    on_confirm=self._on_create_user_pressed,
+                ),
+                rio.Dropdown(
+                    label="Role",
+                    options={
+                        role: role
+                        for role in get_manageable_roles(self.current_user.role)
+                    },
+                    selected_value=self.bind().create_user_role,
+                ),
+                rio.Row(
+                    rio.Text("Verified"),
+                    rio.Switch(
+                        is_on=self.create_user_is_verified,
+                        on_change=self._on_create_verified_toggle,
+                    ),
+                    spacing=1,
+                ),
+                rio.Button(
+                    "Create User",
+                    on_press=self._on_create_user_pressed,
+                    shape="rounded",
+                ),
+                proportions=[1, 1, 1, 1],
+            ),
+
+            rio.Banner(
+                text=self.create_user_success,
+                style="success",
+                margin_top=1,
+            ) if self.create_user_success else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+            rio.Banner(
+                text=self.create_user_error,
+                style="danger",
+                margin_top=1,
+            ) if self.create_user_error else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+            rio.Text(
+                "Edit User",
+                style="heading3",
+                margin_top=2,
+                margin_bottom=1,
+            ),
+
+            self._responsive_form_layout(
+                rio.TextInput(
+                    label="User Email / Username / ID",
+                    text=self.bind().edit_user_identifier,
+                ),
+                rio.TextInput(
+                    label="New Email (optional)",
+                    text=self.bind().edit_user_email,
+                ),
+                rio.TextInput(
+                    label="New Username (optional)",
+                    text=self.bind().edit_user_username,
+                ),
+                rio.TextInput(
+                    label="New Full Name (optional)",
+                    text=self.bind().edit_user_full_name,
+                    on_confirm=self._on_edit_user_pressed,
+                ),
+                proportions=[1, 1, 1, 1],
+            ),
+
+            rio.Button(
+                "Update User",
+                on_press=self._on_edit_user_pressed,
+                shape="rounded",
+                margin_top=1,
+            ),
+
+            rio.Banner(
+                text=self.edit_user_success,
+                style="success",
+                margin_top=1,
+            ) if self.edit_user_success else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+            rio.Banner(
+                text=self.edit_user_error,
+                style="danger",
+                margin_top=1,
+            ) if self.edit_user_error else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+            rio.Text(
+                "Account Status",
+                style="heading3",
+                margin_top=2,
+                margin_bottom=1,
+            ),
+
+            self._responsive_form_layout(
+                rio.TextInput(
+                    label="User Email / Username / ID",
+                    text=self.bind().active_user_identifier,
+                    on_confirm=self._on_set_active_pressed,
+                ),
+                rio.Row(
+                    rio.Text("Active"),
+                    rio.Switch(
+                        is_on=self.active_user_is_active,
+                        on_change=self._on_active_status_toggle,
+                    ),
+                    spacing=1,
+                ),
+                rio.Button(
+                    "Apply Status",
+                    on_press=self._on_set_active_pressed,
+                    shape="rounded",
+                ),
+                proportions=[1, 1, 1],
+            ),
+
+            rio.TextInput(
+                label=(
+                    f'Type "DEACTIVATE {self.active_user_identifier.strip()}" to confirm deactivation'
+                    if self.active_user_identifier.strip()
+                    else 'Enter the user\'s email above, then type "DEACTIVATE <email>" here to confirm'
+                ),
+                text=self.bind().active_user_confirmation,
+                on_confirm=self._on_set_active_pressed,
+            ) if not self.active_user_is_active else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+            rio.Banner(
+                text=self.active_user_success,
+                style="success",
+                margin_top=1,
+            ) if self.active_user_success else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+            rio.Banner(
+                text=self.active_user_error,
+                style="danger",
+                margin_top=1,
+            ) if self.active_user_error else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+            rio.Text(
+                "Password Reset",
+                style="heading3",
+                margin_top=2,
+                margin_bottom=1,
+            ),
+
+            self._responsive_form_layout(
+                rio.TextInput(
+                    label="User Email / Username / ID",
+                    text=self.bind().reset_user_identifier,
+                    on_confirm=self._on_send_reset_pressed,
+                ),
+                rio.Button(
+                    "Send Reset Email",
+                    on_press=self._on_send_reset_pressed,
+                    shape="rounded",
+                ),
+                proportions=[2, 1],
+            ),
+
+            rio.Banner(
+                text=self.reset_user_success,
+                style="success",
+                margin_top=1,
+            ) if self.reset_user_success else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+            rio.Banner(
+                text=self.reset_user_error,
+                style="danger",
+                margin_top=1,
+            ) if self.reset_user_error else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+            rio.Text(
                 "Change Role",
                 style="heading3",
                 margin_top=2,
@@ -506,7 +1105,10 @@ class AdminPage(ResponsiveComponent):
                 ),
                 rio.Dropdown(
                     label="New Role",
-                    options={role: role for role in get_manageable_roles(self.current_user.role)},
+                    options={
+                        role: role
+                        for role in get_manageable_roles(self.current_user.role)
+                    },
                     selected_value=self.bind().change_role_new_role,
                 ),
                 rio.Button(
@@ -520,7 +1122,7 @@ class AdminPage(ResponsiveComponent):
             rio.Text(
                 f"about to change {self.change_role_identifier}'s role to {self.change_role_new_role}",
                 margin_top=1,
-            ),
+            ) if self.change_role_identifier else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
 
             rio.Banner(
                 text=self.change_role_error,

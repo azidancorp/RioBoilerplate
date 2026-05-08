@@ -156,6 +156,12 @@ class LoginForm(rio.Component):
                 self.error_message = "Invalid email or password. Please try again."
                 return
 
+            if not user_info.is_active:
+                self.pending_verification_email = ""
+                self.banner_style = "danger"
+                self.error_message = "This account is inactive. Contact an administrator."
+                return
+
             if config.REQUIRE_EMAIL_VERIFICATION and not user_info.is_verified:
                 self.pending_verification_email = user_info.email
                 self.banner_style = "danger"

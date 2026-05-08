@@ -53,6 +53,23 @@ class FakeRioSession:
         self.navigation_target = target_url
 
 
+class FreshRioSession:
+    def __init__(self, persistence: Persistence, auth_token: str):
+        self.attachments = {
+            Persistence: persistence,
+            UserSettings: UserSettings(auth_token=auth_token),
+        }
+
+    def __getitem__(self, attachment_type):
+        try:
+            return self.attachments[attachment_type]
+        except KeyError:
+            raise KeyError(attachment_type) from None
+
+    def attach(self, attachment):
+        self.attachments[type(attachment)] = attachment
+
+
 @pytest.fixture
 def temp_db(tmp_path: Path):
     persistence = Persistence(db_path=tmp_path / "test.db")
@@ -130,5 +147,29 @@ def test_guard_rejects_live_session_after_database_expiry(temp_db: Persistence):
         assert AppUser not in event.session.attachments
         assert event.session[UserSettings].auth_token == ""
         assert event.session.navigation_target is None
+
+    asyncio.run(scenario())
+
+
+def test_session_start_rejects_inactive_stored_auth_token(temp_db: Persistence):
+    async def scenario():
+        from app import on_session_start
+
+        root, _ = await _create_root_session(temp_db)
+        user = AppUser.create_new_user_with_default_settings(
+            email="inactive-session@example.com",
+            password="password",
+            username="inactive-session",
+        )
+        await temp_db.create_user(user)
+        user = await temp_db.get_user_by_id(user.id)
+        cached_session = await temp_db.create_session(user.id)
+        await temp_db.admin_set_user_active(user.id, False, actor=root)
+
+        fresh_session = FreshRioSession(temp_db, cached_session.id)
+        await on_session_start(fresh_session)
+
+        assert UserSession not in fresh_session.attachments
+        assert AppUser not in fresh_session.attachments
 
     asyncio.run(scenario())

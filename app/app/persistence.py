@@ -13,7 +13,12 @@ from app.data_models import (
 )
 from app.validation import SecuritySanitizer
 from app.config import config
-from app.permissions import get_first_user_role, validate_role, get_all_roles
+from app.permissions import (
+    get_default_role,
+    get_first_user_role,
+    validate_role,
+    get_all_roles,
+)
 from app.rate_limits import RateLimitDecision, RateLimitPolicy
 import app.persistence_auth as persistence_auth
 import app.persistence_currency as persistence_currency
@@ -106,6 +111,14 @@ class Persistence:
     def get_user_count(self) -> int:
         return persistence_users.get_user_count(self)
 
+    def has_verified_root_user(self) -> bool:
+        cursor = self._get_cursor()
+        cursor.execute(
+            "SELECT 1 FROM users WHERE role = ? AND is_verified = 1 LIMIT 1",
+            (get_first_user_role(),),
+        )
+        return cursor.fetchone() is not None
+
     def check_rate_limit(
         self,
         *,
@@ -130,6 +143,105 @@ class Persistence:
     def cleanup_rate_limits(self, *, now: datetime | None = None) -> int:
         return persistence_rate_limits.cleanup_rate_limits(self, now=now)
 
+    def _insert_user_records(
+        self,
+        cursor: sqlite3.Cursor,
+        *,
+        user: AppUser,
+        assigned_role: str,
+        now_ts: float,
+    ) -> None:
+        if not validate_role(assigned_role):
+            raise ValueError(
+                f"Invalid role: {assigned_role}. "
+                f"Must be one of: {', '.join(get_all_roles())}"
+            )
+
+        cursor.execute(
+            """
+            INSERT INTO users (
+                id,
+                email,
+                username,
+                created_at,
+                password_hash,
+                password_salt,
+                password_scheme,
+                auth_provider,
+                auth_provider_id,
+                role,
+                is_verified,
+                two_factor_secret,
+                referral_code,
+                email_notifications_enabled,
+                sms_notifications_enabled,
+                primary_currency_balance,
+                primary_currency_updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(user.id),
+                user.email,
+                user.username,
+                user.created_at.timestamp(),
+                user.password_hash,
+                user.password_salt,
+                user.password_scheme,
+                user.auth_provider,
+                user.auth_provider_id,
+                assigned_role,
+                user.is_verified,
+                user.two_factor_secret,
+                user.referral_code,
+                user.email_notifications_enabled,
+                user.sms_notifications_enabled,
+                user.primary_currency_balance,
+                now_ts,
+            ),
+        )
+
+        cursor.execute(
+            """
+            INSERT INTO profiles
+            (
+                user_id,
+                full_name,
+                email,
+                phone,
+                address,
+                bio,
+                avatar_url,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(user.id),
+                user.username or "",
+                user.email,
+                None,
+                None,
+                None,
+                None,
+                now_ts,
+                now_ts,
+            )
+        )
+
+        if user.primary_currency_balance:
+            self._append_currency_ledger_entry(
+                user_id=user.id,
+                delta=user.primary_currency_balance,
+                balance_after=user.primary_currency_balance,
+                reason="Initial balance",
+                metadata=None,
+                actor_user_id=None,
+                created_at=now_ts,
+                commit=False,
+            )
+
     # Spans users + profiles + currency ledger; must stay transactional.
     async def create_user(self, user: AppUser) -> None:
         # Even future username-only/anonymous mode should pass through this
@@ -153,105 +265,63 @@ class Persistence:
 
             cursor.execute("SELECT COUNT(*) FROM users")
             user_count = cursor.fetchone()[0]
-            if user_count == 0:
+            if (
+                user_count == 0
+                and assigned_role == get_default_role()
+                and config.ALLOW_PUBLIC_ROOT_BOOTSTRAP
+            ):
                 assigned_role = get_first_user_role()
 
-            if not validate_role(assigned_role):
-                raise ValueError(
-                    f"Invalid role: {assigned_role}. "
-                    f"Must be one of: {', '.join(get_all_roles())}"
-                )
-
-            cursor.execute(
-                """
-                INSERT INTO users (
-                    id,
-                    email,
-                    username,
-                    created_at,
-                    password_hash,
-                    password_salt,
-                    password_scheme,
-                    auth_provider,
-                    auth_provider_id,
-                    role,
-                    is_verified,
-                    two_factor_secret,
-                    referral_code,
-                    email_notifications_enabled,
-                    sms_notifications_enabled,
-                    primary_currency_balance,
-                    primary_currency_updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(user.id),
-                    user.email,
-                    user.username,
-                    user.created_at.timestamp(),
-                    user.password_hash,
-                    user.password_salt,
-                    user.password_scheme,
-                    user.auth_provider,
-                    user.auth_provider_id,
-                    assigned_role,
-                    user.is_verified,
-                    user.two_factor_secret,
-                    user.referral_code,
-                    user.email_notifications_enabled,
-                    user.sms_notifications_enabled,
-                    user.primary_currency_balance,
-                    now_ts,
-                ),
+            self._insert_user_records(
+                cursor,
+                user=user,
+                assigned_role=assigned_role,
+                now_ts=now_ts,
             )
 
-            cursor.execute(
-                """
-                INSERT INTO profiles
-                (
-                    user_id,
-                    full_name,
-                    email,
-                    phone,
-                    address,
-                    bio,
-                    avatar_url,
-                    created_at,
-                    updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(user.id),
-                    user.username or "",
-                    user.email,
-                    None,
-                    None,
-                    None,
-                    None,
-                    now_ts,
-                    now_ts,
-                )
-            )
-
-            if user.primary_currency_balance:
-                self._append_currency_ledger_entry(
-                    user_id=user.id,
-                    delta=user.primary_currency_balance,
-                    balance_after=user.primary_currency_balance,
-                    reason="Initial balance",
-                    metadata=None,
-                    actor_user_id=None,
-                    created_at=now_ts,
-                    commit=False,
-                )
             conn.commit()
         except Exception:
             conn.rollback()
             raise
 
         user.role = assigned_role
+
+    async def create_verified_root_user_if_empty(self, user: AppUser) -> bool:
+        """Create a verified root user only if the users table is still empty."""
+        user.email = SecuritySanitizer.validate_email_format(
+            user.email,
+            require_valid=config.REQUIRE_VALID_EMAIL,
+        )
+
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        cursor = conn.cursor()
+        now_ts = datetime.now(timezone.utc).timestamp()
+        root_role = get_first_user_role()
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor.execute("SELECT COUNT(*) FROM users")
+            if cursor.fetchone()[0] > 0:
+                conn.rollback()
+                return False
+
+            user.role = root_role
+            user.is_verified = True
+            self._insert_user_records(
+                cursor,
+                user=user,
+                assigned_role=root_role,
+                now_ts=now_ts,
+            )
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            raise
 
     async def get_user_by_email(self, email: str) -> AppUser:
         return await persistence_users.get_user_by_email(self, email)

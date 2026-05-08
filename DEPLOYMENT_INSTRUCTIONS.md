@@ -201,6 +201,17 @@ ADMIN_DELETION_PASSWORD="<strong admin password>"
 > **Note:** Email provider host/sender/TLS defaults also live in `app/app/config.py`; only credential/secret values such as `RIO_SMTP_PASSWORD` belong in `.env`.
 > **Note:** The SQLite database file is created locally on first run at `app/app/data/app.db` and is not intended to be committed.
 
+## Step 3.6: Initialize the First Root User
+
+Before exposing the app publicly, create the initial verified owner account from the server shell:
+
+```bash
+cd /root/[APP_NAME]/app
+../venv/bin/python -m app.scripts.bootstrap_root
+```
+
+With no arguments, the command prompts for email and password. You can also pass values directly, for example `../venv/bin/python -m app.scripts.bootstrap_root --email owner@example.com --password '<strong-password>'`. `--username owner` is optional; if you provide `--username` without `--email`, that username becomes the root login identifier. If users already exist, the command exits successfully without changing anything.
+
 ## Step 4: Test Application
 
 SSH back into the server and test the application:
@@ -215,6 +226,7 @@ cd app
 # Note: --release flag enables production optimizations (faster performance,
 # lower memory usage, and additional safety checks)
 APP_PORT=8000
+../venv/bin/python -m app.scripts.prestart --strict-bootstrap
 rio run --port "$APP_PORT" --release
 
 # Verify it's working from another terminal with the same port value.
@@ -275,6 +287,8 @@ After=network.target
 [Service]
 WorkingDirectory=/root/[APP_NAME]/app
 # --release flag provides production optimizations and safety checks
+# Optional: verify schema and require a verified root user before public start
+ExecStartPre=/root/[APP_NAME]/venv/bin/python -m app.scripts.prestart --strict-bootstrap
 ExecStart=/root/[APP_NAME]/venv/bin/rio run --port 8000 --release
 Restart=always
 

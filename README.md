@@ -44,10 +44,17 @@ For detailed merge instructions and conflict resolution, see `UPSTREAM_MERGE_GUI
 2. Create and activate a virtual environment: `python -m venv venv` then `source venv/bin/activate` (or `venv\Scripts\activate` on Windows).
 3. Install dependencies: `pip install -r requirements.txt`.
 4. Copy `.env.example` to `.env` and set secrets such as `ADMIN_DELETION_PASSWORD`.
-5. Run the app from `app/`: `rio run`. The first registered user is promoted to the `root` role.
+5. Run the app from `app/`: `rio run`. By default, the first public signup on an empty local/dev database is promoted to the `root` role.
 6. On first run, the app creates a local SQLite database at `app/app/data/app.db`. This file is ignored by git and should remain a local runtime artifact.
 
 Access the dev server at `http://localhost:8000`. Use `rio run --port 8000 --release` to mirror production settings. Replace `8000` with the port you actually chose when checking a different local run.
+
+For production or stricter deployments, initialize the first owner explicitly before exposing the app:
+```bash
+cd app
+python -m app.scripts.bootstrap_root
+```
+With no arguments, the command prompts for email and password. You can also pass values directly, for example `python -m app.scripts.bootstrap_root --email owner@example.com --password '<strong-password>'`. `--username owner` is optional; if you provide `--username` without `--email`, that username becomes the root login identifier. The command creates one verified `root` user only when the database is empty.
 
 ## Everyday Development
 - `rio run` – hot-reloading dev server.
@@ -56,8 +63,9 @@ Access the dev server at `http://localhost:8000`. Use `rio run --port 8000 --rel
 
 ## Configuration
 - `.env` is for secrets only. In the stock boilerplate, the main secret is `ADMIN_DELETION_PASSWORD`.
-- Non-secret behavior stays code-configured in `app/app/config.py`. Edit that file directly for app-specific defaults such as email validation, username login, password policy, and currency naming/precision.
+- Non-secret behavior stays code-configured in `app/app/config.py`. Edit that file directly for app-specific defaults such as email validation, username login, password policy, first-root bootstrap policy, and currency naming/precision.
 - Email validation and username-login behavior are documented in `docs/configuration/email-validation.md`.
+- `ALLOW_PUBLIC_ROOT_BOOTSTRAP=True` preserves the quick-start first-signup behavior. Set it to `False` when deployment must use `python -m app.scripts.bootstrap_root` instead.
 - The runtime SQLite database file `app/app/data/app.db` is created locally on first run and is ignored by git.
 
 ## Currency System

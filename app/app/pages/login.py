@@ -457,6 +457,17 @@ class SignUpForm(rio.Component):
                 self.error_message = "Your password is weak. Please acknowledge this below or choose a stronger password."
                 return
 
+        if (
+            not config.ALLOW_PUBLIC_ROOT_BOOTSTRAP
+            and pers.get_user_count() == 0
+        ):
+            self.banner_style = "danger"
+            self.error_message = (
+                "This deployment must be initialized by an operator. "
+                "Run python -m app.scripts.bootstrap_root."
+            )
+            return
+
         request_context = context_from_rio_session(self.session, identifier=self.email)
         blocked = _consume_rate_limits(
             pers,

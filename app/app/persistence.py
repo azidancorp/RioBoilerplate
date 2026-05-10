@@ -25,6 +25,7 @@ import app.persistence_auth as persistence_auth
 import app.persistence_currency as persistence_currency
 import app.persistence_profiles as persistence_profiles
 import app.persistence_rate_limits as persistence_rate_limits
+import app.persistence_social as persistence_social
 import app.persistence_users as persistence_users
 from app.persistence_schema import initialize_schema
 
@@ -647,6 +648,34 @@ class Persistence:
     async def get_user_by_id(self, id: uuid.UUID) -> AppUser:
         return await persistence_users.get_user_by_id(self, id)
 
+    async def get_user_by_provider_identity(
+        self,
+        provider: str,
+        provider_user_id: str,
+    ) -> AppUser:
+        return await persistence_social.get_user_by_provider_identity(
+            self,
+            provider,
+            provider_user_id,
+        )
+
+    async def create_oauth_handoff(
+        self,
+        *,
+        user_id: uuid.UUID,
+        provider: str,
+        ttl_minutes: int | None = None,
+    ) -> str:
+        return await persistence_social.create_oauth_handoff(
+            self,
+            user_id=user_id,
+            provider=provider,
+            ttl_minutes=ttl_minutes,
+        )
+
+    async def consume_oauth_handoff(self, token: str) -> AppUser:
+        return await persistence_social.consume_oauth_handoff(self, token)
+
     async def list_users(self) -> list[AppUser]:
         return await persistence_users.list_users(self)
 
@@ -846,7 +875,13 @@ class Persistence:
 
         cursor = self._get_cursor()
         uid = str(user_id)
-        for table in ("user_sessions", "password_reset_tokens", "two_factor_recovery_codes", "profiles"):
+        for table in (
+            "user_sessions",
+            "password_reset_tokens",
+            "oauth_login_handoffs",
+            "two_factor_recovery_codes",
+            "profiles",
+        ):
             cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
         # email_verification_tokens is cleaned up by ON DELETE CASCADE.
         cursor.execute("DELETE FROM users WHERE id = ?", (uid,))

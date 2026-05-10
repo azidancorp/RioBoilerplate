@@ -140,6 +140,36 @@ class AppUser:
         )
 
     @classmethod
+    def create_social_user(
+        cls,
+        *,
+        email: str,
+        provider: str,
+        provider_user_id: str,
+        username: str | None = None,
+        is_verified: bool = True,
+    ) -> AppUser:
+        """
+        Create a user authenticated by an external identity provider.
+        """
+        return AppUser(
+            id=uuid.uuid4(),
+            email=email.lower().strip(),
+            username=username,
+            created_at=datetime.now(timezone.utc),
+            password_hash=None,
+            password_salt=None,
+            password_scheme=password_utils.HASH_SCHEME_PBKDF2_SHA256,
+            auth_provider=provider,
+            auth_provider_id=provider_user_id,
+            role=get_default_role(),
+            is_verified=is_verified,
+            referral_code="",
+            primary_currency_balance=get_currency_config().initial_balance,
+            primary_currency_updated_at=datetime.now(timezone.utc),
+        )
+
+    @classmethod
     def get_password_hash(cls, password, password_salt: bytes) -> bytes:
         """
         Compute the hash of a password using a given salt.

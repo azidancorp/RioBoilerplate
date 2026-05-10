@@ -13,18 +13,21 @@ import rio
 from app.persistence import Persistence
 from app.data_models import UserSettings
 from app.config import config
+from app.persistence_runtime import get_persistence
 import app.theme as theme
 from app.components.root_component import RootComponent
 from app.api.example import router as example_router
 from app.api.profiles import router as profile_router
 from app.api.currency import router as currency_router
 from app.api.health import router as health_router
+from app.api.oauth import router as oauth_router
+from starlette.middleware.sessions import SessionMiddleware
 
 
 async def on_app_start(app: rio.App) -> None:
     # Create a persistence instance. This class hides the gritty details of
     # database interaction from the app.
-    pers = Persistence(allow_username_login=config.ALLOW_USERNAME_LOGIN)
+    pers = get_persistence()
 
     if pers.get_user_count() == 0:
         bootstrap_command = "python -m app.scripts.bootstrap_root"
@@ -105,6 +108,15 @@ app = rio.App(
 
 fastapi_app = app.as_fastapi()
 
+if config.SESSION_SECRET_KEY:
+    fastapi_app.add_middleware(
+        SessionMiddleware,
+        secret_key=config.SESSION_SECRET_KEY,
+        same_site="lax",
+        https_only=config.OAUTH_COOKIE_SECURE,
+    )
+
+fastapi_app.include_router(oauth_router)
 fastapi_app.include_router(example_router)
 fastapi_app.include_router(profile_router)
 fastapi_app.include_router(currency_router)

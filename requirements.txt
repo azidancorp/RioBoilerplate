@@ -12,3 +12,5 @@ requests
 pytest
 httpx
 pwdlib[argon2]
+authlib
+itsdangerous

@@ -44,6 +44,15 @@ class AppConfig:
     # first default-role user is promoted to root. Set False for deployments
     # that must run the explicit bootstrap_root CLI before public exposure.
     ALLOW_PUBLIC_ROOT_BOOTSTRAP: bool = True
+    # Enables the Google OAuth/OIDC routes when credentials are configured.
+    # Keep this in code so deploy behavior is reviewable; credentials remain env-only.
+    ENABLE_GOOGLE_LOGIN: bool = True
+    # Signed cookie secret used only for OAuth state/nonce during provider redirects.
+    SESSION_SECRET_KEY: str = ""
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    OAUTH_COOKIE_SECURE: bool = False
+    OAUTH_HANDOFF_TTL_MINUTES: int = 5
 
     # Currency Settings
     # -----------------
@@ -139,6 +148,9 @@ class AppConfig:
         """
         return cls(
             ADMIN_DELETION_PASSWORD=os.getenv("ADMIN_DELETION_PASSWORD", ""),
+            SESSION_SECRET_KEY=os.getenv("SESSION_SECRET_KEY", ""),
+            GOOGLE_CLIENT_ID=os.getenv("GOOGLE_CLIENT_ID", ""),
+            GOOGLE_CLIENT_SECRET=os.getenv("GOOGLE_CLIENT_SECRET", ""),
             SMTP_PASSWORD=os.getenv("RIO_SMTP_PASSWORD", ""),
             CONTACT_NTFY_CHANNEL=os.getenv("RIO_CONTACT_NTFY_CHANNEL", ""),
         )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import typing as t
+import uuid
 
 import rio
 from fastapi import HTTPException
@@ -72,6 +74,68 @@ def _generic_reset_message() -> str:
         "If an account exists with that email, we've sent a reset link. "
         "Check your inbox and enter the token below with your new password."
     )
+
+
+async def _complete_login_session(
+    session: rio.Session,
+    pers: Persistence,
+    user_info: AppUser,
+    *,
+    recovery_code_used: bool = False,
+) -> None:
+    user_session = await pers.create_session(user_id=user_info.id)
+    session.attach(user_session)
+    session.attach(user_info)
+
+    settings = session[UserSettings]
+    settings.auth_token = user_session.id
+    session.attach(settings)
+
+    if recovery_code_used:
+        try:
+            usage = session[RecoveryCodeUsage]
+        except KeyError:
+            usage = RecoveryCodeUsage()
+            session.attach(usage)
+        usage.used_at_login = True
+
+    session.navigate_to("/app/dashboard")
+
+
+def _oauth_error_message(error_code: str) -> str:
+    messages = {
+        "provider_failed": "Google sign-in failed. Please try again.",
+        "provider_not_configured": "Google sign-in is not configured yet.",
+        "unsupported_provider": "That sign-in provider is not supported.",
+        "missing_provider_id": "Google did not return a valid account identifier.",
+        "unverified_email": "Google sign-in requires a verified email address.",
+        "account_exists": (
+            "An account with this email already exists. Log in with your password, "
+            "then link Google in settings once connected accounts are available."
+        ),
+        "account_inactive": "This account is inactive. Contact an administrator.",
+    }
+    return messages.get(error_code, "Google sign-in failed. Please try again.")
+
+
+def _google_oauth_login_url(session: rio.Session) -> rio.URL | str:
+    try:
+        return session.base_url.joinpath("auth", "google", "login")
+    except Exception:
+        return "/auth/google/login"
+
+
+def _navigate_to_google_oauth(session: rio.Session) -> None:
+    url = str(_google_oauth_login_url(session))
+
+    async def worker() -> None:
+        # Rio page navigation treats same-origin unknown paths as app pages.
+        # OAuth must leave the SPA so FastAPI can own the provider redirect.
+        await session._evaluate_javascript(
+            f"window.location.href = {json.dumps(url)};",
+        )
+
+    session.create_task(worker(), name="Navigate to Google OAuth")
 
 
 ################################################################################
@@ -212,24 +276,12 @@ class LoginForm(rio.Component):
                 key=login_identifier_key,
             )
 
-            # Create and store a session
-            user_session = await pers.create_session(user_id=user_info.id)
-            self.session.attach(user_session)
-            self.session.attach(user_info)
-
-            settings = self.session[UserSettings]
-            settings.auth_token = user_session.id
-            self.session.attach(settings)
-
-            if recovery_code_used:
-                try:
-                    usage = self.session[RecoveryCodeUsage]
-                except KeyError:
-                    usage = RecoveryCodeUsage()
-                    self.session.attach(usage)
-                usage.used_at_login = True
-
-            self.session.navigate_to("/app/dashboard")
+            await _complete_login_session(
+                self.session,
+                pers,
+                user_info,
+                recovery_code_used=recovery_code_used,
+            )
 
         finally:
             self._currently_logging_in = False
@@ -316,7 +368,25 @@ class LoginForm(rio.Component):
         if self.on_toggle_form:
             self.on_toggle_form("reset")
 
+    def on_google_login_pressed(self) -> None:
+        _navigate_to_google_oauth(self.session)
+
     def build(self) -> rio.Component:
+        social_login_components: list[rio.Component] = []
+        if config.ENABLE_GOOGLE_LOGIN:
+            social_login_components.extend(
+                [
+                    rio.Separator(),
+                    rio.Button(
+                        "Continue with Google",
+                        on_press=self.on_google_login_pressed,
+                        style="minor",
+                        shape="rounded",
+                        grow_x=True,
+                    ),
+                ]
+            )
+
         return rio.Card(
             rio.Column(
                 rio.Text("Login", style="heading1", justify="center"),
@@ -372,6 +442,7 @@ class LoginForm(rio.Component):
                     row_spacing=1,
                     column_spacing=1,
                 ),
+                *social_login_components,
                 spacing=1,
                 margin=2,
             ),
@@ -577,6 +648,9 @@ class SignUpForm(rio.Component):
         if self.on_toggle_form:
             self.on_toggle_form("login")
 
+    def on_google_login_pressed(self) -> None:
+        _navigate_to_google_oauth(self.session)
+
     def validate_email(self, email: str):
         """
         FRONTEND VALIDATION: Validate email format in real-time as user types.
@@ -621,6 +695,21 @@ class SignUpForm(rio.Component):
         )
 
     def build(self) -> rio.Component:
+        social_signup_components: list[rio.Component] = []
+        if config.ENABLE_GOOGLE_LOGIN:
+            social_signup_components.extend(
+                [
+                    rio.Separator(),
+                    rio.Button(
+                        "Sign up with Google",
+                        on_press=self.on_google_login_pressed,
+                        style="minor",
+                        shape="rounded",
+                        grow_x=True,
+                    ),
+                ]
+            )
+
         return rio.Card(
             rio.Column(
                 rio.Text("Create account", style="heading1", justify="center"),
@@ -711,11 +800,122 @@ class SignUpForm(rio.Component):
                     row_spacing=1,
                     column_spacing=1,
                 ),
+                *social_signup_components,
                 spacing=1,
                 margin=2,
             ),
             align_y=0,
         )
+
+
+class SocialMFAForm(rio.Component):
+    """
+    Completes an OAuth login for users who have app-level 2FA enabled.
+    """
+
+    pending_user_id: str = ""
+    verification_code: str = ""
+    error_message: str = ""
+    banner_style: str = "success"
+    _is_processing: bool = False
+    on_toggle_form: t.Callable[[str], None] | None = None
+
+    async def complete_login(self, _: rio.TextInputConfirmEvent | None = None) -> None:
+        if self._is_processing:
+            return
+
+        self._is_processing = True
+        self.force_refresh()
+        try:
+            pers = self.session[Persistence]
+            try:
+                user_id = uuid.UUID(self.pending_user_id)
+                user_info = await pers.get_user_by_id(user_id)
+            except (ValueError, KeyError):
+                self.banner_style = "danger"
+                self.error_message = "Google sign-in expired. Please try again."
+                return
+
+            if not user_info.is_active:
+                self.banner_style = "danger"
+                self.error_message = "This account is inactive. Contact an administrator."
+                return
+
+            if not user_info.two_factor_enabled:
+                await _complete_login_session(self.session, pers, user_info)
+                return
+
+            mfa_key = rate_limit_key("user", user_info.id)
+            blocked = _consume_rate_limits(
+                pers,
+                ((login_mfa_policy(), mfa_key),),
+            )
+            if blocked:
+                self.banner_style = "danger"
+                self.error_message = rate_limited_message(
+                    "Too many two-factor attempts.",
+                    blocked.retry_after_seconds,
+                )
+                return
+
+            result = pers.verify_two_factor_challenge(user_info.id, self.verification_code)
+            if not result.ok:
+                self.banner_style = "danger"
+                self.error_message = result.get_error_message()
+                return
+
+            pers.clear_rate_limit(scope=login_mfa_policy().scope, key=mfa_key)
+            await _complete_login_session(
+                self.session,
+                pers,
+                user_info,
+                recovery_code_used=result.used_recovery_code,
+            )
+        finally:
+            self._is_processing = False
+            self.force_refresh()
+
+    def on_cancel(self) -> None:
+        self.verification_code = ""
+        self.error_message = ""
+        if self.on_toggle_form:
+            self.on_toggle_form("login")
+
+    def build(self) -> rio.Component:
+        return rio.Card(
+            rio.Column(
+                rio.Text("Complete sign in", style="heading1", justify="center"),
+                rio.Banner(
+                    text=self.error_message or "Google verified. Enter your app 2FA code.",
+                    style=self.banner_style,
+                    margin_top=1,
+                ),
+                rio.TextInput(
+                    text=self.bind().verification_code,
+                    label="2FA or recovery code",
+                    on_confirm=self.complete_login,
+                ),
+                rio.FlowContainer(
+                    rio.Button(
+                        "Verify",
+                        on_press=self.complete_login,
+                        is_loading=self._is_processing,
+                        shape="rounded",
+                    ),
+                    rio.Button(
+                        "Back to Login",
+                        on_press=self.on_cancel,
+                        shape="rounded",
+                    ),
+                    row_spacing=1,
+                    column_spacing=1,
+                ),
+                spacing=1,
+                margin=2,
+            ),
+            align_y=0,
+        )
+
 
 class ResetPasswordForm(rio.Component):
     """
@@ -1162,7 +1362,7 @@ class LoginPage(rio.Component):
     child component that is dynamically swapped.
     """
 
-    current_form: str = "login"  # Could be 'login', 'signup', or 'reset'
+    current_form: str = "login"  # Could be 'login', 'signup', 'reset', or 'social_mfa'
     page_message: str = ""
     page_message_style: str = "success"
     reset_prefilled_email: str = ""
@@ -1170,6 +1370,7 @@ class LoginPage(rio.Component):
     reset_prefilled_message: str = ""
     reset_prefilled_message_style: str = "success"
     reset_prefilled_require_two_factor: bool = False
+    pending_social_user_id: str = ""
 
     def _set_page_message(self, style: str, message: str) -> None:
         self.page_message_style = style
@@ -1179,8 +1380,53 @@ class LoginPage(rio.Component):
     async def on_populate(self) -> None:
         query = self.session.active_page_url.query
 
+        social_token_raw = str(query.get("social_login_token", "")).strip()
+        oauth_error = str(query.get("oauth_error", "")).strip()
         verify_token_raw = str(query.get("verify_token", "")).strip()
         reset_token_raw = str(query.get("reset_token", "")).strip()
+        if social_token_raw:
+            try:
+                social_token = SecuritySanitizer.sanitize_auth_code(
+                    social_token_raw,
+                    max_length=128,
+                )
+            except HTTPException:
+                social_token = None
+
+            if not social_token:
+                self.current_form = "login"
+                self._set_page_message("danger", "Google sign-in link is invalid.")
+                self.force_refresh()
+                return
+
+            persistence = self.session[Persistence]
+            try:
+                user_info = await persistence.consume_oauth_handoff(social_token)
+            except KeyError:
+                self.current_form = "login"
+                self._set_page_message(
+                    "danger",
+                    "Google sign-in link is invalid or expired. Please try again.",
+                )
+                self.force_refresh()
+                return
+
+            if user_info.two_factor_enabled:
+                self.current_form = "social_mfa"
+                self.pending_social_user_id = str(user_info.id)
+                self._set_page_message("", "")
+                self.force_refresh()
+                return
+
+            await _complete_login_session(self.session, persistence, user_info)
+            return
+
+        if oauth_error:
+            self.current_form = "login"
+            self._set_page_message("danger", _oauth_error_message(oauth_error))
+            self.force_refresh()
+            return
+
         if verify_token_raw:
             try:
                 verify_token = SecuritySanitizer.sanitize_auth_code(verify_token_raw, max_length=96)
@@ -1256,6 +1502,8 @@ class LoginPage(rio.Component):
             self.reset_prefilled_message = ""
             self.reset_prefilled_message_style = "success"
             self.reset_prefilled_require_two_factor = False
+        if form_name != "social_mfa":
+            self.pending_social_user_id = ""
         self.force_refresh()
 
     def build(self) -> rio.Component:
@@ -1272,6 +1520,11 @@ class LoginPage(rio.Component):
                 prefilled_message=self.reset_prefilled_message,
                 prefilled_message_style=self.reset_prefilled_message_style,
                 prefilled_require_two_factor=self.reset_prefilled_require_two_factor,
+            )
+        elif self.current_form == "social_mfa":
+            form_to_show = SocialMFAForm(
+                on_toggle_form=self.set_form,
+                pending_user_id=self.pending_social_user_id,
             )
         else:
             # Fallback to login if something weird happens

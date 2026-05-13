@@ -13,7 +13,6 @@ import rio
 from app.persistence import Persistence
 from app.data_models import UserSettings
 from app.config import config
-from app.persistence_runtime import get_persistence
 import app.theme as theme
 from app.components.root_component import RootComponent
 from app.api.example import router as example_router
@@ -27,7 +26,7 @@ from starlette.middleware.sessions import SessionMiddleware
 async def on_app_start(app: rio.App) -> None:
     # Create a persistence instance. This class hides the gritty details of
     # database interaction from the app.
-    pers = get_persistence()
+    pers = Persistence(allow_username_login=config.ALLOW_USERNAME_LOGIN)
 
     if pers.get_user_count() == 0:
         bootstrap_command = "python -m app.scripts.bootstrap_root"

@@ -9,9 +9,16 @@ from fastapi.testclient import TestClient
 
 import app as app_module
 from app.api import oauth as oauth_module
+from app.api.auth_dependencies import get_persistence
 from app.data_models import AppUser, RecoveryCodeUsage, UserSettings
 from app.pages.login import LoginPage, SocialMFAForm
 from app.persistence import Persistence
+
+
+@pytest.fixture(autouse=True)
+def clear_dependency_overrides():
+    yield
+    app_module.fastapi_app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -126,14 +133,17 @@ def _redirect_query(response) -> dict[str, list[str]]:
 def _patch_app_persistence(monkeypatch, persistence: Persistence) -> None:
     # TestClient runs the ASGI app in a worker thread. Give that thread its own
     # SQLite connection while keeping the same tmp_path-backed database.
-    def get_thread_persistence() -> Persistence:
-        return Persistence(
+    async def override_get_persistence():
+        db = Persistence(
             db_path=persistence.db_path,
             allow_username_login=persistence.allow_username_login,
         )
+        try:
+            yield db
+        finally:
+            db.close()
 
-    monkeypatch.setattr(app_module, "get_persistence", get_thread_persistence)
-    monkeypatch.setattr(oauth_module, "get_persistence", get_thread_persistence)
+    app_module.fastapi_app.dependency_overrides[get_persistence] = override_get_persistence
 
 
 def test_oauth_handoff_tokens_are_hashed_single_use_and_expire(temp_db: Persistence):

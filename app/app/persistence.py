@@ -1,5 +1,6 @@
 import secrets
 import sqlite3
+import threading
 import uuid
 import typing as t
 from datetime import datetime, timezone
@@ -44,26 +45,50 @@ class Persistence:
     ) -> None:
         self.db_path = db_path
         self.allow_username_login = allow_username_login
-        self.conn = None
+        self._thread_local = threading.local()
         self._ensure_connection()
         initialize_schema(self)
 
+    @property
+    def conn(self) -> sqlite3.Connection | None:
+        # Connections are thread-local so a shared Persistence facade does not
+        # reuse SQLite connections across Rio/FastAPI worker threads.
+        thread_local = getattr(self, "_thread_local", None)
+        if thread_local is None:
+            return None
+        return getattr(thread_local, "conn", None)
+
+    @conn.setter
+    def conn(self, value: sqlite3.Connection | None) -> None:
+        thread_local = getattr(self, "_thread_local", None)
+        if thread_local is None:
+            return
+        if value is None:
+            if hasattr(thread_local, "conn"):
+                delattr(thread_local, "conn")
+            return
+        thread_local.conn = value
+
     def _ensure_connection(self) -> None:
         if self.conn is None:
-            self.conn = sqlite3.connect(self.db_path)
+            self.conn = sqlite3.connect(self.db_path, timeout=30.0)
             self.conn.execute("PRAGMA foreign_keys = ON")
+            self.conn.execute("PRAGMA busy_timeout = 5000")
 
     def _get_cursor(self):
         self._ensure_connection()
         return self.conn.cursor()
 
     def close(self) -> None:
+        # As of the post-a179c6c persistence fix, repo usage is request/session
+        # scoped and does not share one facade across long-lived worker threads.
+        # If that changes, each worker thread must close its own connection.
         if not self.conn:
             return
         try:
             self.conn.close()
         except sqlite3.ProgrammingError:
-            pass  # cross-thread teardown; let GC handle it
+            pass
         finally:
             self.conn = None
 

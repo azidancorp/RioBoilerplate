@@ -200,6 +200,27 @@ def test_rate_limit_state_survives_new_persistence_instance(tmp_path: Path):
     assert blocked.allowed is False
 
 
+def test_persistence_facade_uses_thread_local_sqlite_connections(tmp_path: Path):
+    db_path = tmp_path / "thread-local-persistence.db"
+    persistence = Persistence(db_path=db_path)
+    main_thread_connection = persistence.conn
+
+    def get_count_and_connection_id() -> tuple[int, int]:
+        return persistence.get_user_count(), id(persistence.conn)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            worker_count, worker_connection_id = executor.submit(
+                get_count_and_connection_id,
+            ).result()
+
+        assert worker_count == 0
+        assert main_thread_connection is not None
+        assert worker_connection_id != id(main_thread_connection)
+    finally:
+        persistence.close()
+
+
 def test_concurrent_rate_limit_updates_are_not_lost(tmp_path: Path):
     db_path = tmp_path / "concurrent-rate-limits.db"
     Persistence(db_path=db_path).close()

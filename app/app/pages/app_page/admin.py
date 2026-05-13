@@ -186,7 +186,7 @@ class AdminPage(ResponsiveComponent):
         logger.exception("Admin error while %s", action)
         return f"Error {action}. Please check the input and try again."
 
-    async def _on_create_user_pressed(self) -> None:
+    async def _on_create_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         if not self._refresh_current_user_authorization():
             return
 
@@ -268,7 +268,7 @@ class AdminPage(ResponsiveComponent):
         await self._load_user_data()
         self.force_refresh()
 
-    async def _on_edit_user_pressed(self) -> None:
+    async def _on_edit_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         if not self._refresh_current_user_authorization():
             return
 
@@ -345,7 +345,7 @@ class AdminPage(ResponsiveComponent):
         await self._load_user_data()
         self.force_refresh()
 
-    async def _on_set_active_pressed(self) -> None:
+    async def _on_set_active_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         if not self._refresh_current_user_authorization():
             return
 
@@ -422,7 +422,7 @@ class AdminPage(ResponsiveComponent):
         await self._load_user_data()
         self.force_refresh()
 
-    async def _on_send_reset_pressed(self) -> None:
+    async def _on_send_reset_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         if not self._refresh_current_user_authorization():
             return
 
@@ -884,10 +884,12 @@ class AdminPage(ResponsiveComponent):
                     rio.ScrollContainer(
                         rio.Table(
                             data=self.df,
-                            show_row_numbers=False
+                            show_row_numbers=False,
+                            min_height=17,
                         ),
                         scroll_x="auto",
                         scroll_y="auto",
+                        min_height=17,
                     ),
 
                     margin=2,

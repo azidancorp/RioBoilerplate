@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.responses import RedirectResponse
 
+from app.api.auth_dependencies import get_persistence
 from app.data_models import AppUser
 from app.oauth_clients import get_oauth_client
-from app.persistence_runtime import get_persistence
+from app.persistence import Persistence
 from app.validation import SecuritySanitizer
 
 
@@ -37,7 +38,11 @@ async def oauth_login(provider: str, request: Request):
 
 
 @router.get("/{provider}/callback", name="oauth_callback")
-async def oauth_callback(provider: str, request: Request):
+async def oauth_callback(
+    provider: str,
+    request: Request,
+    pers: Persistence = Depends(get_persistence),
+):
     client = get_oauth_client(provider)
     if client is None:
         if provider == "google":
@@ -77,8 +82,6 @@ async def oauth_callback(provider: str, request: Request):
         display_name=display_name,
         avatar_url=userinfo.get("picture"),
     )
-
-    pers = get_persistence()
 
     try:
         user = await pers.get_user_by_provider_identity(

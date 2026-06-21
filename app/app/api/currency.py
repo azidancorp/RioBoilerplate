@@ -139,6 +139,7 @@ async def adjust_currency_route(
             reason=payload.reason,
             metadata=payload.metadata,
             actor_user_id=current_user.id,
+            actor_role=current_user.role,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -178,6 +179,7 @@ async def set_currency_route(
             reason=payload.reason,
             metadata=payload.metadata,
             actor_user_id=current_user.id,
+            actor_role=current_user.role,
         )
     except ValueError as exc:
         raise HTTPException(

@@ -24,6 +24,7 @@ def initialize_schema(persistence: SchemaPersistence) -> None:
     create_recovery_codes_table(persistence)
     create_currency_ledger_table(persistence)
     create_rate_limit_tables(persistence)
+    create_admin_audit_table(persistence)
 
 
 def _get_connection(persistence: SchemaPersistence) -> sqlite3.Connection:
@@ -138,6 +139,55 @@ def create_currency_ledger_table(persistence: SchemaPersistence) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_currency_ledger_user_id_created
         ON user_currency_ledger(user_id, created_at DESC)
+        """
+    )
+    conn.commit()
+
+
+def create_admin_audit_table(persistence: SchemaPersistence) -> None:
+    """Ensure the append-only admin action audit log table exists.
+
+    Unlike the currency ledger, this table intentionally has NO foreign keys to
+    ``users``: an audit row is a historical fact that must survive deletion of
+    the actor or target it references (otherwise deleting a user would erase the
+    record of who deleted them).
+    """
+    cursor = persistence._get_cursor()
+    conn = _get_connection(persistence)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_audit_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_user_id   TEXT,
+            actor_role      TEXT,
+            action          TEXT NOT NULL,
+            target_user_id  TEXT,
+            target_label    TEXT,
+            before          TEXT,
+            after           TEXT,
+            metadata        TEXT,
+            client_ip       TEXT,
+            outcome         TEXT NOT NULL DEFAULT 'success',
+            created_at      REAL NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_actor
+        ON admin_audit_log(actor_user_id, created_at DESC)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_target
+        ON admin_audit_log(target_user_id, created_at DESC)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_action
+        ON admin_audit_log(action, created_at DESC)
         """
     )
     conn.commit()

@@ -43,6 +43,12 @@ APP_ROUTES: tuple[AppRoute, ...] = (
         sidebar_icon="science",
     ),
     AppRoute(
+        path="/app/audit-log",
+        allowed_roles=("root", "admin"),
+        sidebar_title="Audit Log",
+        sidebar_icon="history",
+    ),
+    AppRoute(
         path="/app/news",
         allowed_roles=("root", "admin", "user"),
         sidebar_title="News",

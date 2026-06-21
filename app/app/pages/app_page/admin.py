@@ -142,6 +142,10 @@ class AdminPage(ResponsiveComponent):
             key=rate_limit_key(scope, f"{actor}:{target}"),
         )
 
+    def _client_ip(self) -> str | None:
+        """Best-effort source IP for audit attribution."""
+        return context_from_rio_session(self.session).client_ip
+
     async def _get_target_user(self, identifier: str) -> AppUser:
         persistence = self.session[Persistence]
         try:
@@ -249,6 +253,7 @@ class AdminPage(ResponsiveComponent):
                 username=(self.create_user_username or "").strip() or None,
                 full_name=(self.create_user_full_name or "").strip() or None,
                 is_verified=self.create_user_is_verified,
+                client_ip=self._client_ip(),
             )
         except Exception as exc:
             self.create_user_error = self._admin_error_message("creating user", exc)
@@ -328,6 +333,7 @@ class AdminPage(ResponsiveComponent):
                 email=updates["email"],
                 username=updates["username"],
                 full_name=updates["full_name"],
+                client_ip=self._client_ip(),
             )
         except Exception as exc:
             self.edit_user_error = self._admin_error_message("updating user", exc)
@@ -402,6 +408,7 @@ class AdminPage(ResponsiveComponent):
                 target_user.id,
                 self.active_user_is_active,
                 actor=self.current_user,
+                client_ip=self._client_ip(),
             )
         except Exception as exc:
             self.active_user_error = self._admin_error_message(
@@ -474,6 +481,7 @@ class AdminPage(ResponsiveComponent):
             reset_token = await persistence.admin_issue_password_reset(
                 target_user.id,
                 actor=self.current_user,
+                client_ip=self._client_ip(),
             )
             send_password_reset_email(
                 recipient=target_user.email,
@@ -595,7 +603,12 @@ class AdminPage(ResponsiveComponent):
 
         try:
             self.change_role_error = ""
-            await persistence.update_user_role(target_user.id, new_role)
+            await persistence.update_user_role(
+                target_user.id,
+                new_role,
+                actor=self.current_user,
+                client_ip=self._client_ip(),
+            )
             persistence.clear_rate_limit(
                 scope=sensitive_action_policy("admin_change_role").scope,
                 key=rate_limit_key("admin_change_role", f"{self.current_user.id}:{target_user.id}"),
@@ -689,7 +702,9 @@ class AdminPage(ResponsiveComponent):
             success = await persistence.delete_user(
                 user_id=target_user.id,
                 password=self.delete_user_password,  # Use entered admin deletion password
-                two_factor_code=None  # No 2FA needed for admin deletion
+                two_factor_code=None,  # No 2FA needed for admin deletion
+                actor=self.current_user,
+                client_ip=self._client_ip(),
             )
             if success:
                 # Set success message
@@ -794,6 +809,8 @@ class AdminPage(ResponsiveComponent):
                     reason=reason,
                     metadata=None,
                     actor_user_id=self.current_user.id,
+                    actor_role=self.current_user.role,
+                    client_ip=self._client_ip(),
                 )
                 action_word = "Set"
             else:
@@ -803,6 +820,8 @@ class AdminPage(ResponsiveComponent):
                     reason=reason,
                     metadata=None,
                     actor_user_id=self.current_user.id,
+                    actor_role=self.current_user.role,
+                    client_ip=self._client_ip(),
                 )
                 action_word = "Adjusted"
         except ValueError as exc:

@@ -22,6 +22,7 @@ from app.permissions import (
     get_all_roles,
 )
 from app.rate_limits import RateLimitDecision, RateLimitPolicy
+import app.persistence_audit as persistence_audit
 import app.persistence_auth as persistence_auth
 import app.persistence_currency as persistence_currency
 import app.persistence_profiles as persistence_profiles
@@ -128,6 +129,12 @@ class Persistence:
             created_at=created_at,
             commit=commit,
         )
+
+    def record_admin_action(self, **kwargs) -> None:
+        return persistence_audit.record_admin_action(self, **kwargs)
+
+    def list_admin_actions(self, **kwargs) -> list[dict[str, t.Any]]:
+        return persistence_audit.list_admin_actions(self, **kwargs)
 
     def generate_recovery_codes(self, user_id: uuid.UUID, count: int = 10) -> list[str]:
         return persistence_auth.generate_recovery_codes(self, user_id, count=count)
@@ -342,6 +349,7 @@ class Persistence:
         username: str | None = None,
         full_name: str | None = None,
         is_verified: bool = False,
+        client_ip: str | None = None,
     ) -> AppUser:
         """Create a user from the admin surface without public root bootstrap."""
         if not validate_role(role):
@@ -398,6 +406,18 @@ class Persistence:
                 now_ts=now_ts,
                 profile_full_name=sanitized_full_name,
             )
+            self.record_admin_action(
+                actor_user_id=actor.id,
+                actor_role=actor.role,
+                action="user_create",
+                target_user_id=user.id,
+                target_label=user.email,
+                before=None,
+                after={"email": user.email, "role": role},
+                client_ip=client_ip,
+                created_at=now_ts,
+                commit=False,
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -413,6 +433,7 @@ class Persistence:
         email: str | None = None,
         username: str | None = None,
         full_name: str | None = None,
+        client_ip: str | None = None,
     ) -> AppUser:
         """Update admin-managed identity fields and the matching profile row."""
         current_user = await self.get_user_by_id(user_id)
@@ -546,6 +567,28 @@ class Persistence:
                         ),
                     )
 
+            after_email = (
+                normalized_email if normalized_email is not None else current_user.email
+            )
+            after_username = (
+                sanitized_username if username is not None else current_user.username
+            )
+            self.record_admin_action(
+                actor_user_id=actor.id,
+                actor_role=actor.role,
+                action="user_edit",
+                target_user_id=user_id,
+                target_label=after_email,
+                before={
+                    "email": current_user.email,
+                    "username": current_user.username,
+                },
+                after={"email": after_email, "username": after_username},
+                client_ip=client_ip,
+                created_at=now_ts,
+                commit=False,
+            )
+
             conn.commit()
         except Exception:
             conn.rollback()
@@ -559,6 +602,7 @@ class Persistence:
         is_active: bool,
         *,
         actor: AppUser,
+        client_ip: str | None = None,
     ) -> AppUser:
         """Activate or deactivate a user, invalidating sessions on deactivation."""
         current_user = await self.get_user_by_id(user_id)
@@ -598,6 +642,18 @@ class Persistence:
                     (uid,),
                 )
 
+            self.record_admin_action(
+                actor_user_id=actor.id,
+                actor_role=actor.role,
+                action="user_reactivate" if is_active else "user_deactivate",
+                target_user_id=user_id,
+                target_label=current_user.email,
+                before={"is_active": current_user.is_active},
+                after={"is_active": is_active},
+                client_ip=client_ip,
+                commit=False,
+            )
+
             conn.commit()
         except Exception:
             conn.rollback()
@@ -610,6 +666,7 @@ class Persistence:
         user_id: uuid.UUID,
         *,
         actor: AppUser,
+        client_ip: str | None = None,
     ) -> ExpirableVerificationToken:
         """Create a reset token for an active password-authenticated user."""
         user = await self.get_user_by_id(user_id)
@@ -622,7 +679,25 @@ class Persistence:
             raise ValueError("Cannot issue a password reset for an inactive user.")
         if user.auth_provider != "password":
             raise ValueError("Cannot issue a password reset for an external-auth user.")
-        return await self.create_reset_token(user_id)
+        reset_token = await self.create_reset_token(user_id)
+        # create_reset_token commits on its own (and is preceded by a separate
+        # clear_reset_tokens commit), so this audit row cannot share that
+        # transaction without refactoring the reset-token flow. For v1 accept
+        # best-effort ordering: write the row right after the token is created.
+        # The raw token is never stored — only the issuance fact + expiry.
+        self.record_admin_action(
+            actor_user_id=actor.id,
+            actor_role=actor.role,
+            action="password_reset_sent",
+            target_user_id=user_id,
+            target_label=user.email,
+            before=None,
+            after=None,
+            metadata={"valid_until": reset_token.valid_until.timestamp()},
+            client_ip=client_ip,
+            commit=True,
+        )
+        return reset_token
 
     async def create_verified_root_user_if_empty(self, user: AppUser) -> bool:
         """Create a verified root user only if the users table is still empty."""
@@ -718,10 +793,13 @@ class Persistence:
         reason: str | None = None,
         metadata: dict[str, t.Any] | None = None,
         actor_user_id: uuid.UUID | None = None,
+        actor_role: str | None = None,
+        client_ip: str | None = None,
     ) -> CurrencyLedgerEntry:
         return await persistence_currency.adjust_currency_balance(
             self, user_id, delta_minor,
             reason=reason, metadata=metadata, actor_user_id=actor_user_id,
+            actor_role=actor_role, client_ip=client_ip,
         )
 
     async def set_currency_balance(
@@ -732,10 +810,13 @@ class Persistence:
         reason: str | None = None,
         metadata: dict[str, t.Any] | None = None,
         actor_user_id: uuid.UUID | None = None,
+        actor_role: str | None = None,
+        client_ip: str | None = None,
     ) -> CurrencyLedgerEntry:
         return await persistence_currency.set_currency_balance(
             self, user_id, new_balance_minor,
             reason=reason, metadata=metadata, actor_user_id=actor_user_id,
+            actor_role=actor_role, client_ip=client_ip,
         )
 
     async def list_currency_ledger(
@@ -773,12 +854,20 @@ class Persistence:
         return await persistence_users.get_user_by_email_or_username(self, identifier)
 
     # Updates users + sessions; cross-table write stays on façade.
-    async def update_user_role(self, user_id: uuid.UUID, new_role: str) -> None:
+    async def update_user_role(
+        self,
+        user_id: uuid.UUID,
+        new_role: str,
+        *,
+        actor: AppUser | None = None,
+        client_ip: str | None = None,
+    ) -> None:
         if not validate_role(new_role):
             raise ValueError(f"Invalid role: {new_role}. Must be one of: {', '.join(get_all_roles())}")
 
         cursor = self._get_cursor()
-        await self.get_user_by_id(user_id)
+        target_user = await self.get_user_by_id(user_id)
+        old_role = target_user.role
 
         cursor.execute(
             "UPDATE users SET role = ? WHERE id = ?",
@@ -791,6 +880,20 @@ class Persistence:
         cursor.execute(
             "UPDATE user_sessions SET role = ? WHERE user_id = ?",
             (new_role, str(user_id)),
+        )
+
+        # actor is optional (this method has no persistence-layer authz; it is
+        # gated in the UI handler). Guard every actor.* read behind a None check.
+        self.record_admin_action(
+            actor_user_id=actor.id if actor is not None else None,
+            actor_role=actor.role if actor is not None else None,
+            action="role_change",
+            target_user_id=user_id,
+            target_label=target_user.email,
+            before={"role": old_role},
+            after={"role": new_role},
+            client_ip=client_ip,
+            commit=False,
         )
 
         self.conn.commit()
@@ -875,7 +978,15 @@ class Persistence:
         await persistence_auth.clear_email_verification_tokens(self, user_id)
 
     # Cross-table delete: auth check + FK-ordered cleanup.
-    async def delete_user(self, user_id: uuid.UUID, password: str, two_factor_code: str | None = None) -> bool:
+    async def delete_user(
+        self,
+        user_id: uuid.UUID,
+        password: str,
+        two_factor_code: str | None = None,
+        *,
+        actor: AppUser | None = None,
+        client_ip: str | None = None,
+    ) -> bool:
         try:
             user = await self.get_user_by_id(user_id)
         except KeyError:
@@ -900,6 +1011,38 @@ class Persistence:
 
         cursor = self._get_cursor()
         uid = str(user_id)
+
+        # Self-service deletion has no admin actor (settings.py calls this without
+        # one); the admin path always passes actor != target. Attribute a
+        # self-deletion to the user themselves so actor == target reads correctly,
+        # and tag it so it is distinguishable from an admin removal. Guard every
+        # actor.* read behind an actor-is-not-None check.
+        is_self_service = actor is None or actor.id == user_id
+        if is_self_service:
+            audit_actor_id: uuid.UUID | None = user_id
+            audit_actor_role = user.role
+            audit_metadata: dict[str, t.Any] | None = {"self_service": True}
+        else:
+            audit_actor_id = actor.id
+            audit_actor_role = actor.role
+            audit_metadata = None
+
+        # Write the audit row before the cascade deletes so the target's
+        # email/role are snapshotted. The audit table has no FK cascade, so this
+        # row persists after the user is gone.
+        self.record_admin_action(
+            actor_user_id=audit_actor_id,
+            actor_role=audit_actor_role,
+            action="user_delete",
+            target_user_id=user_id,
+            target_label=user.email,
+            before={"email": user.email, "role": user.role},
+            after=None,
+            metadata=audit_metadata,
+            client_ip=client_ip,
+            commit=False,
+        )
+
         for table in (
             "user_sessions",
             "password_reset_tokens",

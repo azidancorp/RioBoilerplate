@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Protocol
 
+import app.persistence_audit as persistence_audit
 from app.currency import (
     format_minor_amount,
     get_currency_config,
@@ -178,6 +179,8 @@ async def adjust_currency_balance(
     reason: str | None = None,
     metadata: dict[str, t.Any] | None = None,
     actor_user_id: uuid.UUID | None = None,
+    actor_role: str | None = None,
+    client_ip: str | None = None,
 ) -> CurrencyLedgerEntry:
     """
     Increment a user's balance by the specified delta and record a ledger entry.
@@ -226,6 +229,23 @@ async def adjust_currency_balance(
             created_at=timestamp,
         )
 
+        # Thin audit row for symmetry: the currency ledger holds the detail
+        # (delta + balance_after + actor), so the audit row just points at it via
+        # ledger_id and answers "all admin actions" from one table.
+        persistence_audit.record_admin_action(
+            persistence,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            action="currency_adjust",
+            target_user_id=user_id,
+            before={"balance": current_balance},
+            after={"balance": new_balance},
+            metadata={"ledger_id": ledger_entry.id},
+            client_ip=client_ip,
+            created_at=timestamp,
+            commit=False,
+        )
+
         conn.commit()
         return ledger_entry
     except Exception:
@@ -241,6 +261,8 @@ async def set_currency_balance(
     reason: str | None = None,
     metadata: dict[str, t.Any] | None = None,
     actor_user_id: uuid.UUID | None = None,
+    actor_role: str | None = None,
+    client_ip: str | None = None,
 ) -> CurrencyLedgerEntry:
     """Set a user's balance to the provided amount and record ledger delta."""
     cfg = get_currency_config()
@@ -282,6 +304,21 @@ async def set_currency_balance(
             metadata=metadata,
             actor_user_id=actor_user_id,
             created_at=timestamp,
+        )
+
+        # Thin audit row for symmetry (see adjust_currency_balance).
+        persistence_audit.record_admin_action(
+            persistence,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            action="currency_set",
+            target_user_id=user_id,
+            before={"balance": current_balance},
+            after={"balance": int(new_balance_minor)},
+            metadata={"ledger_id": ledger_entry.id},
+            client_ip=client_ip,
+            created_at=timestamp,
+            commit=False,
         )
 
         conn.commit()

@@ -138,7 +138,7 @@ def test_guard_rejects_live_session_after_database_expiry(temp_db: Persistence):
         cursor = temp_db._get_cursor()
         cursor.execute(
             "UPDATE user_sessions SET valid_until = 0 WHERE id = ?",
-            (cached_session.id,),
+            (temp_db._hash_one_time_token(cached_session.id),),
         )
         temp_db.conn.commit()
 

@@ -324,7 +324,11 @@ async def create_session(
         VALUES (?, ?, ?, ?, ?)
         """,
         (
-            session.id,
+            # Store the SHA-256 hash of the token at rest; the raw token is
+            # returned to the caller (and handed to the client) but never
+            # persisted in cleartext. See get_session_by_auth_token for the
+            # matching hash-on-lookup.
+            _hash_one_time_token(session.id),
             str(session.user_id),
             session.created_at.timestamp(),
             session.valid_until.timestamp(),
@@ -364,7 +368,9 @@ async def update_session_duration(
         """,
         (
             session.valid_until.timestamp(),
-            session.id,
+            # session.id holds the raw token; the stored primary key is its
+            # SHA-256 hash, so hash before matching the row.
+            _hash_one_time_token(session.id),
         ),
     )
     conn.commit()
@@ -390,15 +396,17 @@ async def get_session_by_auth_token(
     cursor = persistence._get_cursor()
     cursor.execute(
         "SELECT id, user_id, created_at, valid_until, role FROM user_sessions WHERE id = ? ORDER BY created_at LIMIT 1",
-        (auth_token,),
+        (_hash_one_time_token(auth_token),),
     )
 
     row = cursor.fetchone()
     if row is None:
-        raise KeyError(f"No session found with auth token {auth_token}")
+        raise KeyError("No session found for the supplied auth token")
 
     return UserSession(
-        id=row[0],
+        # Return the raw token the caller supplied, never row[0] (the stored
+        # hash). UserSession.id must stay equal to the client's bearer token.
+        id=auth_token,
         user_id=uuid.UUID(row[1]),
         created_at=datetime.fromtimestamp(row[2], tz=timezone.utc),
         valid_until=datetime.fromtimestamp(row[3], tz=timezone.utc),
@@ -432,23 +440,24 @@ def get_valid_session_by_auth_token(
         ORDER BY s.created_at
         LIMIT 1
         """,
-        (auth_token,),
+        (_hash_one_time_token(auth_token),),
     )
 
     row = cursor.fetchone()
     if row is None:
-        raise KeyError(f"No session found with auth token {auth_token}")
+        raise KeyError("No session found for the supplied auth token")
 
     valid_until = datetime.fromtimestamp(row[3], tz=timezone.utc)
     if valid_until <= datetime.now(tz=timezone.utc):
-        raise KeyError(f"Session expired for auth token {auth_token}")
+        raise KeyError("Session expired for the supplied auth token")
 
     user = _row_to_app_user(row[5:])
     if not user.is_active:
-        raise KeyError(f"User account is inactive for auth token {auth_token}")
+        raise KeyError("User account is inactive for the supplied auth token")
 
     session = UserSession(
-        id=row[0],
+        # Raw token in, raw token out (row[0] is the stored hash).
+        id=auth_token,
         user_id=uuid.UUID(row[1]),
         created_at=datetime.fromtimestamp(row[2], tz=timezone.utc),
         valid_until=valid_until,

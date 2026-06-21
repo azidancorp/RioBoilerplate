@@ -89,7 +89,7 @@ async def _expire_database_session(persistence: Persistence, user_session: UserS
     cursor = persistence._get_cursor()
     cursor.execute(
         "UPDATE user_sessions SET valid_until = 0 WHERE id = ?",
-        (user_session.id,),
+        (persistence._hash_one_time_token(user_session.id),),
     )
     persistence.conn.commit()
 

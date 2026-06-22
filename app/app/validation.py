@@ -26,6 +26,13 @@ MAX_ADDRESS_LENGTH = 500
 MAX_BIO_LENGTH = 2000
 MAX_URL_LENGTH = 2048
 
+# Upper bound (in major currency units) for adjustments and balances. Currency
+# is stored as int64 minor units; without a cap, an oversized value overflows
+# SQLite's INTEGER on write and surfaces as an opaque 500 instead of a clean
+# 422. One trillion major units stays safely inside int64 even at several
+# decimal places, while being far larger than any realistic balance.
+MAX_CURRENCY_AMOUNT = Decimal("1000000000000")
+
 
 class SecuritySanitizer:
     """Utility class for sanitizing user input to prevent security vulnerabilities."""
@@ -413,6 +420,8 @@ class CurrencyAdjustmentRequest(BaseModel):
     amount: Decimal = Field(
         ...,
         description=f"Delta amount in major units (e.g. {config.PRIMARY_CURRENCY_NAME_PLURAL})",
+        ge=-MAX_CURRENCY_AMOUNT,
+        le=MAX_CURRENCY_AMOUNT,
     )
     reason: Optional[str] = Field(None, max_length=200, description="Reason for audit trail")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata blob recorded in ledger")
@@ -454,7 +463,12 @@ class CurrencySetBalanceRequest(BaseModel):
         description="Email or username fallback",
         max_length=MAX_EMAIL_LENGTH,
     )
-    balance: Decimal = Field(..., description="Desired balance in major units")
+    balance: Decimal = Field(
+        ...,
+        description="Desired balance in major units",
+        ge=-MAX_CURRENCY_AMOUNT,
+        le=MAX_CURRENCY_AMOUNT,
+    )
     reason: Optional[str] = Field(None, max_length=200)
     metadata: Optional[Dict[str, Any]] = Field(None)
 

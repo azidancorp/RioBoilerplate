@@ -22,6 +22,7 @@ Rio-based web application boilerplate with user authentication, MFA, mobile-resp
 - Utilities/scripts (2FA + QR tests, admin helpers): `app/app/scripts/`
 - Tests (pytest): `app/tests/`
 - Prototype HTML/JS pages: `app/JSPages/` (included in `app/rio.toml` project files)
+- Branding assets (favicon, logo, OG image): `app/app/assets/`; regeneration script lives at `app/assets_src/build_brand_assets.py` (run with `python assets_src/build_brand_assets.py` from the outer `app/` directory)
 - Docs/playbooks: `README.md`, `DEPLOYMENT_INSTRUCTIONS.md`, `UPSTREAM_MERGE_GUIDE.md`, `RioDocumentation/`
 
 ## Run / Test

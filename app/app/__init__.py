@@ -97,6 +97,17 @@ async def on_session_start(rio_session: rio.Session) -> None:
 
 app = rio.App(
     name='app',
+    # TODO: check the favicon.ico — assets/favicon.ico is generated but not
+    # wired up; the browser favicon is served from `icon` below via /rio/favicon.png.
+    icon=Path(__file__).parent / "assets" / "logo.png",
+    meta_tags={
+        "og:title": "RioBoilerplate",
+        "og:description": "Production-ready Rio web app template.",
+        "og:image": f"{config.APP_URL.rstrip('/')}/rio/assets/user/og_image.png",
+        "og:type": "website",
+        "twitter:card": "summary_large_image",
+        "twitter:image": f"{config.APP_URL.rstrip('/')}/rio/assets/user/og_image.png",
+    },
     default_attachments=[UserSettings(auth_token='')],
     on_app_start=on_app_start,
     on_session_start=on_session_start,

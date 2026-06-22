@@ -67,6 +67,7 @@ With no arguments, the command prompts for email and password. You can also pass
 - Email validation and username-login behavior are documented in `docs/configuration/email-validation.md`.
 - `ALLOW_PUBLIC_ROOT_BOOTSTRAP=True` preserves the quick-start first-signup behavior. Set it to `False` when deployment must use `python -m app.scripts.bootstrap_root` instead.
 - The runtime SQLite database file `app/app/data/app.db` is created locally on first run and is ignored by git.
+- Before going to production, replace the placeholder branding in `app/app/assets/` (`favicon.ico`, `logo.png`, `og_image.png`) with your own. The source script at `app/assets_src/build_brand_assets.py` shows how they were generated and can be adapted; run it from the outer `app/` directory with `python assets_src/build_brand_assets.py`.
 
 ## Currency System
 - SQLite schema stores a single minor-unit balance per user plus an audited `user_currency_ledger`.
@@ -84,7 +85,7 @@ RioBoilerplate/
 │   └── app/
 │       ├── __init__.py        # App bootstrap + FastAPI bridge
 │       ├── api/               # FastAPI routers (profiles, examples)
-│       ├── assets/            # Static assets
+│       ├── assets/            # Branding assets (favicon, logo, og_image) — replace before production
 │       ├── components/        # Reusable Rio UI widgets
 │       ├── data/              # Runtime SQLite DB (local/ignored) and sample data
 │       ├── pages/             # Public pages

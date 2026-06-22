@@ -359,6 +359,18 @@ async def update_session_duration(
         considered valid.
     """
     conn = _get_connection(persistence)
+
+    # Enforce an absolute lifetime ceiling so the sliding window can't renew a
+    # session forever. The cap is measured from creation; clamping here means
+    # valid_until never advances past it, so every existing `valid_until <= now`
+    # check (Rio guards and the API auth dependency) expires the session once
+    # the ceiling is reached. A non-positive cap disables this.
+    if config.SESSION_ABSOLUTE_MAX_DAYS > 0:
+        absolute_deadline = session.created_at + timedelta(
+            days=config.SESSION_ABSOLUTE_MAX_DAYS
+        )
+        new_valid_until = min(new_valid_until, absolute_deadline)
+
     session.valid_until = new_valid_until
 
     cursor = persistence._get_cursor()

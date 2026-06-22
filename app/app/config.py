@@ -54,6 +54,14 @@ class AppConfig:
     OAUTH_COOKIE_SECURE: bool = False
     OAUTH_HANDOFF_TTL_MINUTES: int = 5
 
+    # Session Lifetime
+    # ----------------
+    # Sessions use a sliding window (extended on each visit), but that window
+    # can otherwise renew forever. This is an absolute ceiling measured from
+    # session creation: once exceeded, the session expires regardless of recent
+    # activity and the user must re-authenticate. Set to 0 to disable the cap.
+    SESSION_ABSOLUTE_MAX_DAYS: int = 30
+
     # Currency Settings
     # -----------------
     # Primary currency metadata powering balance features. Naming can be overridden per deployment.

@@ -34,6 +34,20 @@ from app.persistence_schema import initialize_schema
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "app.db"
 
+# Schema setup is idempotent but does ~29 DDL statements, so we only run it once
+# per database file per process instead of on every Persistence() construction
+# (the FastAPI dependency builds a fresh facade on each request). The guard is an
+# optimization only: initialize_schema() stays safe to call again, so a missed
+# guard just costs a redundant no-op pass, never correctness.
+_initialized_db_paths: set[str] = set()
+_initialized_db_paths_lock = threading.Lock()
+
+
+def _reset_initialized_db_paths() -> None:
+    """Forget which databases have been initialized (used by tests)."""
+    with _initialized_db_paths_lock:
+        _initialized_db_paths.clear()
+
 
 class Persistence:
     """Façade for all database operations. Delegates to persistence_* modules."""
@@ -48,7 +62,16 @@ class Persistence:
         self.allow_username_login = allow_username_login
         self._thread_local = threading.local()
         self._ensure_connection()
-        initialize_schema(self)
+        self._initialize_schema_once()
+
+    def _initialize_schema_once(self) -> None:
+        key = str(self.db_path)
+        with _initialized_db_paths_lock:
+            already_done = key in _initialized_db_paths
+        if not already_done:
+            initialize_schema(self)
+            with _initialized_db_paths_lock:
+                _initialized_db_paths.add(key)
 
     @property
     def conn(self) -> sqlite3.Connection | None:

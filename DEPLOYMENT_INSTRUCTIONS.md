@@ -212,6 +212,21 @@ cd /root/[APP_NAME]/app
 
 With no arguments, the command prompts for email and password. You can also pass values directly, for example `../venv/bin/python -m app.scripts.bootstrap_root --email owner@example.com --password '<strong-password>'`. `--username owner` is optional; if you provide `--username` without `--email`, that username becomes the root login identifier. If users already exist, the command exits successfully without changing anything.
 
+## Step 3.7: Production Hardening Checklist
+
+The boilerplate ships with developer-friendly defaults that are convenient for local work but **must be reviewed before public exposure**. These are non-secret behavior flags, so they live in `app/app/config.py` — edit that file directly. Review each one:
+
+| Flag (`app/app/config.py`) | Default | Recommended for production |
+| --- | --- | --- |
+| `ALLOW_PUBLIC_ROOT_BOOTSTRAP` | `True` | After running Step 3.6, set `False` so a public signup on an empty database can never claim the root role. (The systemd `ExecStartPre` below also enforces this via `--strict-bootstrap`.) |
+| `OAUTH_COOKIE_SECURE` | `False` | `True` — required so the OAuth state/nonce cookie is only sent over HTTPS, which production serves. |
+| `REQUIRE_EMAIL_VERIFICATION` | `False` | Decide deliberately. Set `True` to require verified email before login (requires working SMTP from Step 3.5). |
+| `ALLOW_WEAK_PASSWORDS` | `True` | `False` to reject weak passwords outright instead of allowing them with acknowledgement. |
+| `RATE_LIMIT_TRUST_PROXY_HEADERS` | `False` | `True` **only** when behind the trusted reverse proxy configured in Step 6, so per-IP rate limits use the real client IP. See the rate-limiting note later in this guide. |
+| `SESSION_ABSOLUTE_MAX_DAYS` | `30` | Absolute session lifetime ceiling. Lower it for stricter re-auth cadence, or set `0` to disable the cap. |
+
+> **Footgun:** `ALLOW_PUBLIC_ROOT_BOOTSTRAP=True` combined with `REQUIRE_EMAIL_VERIFICATION=False` means the *first* account created on an empty database becomes an immediately usable root user. Always complete Step 3.6 (and prefer the `--strict-bootstrap` prestart below) before the app is reachable from the internet.
+
 ## Step 4: Test Application
 
 SSH back into the server and test the application:

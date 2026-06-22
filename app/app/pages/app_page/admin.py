@@ -14,7 +14,12 @@ from app.data_models import AppUser
 from app.permissions import can_manage_role, check_access, get_manageable_roles, get_default_role
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
-from app.session_validation import refresh_attached_user_session, reject_stale_user_session
+from app.session_validation import (
+    perform_step_up,
+    refresh_attached_user_session,
+    reject_stale_user_session,
+    require_elevated_session,
+)
 from app.currency import major_to_minor, format_minor_amount, attach_currency_name
 from app.validation import SecuritySanitizer
 from app.config import config
@@ -89,6 +94,16 @@ class AdminPage(ResponsiveComponent):
     currency_mode_is_set: bool = False  # False -> adjust delta, True -> set absolute
     currency_error: str = ""
     currency_success: str = ""
+
+    # Step-up (sudo mode) re-auth dialog state. When a sensitive action (role
+    # change) is attempted without an active elevation window, the dialog is
+    # shown and the pending action is stashed so it can be replayed on success.
+    step_up_visible: bool = False
+    step_up_password: str = ""
+    step_up_2fa: str = ""
+    step_up_error: str = ""
+    step_up_pending_identifier: str = ""
+    step_up_pending_new_role: str = ""
 
     @rio.event.on_populate
     async def on_populate(self):
@@ -589,6 +604,14 @@ class AdminPage(ResponsiveComponent):
             )
             return False
 
+        # Sudo mode: require a recent step-up re-auth before mutating a role. The
+        # gate is re-validated server-side here (not just when the dialog closes),
+        # so a stale/expired elevation re-prompts. The action is legitimate at
+        # this point (permissions already checked), so prompting is warranted.
+        if require_elevated_session(self.session) is None:
+            self._show_step_up_dialog(identifier=identifier, new_role=new_role)
+            return False
+
         decision = self._check_sensitive_limit(
             persistence,
             "admin_change_role",
@@ -617,6 +640,81 @@ class AdminPage(ResponsiveComponent):
         except Exception as exc:
             self.change_role_error = self._admin_error_message("updating role", exc)
             return False
+
+    def _show_step_up_dialog(self, *, identifier: str, new_role: str) -> None:
+        """Stash the pending role change and reveal the step-up re-auth dialog."""
+        self.step_up_pending_identifier = identifier
+        self.step_up_pending_new_role = new_role
+        self.step_up_password = ""
+        self.step_up_2fa = ""
+        self.step_up_error = ""
+        self.step_up_visible = True
+
+    def _hide_step_up_dialog(self) -> None:
+        self.step_up_visible = False
+        self.step_up_password = ""
+        self.step_up_2fa = ""
+        self.step_up_error = ""
+        self.step_up_pending_identifier = ""
+        self.step_up_pending_new_role = ""
+
+    def _on_step_up_cancel(self, _: rio.TextInputConfirmEvent | None = None) -> None:
+        self._hide_step_up_dialog()
+        self.force_refresh()
+
+    async def _on_step_up_submit(self, _: rio.TextInputConfirmEvent | None = None) -> None:
+        """Verify the admin's own credentials, elevate, and replay the role change."""
+        if not self._refresh_current_user_authorization():
+            return
+
+        if not self.current_user:
+            self.step_up_error = "You must be logged in to perform this action"
+            self.force_refresh()
+            return
+
+        persistence = self.session[Persistence]
+        # Throttle the admin's own password/TOTP guessing. One elevation window
+        # covers every target, so key on the actor only (default target="").
+        decision = self._check_sensitive_limit(persistence, "admin_step_up")
+        if not decision.allowed:
+            self.step_up_error = rate_limited_message(
+                "Too many verification attempts.",
+                decision.retry_after_seconds,
+            )
+            self.force_refresh()
+            return
+
+        result = await perform_step_up(
+            self.session,
+            password=self.step_up_password,
+            two_factor_code=self.step_up_2fa or None,
+        )
+        if not result.ok:
+            self.step_up_error = result.error_message or "Verification failed."
+            self.force_refresh()
+            return
+
+        self._clear_rate_limit(persistence, "admin_step_up", "")
+
+        identifier = self.step_up_pending_identifier
+        new_role = self.step_up_pending_new_role
+        self._hide_step_up_dialog()
+
+        updated = await self._update_role(identifier, new_role)
+        if updated:
+            self.change_role_identifier = ""
+            self.change_role_new_role = get_default_role()
+            await self._load_user_data()
+
+        # Surface the recovery-code warning only after _update_role runs, since it
+        # resets change_role_error on the elevated path (admin.py:628). On a failed
+        # update we leave its error message in place rather than clobber it.
+        if result.used_recovery_code and updated:
+            self.change_role_error = (
+                "A recovery code was used. Generate a new set to stay protected."
+            )
+
+        self.force_refresh()
 
     async def _on_delete_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """Handle the user deletion process from admin panel."""
@@ -876,6 +974,65 @@ class AdminPage(ResponsiveComponent):
             *children,
             spacing=self.flow_spacing,
             proportions=proportions,
+        )
+
+    def _build_step_up_dialog(self) -> rio.Component:
+        """Inline re-auth prompt shown before a sensitive role change.
+
+        Built inline on the (responsive-safe) AdminPage so no new component needs
+        to inherit ResponsiveComponent. The 2FA field is only shown when the
+        current admin has 2FA enabled.
+        """
+        contents: list[rio.Component] = [
+            rio.Text("Confirm it's you", style="heading3"),
+            rio.Text(
+                f"Re-enter your credentials to change "
+                f"{self.step_up_pending_identifier}'s role to "
+                f"{self.step_up_pending_new_role}.",
+                overflow="wrap",
+            ),
+            rio.TextInput(
+                label="Your Password",
+                text=self.bind().step_up_password,
+                is_secret=True,
+                on_confirm=self._on_step_up_submit,
+            ),
+        ]
+
+        if self.current_user and self.current_user.two_factor_enabled:
+            contents.append(
+                rio.TextInput(
+                    label="2FA or Recovery Code",
+                    text=self.bind().step_up_2fa,
+                    on_confirm=self._on_step_up_submit,
+                )
+            )
+
+        contents.append(
+            rio.Row(
+                rio.Button(
+                    "Confirm",
+                    on_press=self._on_step_up_submit,
+                    shape="rounded",
+                ),
+                rio.Button(
+                    "Cancel",
+                    on_press=self._on_step_up_cancel,
+                    shape="rounded",
+                    style="minor",
+                ),
+                spacing=1,
+            )
+        )
+
+        if self.step_up_error:
+            contents.append(
+                rio.Banner(text=self.step_up_error, style="danger", margin_top=1)
+            )
+
+        return rio.Card(
+            rio.Column(*contents, spacing=1, margin=2),
+            margin_top=1,
         )
 
     def build(self) -> rio.Component:
@@ -1149,6 +1306,10 @@ class AdminPage(ResponsiveComponent):
                 text=self.change_role_error,
                 style="danger",
                 margin_top=1,
+            ),
+
+            self._build_step_up_dialog() if self.step_up_visible else rio.Spacer(
+                min_height=0, grow_x=False, grow_y=False
             ),
 
 

@@ -43,6 +43,11 @@ class UserSession:
     valid_until: datetime
     role: str
 
+    # Sudo-mode (step-up re-auth) deadline. NULL/None means the session is not
+    # elevated. Set by `elevate_session` after a successful re-auth and checked
+    # by `session_is_elevated` before sensitive admin actions.
+    elevated_until: datetime | None = None
+
 
 @dataclass
 class AppUser:

@@ -147,6 +147,12 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.delete_user_password = ""
     component.delete_user_error = ""
     component.delete_user_success = ""
+    component.step_up_visible = False
+    component.step_up_password = ""
+    component.step_up_2fa = ""
+    component.step_up_error = ""
+    component.step_up_pending_identifier = ""
+    component.step_up_pending_new_role = ""
     for key, value in attributes.items():
         setattr(component, key, value)
     return component
@@ -358,6 +364,9 @@ def test_admin_change_role_success_clears_rate_limit_bucket(temp_db: Persistence
         admin = await _create_user(temp_db, "admin-role-clear@example.com")
         target = await _create_user(temp_db, "target-role-clear@example.com")
         admin_session = await temp_db.create_session(admin.id)
+        # Role change is now gated behind a sudo-mode elevation window; stamp one
+        # so this test exercises the rate-limit clearing rather than the gate.
+        await temp_db.elevate_session(admin_session.id, config.SUDO_MODE_TTL_SECONDS)
         session = _FakeSession(temp_db, admin_session, admin)
         page = _mount_admin(session)
         key = rate_limit_key("admin_change_role", f"{admin.id}:{target.id}")

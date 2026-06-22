@@ -155,6 +155,12 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.currency_mode_is_set = False
     component.currency_error = ""
     component.currency_success = ""
+    component.step_up_visible = False
+    component.step_up_password = ""
+    component.step_up_2fa = ""
+    component.step_up_error = ""
+    component.step_up_pending_identifier = ""
+    component.step_up_pending_new_role = ""
     for key, value in attributes.items():
         setattr(component, key, value)
     return component

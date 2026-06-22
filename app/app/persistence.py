@@ -910,6 +910,15 @@ class Persistence:
     def get_valid_session_by_auth_token(self, auth_token: str) -> tuple[UserSession, AppUser]:
         return persistence_auth.get_valid_session_by_auth_token(self, auth_token)
 
+    async def elevate_session(self, session_id: str, ttl_seconds: int) -> datetime:
+        return await persistence_auth.elevate_session(self, session_id, ttl_seconds)
+
+    def session_is_elevated(self, session: UserSession, *, now: datetime | None = None) -> bool:
+        return persistence_auth.session_is_elevated(session, now=now)
+
+    async def clear_session_elevation(self, session_id: str) -> None:
+        await persistence_auth.clear_session_elevation(self, session_id)
+
     def verify_two_factor_challenge(
         self, user_id: uuid.UUID, code: str | None, *, consume_recovery_code: bool = True,
     ) -> persistence_auth.TwoFactorChallengeResult:

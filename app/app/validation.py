@@ -408,6 +408,28 @@ class CurrencyLedgerEntryResponse(BaseModel):
     created_at: float
 
 
+class StepUpCredentialsRequest(BaseModel):
+    """Per-action credentials for sensitive privileged mutations."""
+
+    password: str = Field(
+        "",
+        max_length=512,
+        description="Current password for password-authenticated actors.",
+    )
+    two_factor_code: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="Current 2FA token or recovery code when 2FA is enabled.",
+    )
+
+    @field_validator("two_factor_code")
+    def _normalize_two_factor_code(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
 class CurrencyAdjustmentRequest(BaseModel):
     """Payload for adjusting a user's balance by a delta amount."""
 
@@ -425,6 +447,10 @@ class CurrencyAdjustmentRequest(BaseModel):
     )
     reason: Optional[str] = Field(None, max_length=200, description="Reason for audit trail")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata blob recorded in ledger")
+    step_up: StepUpCredentialsRequest = Field(
+        ...,
+        description="Per-action re-authentication credentials for the acting admin/root.",
+    )
 
     @model_validator(mode="after")
     def _validate_targets(self) -> "CurrencyAdjustmentRequest":
@@ -471,6 +497,10 @@ class CurrencySetBalanceRequest(BaseModel):
     )
     reason: Optional[str] = Field(None, max_length=200)
     metadata: Optional[Dict[str, Any]] = Field(None)
+    step_up: StepUpCredentialsRequest = Field(
+        ...,
+        description="Per-action re-authentication credentials for the acting admin/root.",
+    )
 
     @model_validator(mode="after")
     def _validate_targets(self) -> "CurrencySetBalanceRequest":

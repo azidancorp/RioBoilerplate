@@ -13,13 +13,12 @@ session**. Sessions in this app are long-lived with no absolute lifetime cap
 both durable and, today, able to escalate roles with a single click
 (`admin.py:_update_role`, persistence `update_user_role` at `persistence.py:776`).
 
-### Why the admin's OWN password, not the shared `ADMIN_DELETION_PASSWORD`
+### Why the admin's OWN password, not a shared deletion secret
 
 - The own-password binds the action to a **specific human** and is **per-user
-  rotatable**. The shared `ADMIN_DELETION_PASSWORD` (`config.py:86`) is a static
-  secret common to all admins; spreading it onto a *frequent* code path like
-  role changes increases its leak surface and it is painful to rotate (env var +
-  restart). It also gives no attribution.
+  rotatable**. A shared deletion secret is static, common to all admins, painful
+  to rotate, and gives no attribution. Spreading it onto a frequent code path
+  like role changes would increase its leak surface.
 - Re-auth is the standard "sudo mode" pattern (GitHub sudo mode, AWS re-auth,
   Google sensitive-action re-prompt) and **already exists in this codebase** for
   self-service security actions — `settings.py:_on_confirm_password_change_pressed`
@@ -55,8 +54,7 @@ successful elevation and each elevated action should also write an audit row.
 
 3. **Short, fixed elevation window via a code constant in `config.py`**, e.g.
    `SUDO_MODE_TTL_SECONDS = 300` (5 min). Per AGENTS.md, non-secret behavior
-   flags are code-configured in `config.py`, **not** `.env`/`from_env`. The
-   shared deletion password stays in `.env`; this TTL does not.
+   flags are code-configured in `config.py`, **not** `.env`/`from_env`.
 
 4. **Reusable gate, applied first to role change.** Build
    `require_elevated_session(session)` as a sibling to
@@ -253,8 +251,8 @@ for 4:59" indicator.
 SUDO_MODE_TTL_SECONDS: int = 300
 ```
 
-No `.env` / `from_env` entry. The shared `ADMIN_DELETION_PASSWORD` is unchanged
-and unrelated to this flow.
+No `.env` / `from_env` entry. Sensitive admin mutations should use the acting
+admin's own step-up credentials rather than a shared admin password.
 
 ## Interaction with existing flows
 
@@ -358,12 +356,10 @@ TOTP) elevates and completes the change.
   the other **Rio admin handlers** — deactivate (`admin.py:348`), email edit
   (`admin.py:271`), admin-initiated reset (`admin.py:425`), currency adjust/set
   (`admin.py:718`) — by adding the same two lines.
-- **The FastAPI currency endpoints (`api/currency.py:118,157`) are NOT covered by
-  this gate.** They authenticate via `Authorization: Bearer` + `get_current_user`
-  and have no Rio session attachments, so `require_elevated_session(rio.Session)`
-  cannot apply. If those ever need sudo mode, enforce it at the API layer (e.g.
-  check `elevated_until` on the session row directly, or require an
-  elevated-scope token), not by reusing the Rio gate.
+- **FastAPI currency endpoints** do not use Rio's reusable elevation window.
+  They authenticate via `Authorization: Bearer` + `get_current_user`, then
+  require per-action actor credentials in the request payload before privileged
+  balance mutations.
 
 ## Open Questions (resolve in review)
 

@@ -154,6 +154,8 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.currency_amount = ""
     component.currency_reason = ""
     component.currency_mode_is_set = False
+    component.currency_step_up_password = ""
+    component.currency_step_up_2fa = ""
     component.currency_error = ""
     component.currency_success = ""
     component.step_up_visible = False

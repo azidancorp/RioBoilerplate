@@ -7,10 +7,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.auth_dependencies import (
+    get_current_session,
     get_current_user,
     get_persistence,
     is_admin_or_root,
 )
+from app.permissions import can_manage_role
 from app.currency import (
     attach_currency_name,
     format_minor_amount,
@@ -18,8 +20,10 @@ from app.currency import (
     get_major_amount,
     major_to_minor,
 )
-from app.data_models import AppUser, CurrencyLedgerEntry
+from app.data_models import AppUser, CurrencyLedgerEntry, UserSession
 from app.persistence import Persistence
+from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
+from app.session_validation import verify_step_up_credentials
 from app.validation import (
     CurrencyConfigResponse,
     CurrencyBalanceResponse,
@@ -91,10 +95,17 @@ async def list_currency_ledger_route(
     """
     target_user_id = user_id or current_user.id
 
-    if target_user_id != current_user.id and not is_admin_or_root(current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient privileges to view other users' ledger entries.",
+    if target_user_id != current_user.id:
+        if not is_admin_or_root(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient privileges to view other users' ledger entries.",
+            )
+        target_user = await _resolve_target_user(target_user_id, None, db)
+        _require_currency_target_access(
+            current_user,
+            target_user,
+            action="view currency ledger entries for",
         )
 
     before_dt = datetime.fromtimestamp(before, tz=timezone.utc) if before else None
@@ -117,6 +128,7 @@ async def list_currency_ledger_route(
 )
 async def adjust_currency_route(
     payload: CurrencyAdjustmentRequest,
+    current_session: UserSession = Depends(get_current_session),
     current_user: AppUser = Depends(get_current_user),
     db: Persistence = Depends(get_persistence),
 ) -> CurrencyLedgerEntryResponse:
@@ -130,6 +142,12 @@ async def adjust_currency_route(
         )
 
     target_user = await _resolve_target_user(payload.target_user_id, payload.target_identifier, db)
+    _require_currency_target_access(
+        current_user,
+        target_user,
+        action="update balances for",
+    )
+    await _require_step_up(payload, current_session, current_user, db)
     minor_delta = major_to_minor(payload.amount)
 
     try:
@@ -157,6 +175,7 @@ async def adjust_currency_route(
 )
 async def set_currency_route(
     payload: CurrencySetBalanceRequest,
+    current_session: UserSession = Depends(get_current_session),
     current_user: AppUser = Depends(get_current_user),
     db: Persistence = Depends(get_persistence),
 ) -> CurrencyLedgerEntryResponse:
@@ -170,6 +189,12 @@ async def set_currency_route(
         )
 
     target_user = await _resolve_target_user(payload.target_user_id, payload.target_identifier, db)
+    _require_currency_target_access(
+        current_user,
+        target_user,
+        action="update balances for",
+    )
+    await _require_step_up(payload, current_session, current_user, db)
     minor_amount = major_to_minor(payload.balance)
 
     try:
@@ -188,6 +213,69 @@ async def set_currency_route(
         )
 
     return _serialize_ledger_entry(entry)
+
+
+async def _require_step_up(
+    payload: CurrencyAdjustmentRequest | CurrencySetBalanceRequest,
+    current_session: UserSession,
+    current_user: AppUser,
+    db: Persistence,
+) -> None:
+    decision = db.check_rate_limit(
+        policy=sensitive_action_policy("admin_step_up"),
+        key=rate_limit_key("admin_step_up", current_user.id),
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=rate_limited_message(
+                "Too many verification attempts.",
+                decision.retry_after_seconds,
+            ),
+            headers={"Retry-After": str(decision.retry_after_seconds or 1)},
+        )
+
+    result = await verify_step_up_credentials(
+        db,
+        current_session,
+        current_user,
+        password=payload.step_up.password,
+        two_factor_code=payload.step_up.two_factor_code,
+    )
+    if not result.ok:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=result.error_message or "Verification failed.",
+        )
+
+    db.clear_rate_limit(
+        scope=sensitive_action_policy("admin_step_up").scope,
+        key=rate_limit_key("admin_step_up", current_user.id),
+    )
+
+
+def _require_currency_target_access(
+    current_user: AppUser,
+    target_user: AppUser,
+    *,
+    action: str,
+) -> None:
+    if current_user.id == target_user.id:
+        return
+
+    try:
+        allowed = can_manage_role(current_user.role, target_user.role)
+    except ValueError:
+        allowed = False
+
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"You do not have permission to {action} users with "
+                f"role {target_user.role}."
+            ),
+        )
 
 
 async def _resolve_target_user(

@@ -94,6 +94,8 @@ class AdminPage(ResponsiveComponent):
     currency_amount: str = ""
     currency_reason: str = ""
     currency_mode_is_set: bool = False  # False -> adjust delta, True -> set absolute
+    currency_step_up_password: str = ""
+    currency_step_up_2fa: str = ""
     currency_error: str = ""
     currency_success: str = ""
 
@@ -194,6 +196,10 @@ class AdminPage(ResponsiveComponent):
     def _clear_delete_step_up_fields(self) -> None:
         self.delete_user_step_up_password = ""
         self.delete_user_step_up_2fa = ""
+
+    def _clear_currency_step_up_fields(self) -> None:
+        self.currency_step_up_password = ""
+        self.currency_step_up_2fa = ""
 
     async def _verify_actor_step_up(
         self,
@@ -884,6 +890,7 @@ class AdminPage(ResponsiveComponent):
         if not self.current_user:
             self.currency_error = "You must be logged in to perform this action"
             self.currency_success = ""
+            self._clear_currency_step_up_fields()
             self.force_refresh()
             return
 
@@ -891,6 +898,7 @@ class AdminPage(ResponsiveComponent):
         if not identifier:
             self.currency_error = "Please provide a user email, username, or ID"
             self.currency_success = ""
+            self._clear_currency_step_up_fields()
             self.force_refresh()
             return
 
@@ -899,6 +907,7 @@ class AdminPage(ResponsiveComponent):
         except (InvalidOperation, AttributeError):
             self.currency_error = "Enter a valid numeric amount"
             self.currency_success = ""
+            self._clear_currency_step_up_fields()
             self.force_refresh()
             return
 
@@ -916,6 +925,7 @@ class AdminPage(ResponsiveComponent):
         if not target_user:
             self.currency_error = f"User not found: {identifier}"
             self.currency_success = ""
+            self._clear_currency_step_up_fields()
             self.force_refresh()
             return
 
@@ -928,6 +938,7 @@ class AdminPage(ResponsiveComponent):
                 f"You do not have permission to update balances for users with role {target_user.role}."
             )
             self.currency_success = ""
+            self._clear_currency_step_up_fields()
             self.force_refresh()
             return
 
@@ -944,6 +955,34 @@ class AdminPage(ResponsiveComponent):
         except ValueError:
             self.currency_error = "Amount must be a valid number"
             self.currency_success = ""
+            self._clear_currency_step_up_fields()
+            self.force_refresh()
+            return
+
+        decision = self._check_sensitive_limit(
+            persistence,
+            "admin_currency_update",
+            target=str(target_user.id),
+        )
+        if not decision.allowed:
+            self.currency_error = rate_limited_message(
+                "Too many currency update attempts.",
+                decision.retry_after_seconds,
+            )
+            self.currency_success = ""
+            self._clear_currency_step_up_fields()
+            self.force_refresh()
+            return
+
+        result = await self._verify_actor_step_up(
+            persistence,
+            password=self.currency_step_up_password,
+            two_factor_code=self.currency_step_up_2fa or None,
+        )
+        if not result.ok:
+            self.currency_error = result.error_message or "Verification failed."
+            self.currency_success = ""
+            self._clear_currency_step_up_fields()
             self.force_refresh()
             return
 
@@ -973,6 +1012,7 @@ class AdminPage(ResponsiveComponent):
         except ValueError as exc:
             self.currency_error = str(exc)
             self.currency_success = ""
+            self._clear_currency_step_up_fields()
             self.force_refresh()
             return
 
@@ -989,6 +1029,8 @@ class AdminPage(ResponsiveComponent):
         )
         self.currency_error = ""
         self.currency_amount = ""
+        self._clear_currency_step_up_fields()
+        self._clear_rate_limit(persistence, "admin_currency_update", str(target_user.id))
         await self._load_user_data()
         self.force_refresh()
 
@@ -1093,6 +1135,24 @@ class AdminPage(ResponsiveComponent):
         requires_step_up_password = self.current_user.auth_provider == "password"
         requires_step_up_2fa = self.current_user.two_factor_enabled
 
+        currency_step_up_inputs: list[rio.Component] = []
+        if requires_step_up_password:
+            currency_step_up_inputs.append(rio.TextInput(
+                label="Your Password",
+                text=self.bind().currency_step_up_password,
+                is_secret=True,
+                on_confirm=self._on_currency_submit,
+            ))
+        if requires_step_up_2fa:
+            currency_step_up_inputs.append(
+                rio.TextInput(
+                    label="2FA or Recovery Code",
+                    text=self.bind().currency_step_up_2fa,
+                    is_secret=True,
+                    on_confirm=self._on_currency_submit,
+                )
+            )
+
         delete_user_inputs: list[rio.Component] = [
             rio.TextInput(
                 label="Email or Username to Delete",
@@ -1128,6 +1188,15 @@ class AdminPage(ResponsiveComponent):
                 shape="rounded",
             )
         )
+        currency_step_up_row = (
+            self._responsive_form_layout(
+                *currency_step_up_inputs,
+                proportions=[1] * len(currency_step_up_inputs),
+            )
+            if currency_step_up_inputs
+            else rio.Spacer(min_height=0, grow_x=False, grow_y=False)
+        )
+
         return CenterComponent(
             rio.Column(
                 rio.Text(
@@ -1426,6 +1495,8 @@ class AdminPage(ResponsiveComponent):
                 ),
                 proportions=[1, 1, 1],
             ),
+
+            currency_step_up_row,
 
             self._responsive_form_layout(
                 rio.Text("Set absolute balance"),

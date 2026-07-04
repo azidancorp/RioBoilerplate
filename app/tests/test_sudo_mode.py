@@ -491,3 +491,27 @@ def test_admin_delete_uses_actor_step_up_and_bypasses_target_2fa(temp_db: Persis
         assert require_elevated_session(session) is None
 
     asyncio.run(scenario())
+
+
+def test_currency_update_uses_actor_step_up_without_elevating(temp_db: Persistence):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        target = await _create_user(temp_db, "currency-stepup-target@example.com")
+
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(
+            session,
+            currency_user_identifier=target.email,
+            currency_amount="25",
+            currency_reason="sudo test",
+            currency_step_up_password=PASSWORD,
+        )
+
+        await AdminPage._on_currency_submit(page)
+
+        assert page.currency_error == ""
+        refreshed = await temp_db.get_user_by_id(target.id)
+        assert refreshed.primary_currency_balance == target.primary_currency_balance + 25
+        assert require_elevated_session(session) is None
+
+    asyncio.run(scenario())

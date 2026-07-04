@@ -21,7 +21,7 @@ from app.api.currency import (
 from app.currency import get_currency_config
 from app.components.center_component import CenterComponent
 from app.components.currency_summary import CurrencySummary, CurrencyOverview
-from app.data_models import AppUser
+from app.data_models import AppUser, UserSession
 from app.permissions import check_access
 from app.persistence import Persistence
 from app.session_validation import refresh_attached_user_session, reject_stale_user_session
@@ -237,6 +237,8 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
 
     target_mode: str = "current"
     target_value: str = ""
+    step_up_password: str = ""
+    step_up_2fa: str = ""
 
     @rio.event.on_populate
     async def on_populate(self) -> None:
@@ -281,7 +283,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
         context = self._require_context()
         if context is None:
             return
-        current_user, persistence = context
+        current_user, _, persistence = context
         if with_loading:
             self.is_loading = True
             self.force_refresh()
@@ -318,7 +320,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
         context = self._require_context()
         if context is None:
             return
-        current_user, persistence = context
+        current_user, _, persistence = context
         try:
             limit_val = max(1, min(500, int(self.ledger_limit)))
         except (TypeError, ValueError):
@@ -370,7 +372,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
         context = self._require_context()
         if context is None:
             return
-        current_user, persistence = context
+        current_user, current_session, persistence = context
         try:
             target_kwargs = await self._build_target_for_mutation(
                 persistence, current_user
@@ -383,10 +385,12 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
             amount=delta,
             reason=reason,
             metadata={"source": "currency-playground"},
+            step_up=self._step_up_payload(),
             **target_kwargs,
         )
         await self._execute_adjustment(
             payload,
+            current_session,
             current_user,
             persistence,
             success_label=f"Adjustment applied ({self._format_signed_amount_with_currency(payload.amount)})",
@@ -399,7 +403,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
         context = self._require_context()
         if context is None:
             return
-        current_user, persistence = context
+        current_user, current_session, persistence = context
         try:
             amount = self._parse_decimal(self.manual_amount)
         except InvalidOperation:
@@ -428,10 +432,12 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
             amount=amount,
             reason=self.manual_reason or None,
             metadata=metadata,
+            step_up=self._step_up_payload(),
             **target_kwargs,
         )
         await self._execute_adjustment(
             payload,
+            current_session,
             current_user,
             persistence,
             success_label=f"Adjusted balance by {self._format_signed_amount_with_currency(payload.amount)}",
@@ -444,7 +450,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
         context = self._require_context()
         if context is None:
             return
-        current_user, persistence = context
+        current_user, current_session, persistence = context
         try:
             amount = self._parse_decimal(self.set_amount)
         except InvalidOperation:
@@ -469,10 +475,12 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
             balance=amount,
             reason=self.set_reason or None,
             metadata=metadata,
+            step_up=self._step_up_payload(),
             **target_kwargs,
         )
         await self._execute_set_balance(
             payload,
+            current_session,
             current_user,
             persistence,
             success_label=f"Set balance to {self._format_signed_amount_with_currency(payload.balance)}",
@@ -481,6 +489,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
     async def _execute_adjustment(
         self,
         payload: CurrencyAdjustmentRequest,
+        current_session: UserSession,
         current_user: AppUser,
         persistence: Persistence,
         *,
@@ -491,6 +500,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
         try:
             response = await adjust_currency_route(
                 payload=payload,
+                current_session=current_session,
                 current_user=current_user,
                 db=persistence,
             )
@@ -499,11 +509,14 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
                 payload=response,
                 message=success_label,
             )
+            self._clear_step_up_fields()
             await self._refresh_after_mutation()
         except HTTPException as exc:
             self._record_error("POST /api/currency/adjust", exc.detail)
+            self._clear_step_up_fields()
         except Exception as exc:  # pragma: no cover - manual QA tool
             self._record_error("POST /api/currency/adjust", str(exc))
+            self._clear_step_up_fields()
         finally:
             self.is_loading = False
             self.force_refresh()
@@ -511,6 +524,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
     async def _execute_set_balance(
         self,
         payload: CurrencySetBalanceRequest,
+        current_session: UserSession,
         current_user: AppUser,
         persistence: Persistence,
         *,
@@ -521,6 +535,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
         try:
             response = await set_currency_route(
                 payload=payload,
+                current_session=current_session,
                 current_user=current_user,
                 db=persistence,
             )
@@ -529,11 +544,14 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
                 payload=response,
                 message=success_label,
             )
+            self._clear_step_up_fields()
             await self._refresh_after_mutation()
         except HTTPException as exc:
             self._record_error("POST /api/currency/set", exc.detail)
+            self._clear_step_up_fields()
         except Exception as exc:  # pragma: no cover - manual QA tool
             self._record_error("POST /api/currency/set", str(exc))
+            self._clear_step_up_fields()
         finally:
             self.is_loading = False
             self.force_refresh()
@@ -560,7 +578,12 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
     def _record_input_error(self, message: str) -> None:
         self.last_error = message
         self.last_success = ""
+        self._clear_step_up_fields()
         self.force_refresh()
+
+    def _clear_step_up_fields(self) -> None:
+        self.step_up_password = ""
+        self.step_up_2fa = ""
 
     def _parse_decimal(self, raw: str) -> Decimal:
         text = (raw or "").strip()
@@ -596,9 +619,9 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
             return {key: self._normalize_payload(value) for key, value in payload.items()}
         return payload
 
-    def _require_context(self) -> tuple[AppUser, Persistence] | None:
+    def _require_context(self) -> tuple[AppUser, UserSession, Persistence] | None:
         try:
-            _, current_user = refresh_attached_user_session(self.session)
+            user_session, current_user = refresh_attached_user_session(self.session)
         except KeyError:
             reject_stale_user_session(self.session)
             self._record_input_error("Log in to exercise the currency API endpoints.")
@@ -610,7 +633,13 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
             return None
 
         persistence = self.session[Persistence]
-        return current_user, persistence
+        return current_user, user_session, persistence
+
+    def _step_up_payload(self) -> dict[str, str | None]:
+        return {
+            "password": self.step_up_password,
+            "two_factor_code": self.step_up_2fa or None,
+        }
 
     async def _build_target_for_mutation(
         self,
@@ -762,9 +791,26 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
                 )
             )
 
+        current_user = self._current_user_optional()
         target_controls.append(
             rio.Text(f"Current user: {self._current_user_label()}", style="dim"),
         )
+        if current_user and current_user.auth_provider == "password":
+            target_controls.append(
+                rio.TextInput(
+                    label="Step-Up Password",
+                    text=self.bind().step_up_password,
+                    is_secret=True,
+                )
+            )
+        if current_user and current_user.two_factor_enabled:
+            target_controls.append(
+                rio.TextInput(
+                    label="2FA or Recovery Code",
+                    text=self.bind().step_up_2fa,
+                    is_secret=True,
+                )
+            )
 
         # Use FlowContainer for button groups on mobile
         quick_actions_section: list[rio.Component] = [
@@ -901,7 +947,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
             last_endpoint=self.last_endpoint,
             last_response_json=self.last_response_json,
             is_loading=self.is_loading,
-            current_user=self._current_user_optional(),
+            current_user=current_user,
         )
 
         # Stack panels vertically on mobile, side-by-side on desktop

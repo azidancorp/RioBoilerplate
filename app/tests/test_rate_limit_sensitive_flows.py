@@ -148,6 +148,8 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.delete_user_step_up_2fa = ""
     component.delete_user_error = ""
     component.delete_user_success = ""
+    component.currency_step_up_password = ""
+    component.currency_step_up_2fa = ""
     component.step_up_visible = False
     component.step_up_password = ""
     component.step_up_2fa = ""

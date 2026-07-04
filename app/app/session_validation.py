@@ -89,6 +89,55 @@ class StepUpResult:
     elevated_until: datetime | None = None
 
 
+async def verify_step_up_credentials(
+    persistence: Persistence,
+    user_session: UserSession,
+    user: AppUser,
+    *,
+    password: str,
+    two_factor_code: str | None,
+) -> StepUpResult:
+    """
+    Re-authenticate the CURRENT user without elevating the session.
+
+    This is the per-action variant used for sensitive one-shot mutations such
+    as currency updates and admin-authorized user deletion. It mirrors the
+    credential checks used by ``perform_step_up`` but deliberately leaves
+    ``UserSession.elevated_until`` unchanged.
+    """
+    if user_session.user_id != user.id:
+        return StepUpResult(
+            ok=False,
+            error_message="Your session has expired. Please log in again.",
+        )
+
+    uses_password = user.auth_provider == "password"
+
+    if uses_password:
+        if not user.verify_password(password):
+            return StepUpResult(ok=False, error_message="Current password is incorrect")
+    elif not user.two_factor_enabled:
+        # No password leg available and no 2FA to fall back on.
+        return StepUpResult(
+            ok=False,
+            error_message="Set up a password or 2FA to perform this action.",
+        )
+
+    used_recovery_code = False
+    if user.two_factor_enabled:
+        result = persistence.verify_two_factor_challenge(
+            user_session.user_id,
+            two_factor_code,
+        )
+        if not result.ok:
+            if result.failure == TwoFactorFailure.MISSING_CODE:
+                return StepUpResult(ok=False, error_message="2FA code is required")
+            return StepUpResult(ok=False, error_message="Invalid 2FA or recovery code.")
+        used_recovery_code = result.used_recovery_code
+
+    return StepUpResult(ok=True, used_recovery_code=used_recovery_code)
+
+
 async def perform_step_up(
     session: rio.Session,
     *,
@@ -118,29 +167,15 @@ async def perform_step_up(
     user_session, user = fresh
     persistence = session[Persistence]
 
-    uses_password = user.auth_provider == "password"
-
-    if uses_password:
-        if not user.verify_password(password):
-            return StepUpResult(ok=False, error_message="Current password is incorrect")
-    elif not user.two_factor_enabled:
-        # No password leg available and no 2FA to fall back on.
-        return StepUpResult(
-            ok=False,
-            error_message="Set up a password or 2FA to perform this action.",
-        )
-
-    used_recovery_code = False
-    if user.two_factor_enabled:
-        result = persistence.verify_two_factor_challenge(
-            user_session.user_id,
-            two_factor_code,
-        )
-        if not result.ok:
-            if result.failure == TwoFactorFailure.MISSING_CODE:
-                return StepUpResult(ok=False, error_message="2FA code is required")
-            return StepUpResult(ok=False, error_message="Invalid 2FA or recovery code.")
-        used_recovery_code = result.used_recovery_code
+    result = await verify_step_up_credentials(
+        persistence,
+        user_session,
+        user,
+        password=password,
+        two_factor_code=two_factor_code,
+    )
+    if not result.ok:
+        return result
 
     deadline = await persistence.elevate_session(
         user_session.id,
@@ -153,6 +188,6 @@ async def perform_step_up(
 
     return StepUpResult(
         ok=True,
-        used_recovery_code=used_recovery_code,
+        used_recovery_code=result.used_recovery_code,
         elevated_until=deadline,
     )

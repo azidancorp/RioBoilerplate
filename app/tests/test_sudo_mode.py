@@ -18,7 +18,11 @@ import pytest
 from app.config import config
 from app.pages.app_page.admin import AdminPage
 from app.persistence import Persistence
-from app.session_validation import perform_step_up, require_elevated_session
+from app.session_validation import (
+    perform_step_up,
+    require_elevated_session,
+    verify_step_up_credentials,
+)
 
 # Reuse the fake-session / mounting helpers (kept in sync with AdminPage state).
 from tests.test_admin_user_lifecycle import (
@@ -209,6 +213,47 @@ def test_perform_step_up_password_only(temp_db: Persistence):
 
         # The gate now passes for this session.
         assert require_elevated_session(session) is not None
+
+    asyncio.run(scenario())
+
+
+def test_verify_step_up_credentials_does_not_elevate_session(temp_db: Persistence):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        session = _FakeSession(temp_db, root_session, root)
+
+        result = await verify_step_up_credentials(
+            temp_db,
+            root_session,
+            root,
+            password=PASSWORD,
+            two_factor_code=None,
+        )
+
+        assert result.ok is True
+        assert result.elevated_until is None
+        assert require_elevated_session(session) is None
+        reloaded, _ = temp_db.get_valid_session_by_auth_token(root_session.id)
+        assert reloaded.elevated_until is None
+
+    asyncio.run(scenario())
+
+
+def test_verify_step_up_credentials_rejects_session_user_mismatch(temp_db: Persistence):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        other = await _create_user(temp_db, "other-stepup@example.com")
+
+        result = await verify_step_up_credentials(
+            temp_db,
+            root_session,
+            other,
+            password=PASSWORD,
+            two_factor_code=None,
+        )
+
+        assert result.ok is False
+        assert result.error_message == "Your session has expired. Please log in again."
 
     asyncio.run(scenario())
 

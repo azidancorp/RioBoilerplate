@@ -266,20 +266,11 @@ def create_session_table(persistence: SchemaPersistence) -> None:
             created_at REAL NOT NULL,
             valid_until REAL NOT NULL,
             role TEXT NOT NULL,
-            elevated_until REAL,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """
     )
-    _ensure_session_elevated_until_column(cursor)
     conn.commit()
-
-
-def _ensure_session_elevated_until_column(cursor: sqlite3.Cursor) -> None:
-    cursor.execute("PRAGMA table_info(user_sessions)")
-    existing_columns = {row[1] for row in cursor.fetchall()}
-    if "elevated_until" not in existing_columns:
-        cursor.execute("ALTER TABLE user_sessions ADD COLUMN elevated_until REAL")
 
 
 def create_password_reset_tokens_table(persistence: SchemaPersistence) -> None:

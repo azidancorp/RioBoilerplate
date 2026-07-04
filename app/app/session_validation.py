@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 import rio
 
-from app.config import config
 from app.data_models import AppUser, UserSession, UserSettings
 from app.persistence import Persistence
 from app.persistence_auth import TwoFactorFailure
@@ -55,38 +53,13 @@ def require_fresh_user_session(
         return None
 
 
-def require_elevated_session(
-    session: rio.Session,
-    *,
-    now: datetime | None = None,
-) -> tuple[UserSession, AppUser] | None:
-    """
-    Like ``require_fresh_user_session``, but additionally requires the session to
-    be within its sudo elevation window.
-
-    Returns ``(user_session, user)`` when the session is both fresh and elevated,
-    otherwise ``None`` (the caller should prompt for step-up re-auth). Adds no
-    extra query: ``session_is_elevated`` reads the ``elevated_until`` already
-    loaded onto ``UserSession`` by ``require_fresh_user_session``.
-    """
-    fresh = require_fresh_user_session(session)
-    if fresh is None:
-        return None
-    user_session, user = fresh
-    persistence = session[Persistence]
-    if not persistence.session_is_elevated(user_session, now=now):
-        return None
-    return user_session, user
-
-
 @dataclass(frozen=True)
 class StepUpResult:
-    """Outcome of a step-up (sudo-mode) re-authentication attempt."""
+    """Outcome of a step-up re-authentication attempt."""
 
     ok: bool
     error_message: str | None = None
     used_recovery_code: bool = False
-    elevated_until: datetime | None = None
 
 
 async def verify_step_up_credentials(
@@ -98,12 +71,19 @@ async def verify_step_up_credentials(
     two_factor_code: str | None,
 ) -> StepUpResult:
     """
-    Re-authenticate the CURRENT user without elevating the session.
+    Re-authenticate the CURRENT user for a single sensitive action.
 
-    This is the per-action variant used for sensitive one-shot mutations such
-    as currency updates and admin-authorized user deletion. It mirrors the
-    credential checks used by ``perform_step_up`` but deliberately leaves
-    ``UserSession.elevated_until`` unchanged.
+    Mirrors the verification sequence of ``settings.py`` password-change:
+    verify the user's own password, then (if 2FA is enabled) verify their TOTP /
+    recovery code via the centralized verifier. Used per-action by sensitive
+    mutations (role changes, admin-authorized user deletion, currency updates);
+    success grants nothing durable — each action re-verifies.
+
+    OAuth-only admins (``auth_provider != "password"``) cannot satisfy a password
+    leg — ``verify_password`` short-circuits to ``False`` for them — so the
+    password leg is skipped and TOTP is required instead. If such a user has
+    neither a local password nor 2FA, the step-up is denied with an actionable
+    message rather than a misleading "password incorrect" error.
     """
     if user_session.user_id != user.id:
         return StepUpResult(
@@ -136,58 +116,3 @@ async def verify_step_up_credentials(
         used_recovery_code = result.used_recovery_code
 
     return StepUpResult(ok=True, used_recovery_code=used_recovery_code)
-
-
-async def perform_step_up(
-    session: rio.Session,
-    *,
-    password: str,
-    two_factor_code: str | None,
-) -> StepUpResult:
-    """
-    Re-authenticate the CURRENT user and, on success, elevate their session.
-
-    Mirrors the verification sequence of ``settings.py`` password-change:
-    verify the user's own password, then (if 2FA is enabled) verify their TOTP /
-    recovery code via the centralized verifier. On success the session is marked
-    sudo-elevated for ``config.SUDO_MODE_TTL_SECONDS``.
-
-    OAuth-only admins (``auth_provider != "password"``) cannot satisfy a password
-    leg — ``verify_password`` short-circuits to ``False`` for them — so the
-    password leg is skipped and TOTP is required instead. If such a user has
-    neither a local password nor 2FA, the step-up is denied with an actionable
-    message rather than a misleading "password incorrect" error.
-    """
-    fresh = require_fresh_user_session(session)
-    if fresh is None:
-        return StepUpResult(
-            ok=False,
-            error_message="Your session has expired. Please log in again.",
-        )
-    user_session, user = fresh
-    persistence = session[Persistence]
-
-    result = await verify_step_up_credentials(
-        persistence,
-        user_session,
-        user,
-        password=password,
-        two_factor_code=two_factor_code,
-    )
-    if not result.ok:
-        return result
-
-    deadline = await persistence.elevate_session(
-        user_session.id,
-        config.SUDO_MODE_TTL_SECONDS,
-    )
-    # Keep the in-memory attachment consistent with the persisted row so the
-    # very next require_elevated_session in this request sees the elevation.
-    user_session.elevated_until = deadline
-    session.attach(user_session)
-
-    return StepUpResult(
-        ok=True,
-        used_recovery_code=result.used_recovery_code,
-        elevated_until=deadline,
-    )

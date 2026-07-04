@@ -16,10 +16,8 @@ from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.session_validation import (
     StepUpResult,
-    perform_step_up,
     refresh_attached_user_session,
     reject_stale_user_session,
-    require_elevated_session,
     verify_step_up_credentials,
 )
 from app.currency import major_to_minor, format_minor_amount, attach_currency_name
@@ -99,9 +97,10 @@ class AdminPage(ResponsiveComponent):
     currency_error: str = ""
     currency_success: str = ""
 
-    # Step-up (sudo mode) re-auth dialog state. When a sensitive action (role
-    # change) is attempted without an active elevation window, the dialog is
-    # shown and the pending action is stashed so it can be replayed on success.
+    # Step-up re-auth dialog state. A role change always prompts for the
+    # acting admin's own credentials; the pending action is stashed so it can
+    # be replayed once verification succeeds. Verification is per-action — no
+    # elevation window is granted.
     step_up_visible: bool = False
     step_up_password: str = ""
     step_up_2fa: str = ""
@@ -158,7 +157,7 @@ class AdminPage(ResponsiveComponent):
         )
         return persistence.check_rate_limit(
             policy=sensitive_action_policy(scope),
-            key=rate_limit_key(scope, f"{actor}:{target}"),
+            key=rate_limit_key(scope, f"{actor}:{target}" if target else actor),
         )
 
     def _client_ip(self) -> str | None:
@@ -190,7 +189,10 @@ class AdminPage(ResponsiveComponent):
             return
         persistence.clear_rate_limit(
             scope=sensitive_action_policy(scope).scope,
-            key=rate_limit_key(scope, f"{self.current_user.id}:{target}"),
+            key=rate_limit_key(
+                scope,
+                f"{self.current_user.id}:{target}" if target else self.current_user.id,
+            ),
         )
 
     def _clear_delete_step_up_fields(self) -> None:
@@ -625,7 +627,14 @@ class AdminPage(ResponsiveComponent):
 
         self.force_refresh()
 
-    async def _update_role(self, identifier: str, new_role: str) -> bool:
+    async def _update_role(
+        self,
+        identifier: str,
+        new_role: str,
+        *,
+        step_up_verified: bool = False,
+        action_limit_checked_for: uuid.UUID | None = None,
+    ) -> bool:
         """Update a user's role."""
         if not self._refresh_current_user_authorization():
             return False
@@ -658,25 +667,27 @@ class AdminPage(ResponsiveComponent):
             )
             return False
 
-        # Sudo mode: require a recent step-up re-auth before mutating a role. The
-        # gate is re-validated server-side here (not just when the dialog closes),
-        # so a stale/expired elevation re-prompts. The action is legitimate at
-        # this point (permissions already checked), so prompting is warranted.
-        if require_elevated_session(self.session) is None:
+        # Per-action step-up: every role change requires the acting admin's own
+        # credentials. The action is legitimate at this point (permissions
+        # already checked), so prompting is warranted. `step_up_verified` is
+        # only passed by `_on_step_up_submit` immediately after a successful
+        # credential check.
+        if not step_up_verified:
             self._show_step_up_dialog(identifier=identifier, new_role=new_role)
             return False
 
-        decision = self._check_sensitive_limit(
-            persistence,
-            "admin_change_role",
-            target=str(target_user.id),
-        )
-        if not decision.allowed:
-            self.change_role_error = rate_limited_message(
-                "Too many role-change attempts.",
-                decision.retry_after_seconds,
+        if action_limit_checked_for != target_user.id:
+            decision = self._check_sensitive_limit(
+                persistence,
+                "admin_change_role",
+                target=str(target_user.id),
             )
-            return False
+            if not decision.allowed:
+                self.change_role_error = rate_limited_message(
+                    "Too many role-change attempts.",
+                    decision.retry_after_seconds,
+                )
+                return False
 
         try:
             self.change_role_error = ""
@@ -717,29 +728,40 @@ class AdminPage(ResponsiveComponent):
         self.force_refresh()
 
     async def _on_step_up_submit(self, _: rio.TextInputConfirmEvent | None = None) -> None:
-        """Verify the admin's own credentials, elevate, and replay the role change."""
+        """Verify the admin's own credentials, then replay the role change."""
         if not self._refresh_current_user_authorization():
             return
 
-        if not self.current_user:
-            self.step_up_error = "You must be logged in to perform this action"
+        persistence = self.session[Persistence]
+        identifier = self.step_up_pending_identifier
+        new_role = self.step_up_pending_new_role
+
+        try:
+            target_user = await persistence.get_user_by_email_or_username(identifier)
+        except KeyError:
+            self.step_up_error = f"User {identifier} not found"
+            self.step_up_password = ""
+            self.step_up_2fa = ""
             self.force_refresh()
             return
 
-        persistence = self.session[Persistence]
-        # Throttle the admin's own password/TOTP guessing. One elevation window
-        # covers every target, so key on the actor only (default target="").
-        decision = self._check_sensitive_limit(persistence, "admin_step_up")
+        decision = self._check_sensitive_limit(
+            persistence,
+            "admin_change_role",
+            target=str(target_user.id),
+        )
         if not decision.allowed:
             self.step_up_error = rate_limited_message(
-                "Too many verification attempts.",
+                "Too many role-change attempts.",
                 decision.retry_after_seconds,
             )
+            self.step_up_password = ""
+            self.step_up_2fa = ""
             self.force_refresh()
             return
 
-        result = await perform_step_up(
-            self.session,
+        result = await self._verify_actor_step_up(
+            persistence,
             password=self.step_up_password,
             two_factor_code=self.step_up_2fa or None,
         )
@@ -750,21 +772,22 @@ class AdminPage(ResponsiveComponent):
             self.force_refresh()
             return
 
-        self._clear_rate_limit(persistence, "admin_step_up", "")
-
-        identifier = self.step_up_pending_identifier
-        new_role = self.step_up_pending_new_role
         self._hide_step_up_dialog()
 
-        updated = await self._update_role(identifier, new_role)
+        updated = await self._update_role(
+            identifier,
+            new_role,
+            step_up_verified=True,
+            action_limit_checked_for=target_user.id,
+        )
         if updated:
             self.change_role_identifier = ""
             self.change_role_new_role = get_default_role()
             await self._load_user_data()
 
-        # Surface the recovery-code warning only after _update_role runs, since it
-        # resets change_role_error on the elevated path (admin.py:628). On a failed
-        # update we leave its error message in place rather than clobber it.
+        # Surface the recovery-code warning only after _update_role runs, since
+        # it resets change_role_error on the success path. On a failed update we
+        # leave its error message in place rather than clobber it.
         if result.used_recovery_code and updated:
             self.change_role_error = (
                 "A recovery code was used. Generate a new set to stay protected."

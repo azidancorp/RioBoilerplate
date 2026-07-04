@@ -320,8 +320,8 @@ async def create_session(
     cursor = persistence._get_cursor()
     cursor.execute(
         """
-        INSERT INTO user_sessions (id, user_id, created_at, valid_until, role, elevated_until)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO user_sessions (id, user_id, created_at, valid_until, role)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
             # Store the SHA-256 hash of the token at rest; the raw token is
@@ -333,8 +333,6 @@ async def create_session(
             session.created_at.timestamp(),
             session.valid_until.timestamp(),
             session.role,
-            # New sessions start un-elevated; a step-up re-auth sets this later.
-            None,
         ),
     )
     conn.commit()
@@ -409,7 +407,7 @@ async def get_session_by_auth_token(
     """
     cursor = persistence._get_cursor()
     cursor.execute(
-        "SELECT id, user_id, created_at, valid_until, role, elevated_until FROM user_sessions WHERE id = ? ORDER BY created_at LIMIT 1",
+        "SELECT id, user_id, created_at, valid_until, role FROM user_sessions WHERE id = ? ORDER BY created_at LIMIT 1",
         (_hash_one_time_token(auth_token),),
     )
 
@@ -425,11 +423,6 @@ async def get_session_by_auth_token(
         created_at=datetime.fromtimestamp(row[2], tz=timezone.utc),
         valid_until=datetime.fromtimestamp(row[3], tz=timezone.utc),
         role=row[4],
-        elevated_until=(
-            datetime.fromtimestamp(row[5], tz=timezone.utc)
-            if row[5] is not None
-            else None
-        ),
     )
 
 
@@ -452,7 +445,6 @@ def get_valid_session_by_auth_token(
             s.created_at,
             s.valid_until,
             s.role,
-            s.elevated_until,
             {get_user_select_columns("u")}
         FROM user_sessions AS s
         JOIN users AS u ON u.id = s.user_id
@@ -471,9 +463,9 @@ def get_valid_session_by_auth_token(
     if valid_until <= datetime.now(tz=timezone.utc):
         raise KeyError("Session expired for the supplied auth token")
 
-    # elevated_until is the last session column (index 5); the user columns
-    # follow it, so the user slice starts at row[6:].
-    user = _row_to_app_user(row[6:])
+    # The session columns occupy indices 0-4; the user columns follow, so the
+    # user slice starts at row[5:].
+    user = _row_to_app_user(row[5:])
     if not user.is_active:
         raise KeyError("User account is inactive for the supplied auth token")
 
@@ -484,73 +476,9 @@ def get_valid_session_by_auth_token(
         created_at=datetime.fromtimestamp(row[2], tz=timezone.utc),
         valid_until=valid_until,
         role=user.role,
-        elevated_until=(
-            datetime.fromtimestamp(row[5], tz=timezone.utc)
-            if row[5] is not None
-            else None
-        ),
     )
 
     return session, user
-
-
-async def elevate_session(
-    persistence: AuthPersistence,
-    session_id: str,
-    ttl_seconds: int,
-) -> datetime:
-    """
-    Mark a session as sudo-elevated for ``ttl_seconds`` from now.
-
-    Returns the new ``elevated_until`` deadline. ``session_id`` is the raw auth
-    token; the stored primary key is its SHA-256 hash, so hash before matching.
-    """
-    conn = _get_connection(persistence)
-    deadline = datetime.now(tz=timezone.utc) + timedelta(seconds=ttl_seconds)
-
-    cursor = persistence._get_cursor()
-    cursor.execute(
-        "UPDATE user_sessions SET elevated_until = ? WHERE id = ?",
-        (deadline.timestamp(), _hash_one_time_token(session_id)),
-    )
-    conn.commit()
-    return deadline
-
-
-def session_is_elevated(session: UserSession, *, now: datetime | None = None) -> bool:
-    """
-    True iff the session is currently within its sudo elevation window.
-
-    Requires ``elevated_until`` to be set and in the future AND the session
-    itself to still be valid (``valid_until`` in the future). The ``valid_until``
-    term is defense-in-depth: callers normally run ``require_fresh_user_session``
-    first (which rejects soft-invalidated sessions), but this keeps the check
-    safe if ever called standalone. Sync: reads only fields already loaded onto
-    ``UserSession``, so it adds no extra query.
-    """
-    if session.elevated_until is None:
-        return False
-    if now is None:
-        now = datetime.now(tz=timezone.utc)
-    return session.elevated_until > now and session.valid_until > now
-
-
-async def clear_session_elevation(
-    persistence: AuthPersistence,
-    session_id: str,
-) -> None:
-    """
-    Drop sudo elevation on a session (set ``elevated_until = NULL``).
-
-    ``session_id`` is the raw auth token; hash before matching the stored row.
-    """
-    conn = _get_connection(persistence)
-    cursor = persistence._get_cursor()
-    cursor.execute(
-        "UPDATE user_sessions SET elevated_until = NULL WHERE id = ?",
-        (_hash_one_time_token(session_id),),
-    )
-    conn.commit()
 
 
 def _get_two_factor_secret(
@@ -679,7 +607,7 @@ async def invalidate_all_sessions(
     now = datetime.now(timezone.utc).timestamp()
 
     cursor.execute(
-        "UPDATE user_sessions SET valid_until = ?, elevated_until = NULL WHERE user_id = ?",
+        "UPDATE user_sessions SET valid_until = ? WHERE user_id = ?",
         (now, str(user_id)),
     )
     conn.commit()
@@ -723,7 +651,7 @@ async def update_password(
             raise KeyError(user_id)
 
         cursor.execute(
-            "UPDATE user_sessions SET valid_until = ?, elevated_until = NULL WHERE user_id = ?",
+            "UPDATE user_sessions SET valid_until = ? WHERE user_id = ?",
             (now, str(user_id)),
         )
         conn.commit()

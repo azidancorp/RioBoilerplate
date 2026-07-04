@@ -367,9 +367,6 @@ def test_admin_change_role_success_clears_rate_limit_bucket(temp_db: Persistence
         admin = await _create_user(temp_db, "admin-role-clear@example.com")
         target = await _create_user(temp_db, "target-role-clear@example.com")
         admin_session = await temp_db.create_session(admin.id)
-        # Role change is now gated behind a sudo-mode elevation window; stamp one
-        # so this test exercises the rate-limit clearing rather than the gate.
-        await temp_db.elevate_session(admin_session.id, config.SUDO_MODE_TTL_SECONDS)
         session = _FakeSession(temp_db, admin_session, admin)
         page = _mount_admin(session)
         key = rate_limit_key("admin_change_role", f"{admin.id}:{target.id}")
@@ -380,7 +377,11 @@ def test_admin_change_role_success_clears_rate_limit_bucket(temp_db: Persistence
         )
         assert _bucket_count(temp_db, "admin_change_role") == 1
 
-        updated = await AdminPage._update_role(page, target.email, "admin")
+        # Bypass the per-action credential prompt so this test exercises the
+        # rate-limit clearing rather than the step-up gate.
+        updated = await AdminPage._update_role(
+            page, target.email, "admin", step_up_verified=True
+        )
 
         assert updated is True
         assert _bucket_count(temp_db, "admin_change_role") == 0

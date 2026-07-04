@@ -88,14 +88,6 @@ class AppConfig:
     # while still supporting explicit expiry checks in persistence.
     RECOVERY_CODE_TTL_DAYS: int = 36500  # ~100 years; effectively never expires
 
-    # Sudo Mode (Step-Up Re-Auth)
-    # ---------------------------
-    # How long a sensitive-admin-action elevation lasts after a successful
-    # re-authentication (own password + own TOTP if 2FA is enabled). A batch of
-    # role changes within this window skips the re-auth prompt.
-    # Non-secret behavior flag -> lives in code per AGENTS.md, NOT in .env.
-    SUDO_MODE_TTL_SECONDS: int = 300  # 5 minutes
-
     # Email Delivery
     # --------------
     # Non-secret delivery defaults live here so deployments can review behavior

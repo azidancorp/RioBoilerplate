@@ -101,8 +101,8 @@ class AdminPage(ResponsiveComponent):
 
     # Step-up re-auth dialog state. A role change always prompts for the
     # acting admin's own credentials; the pending action is stashed so it can
-    # be replayed once verification succeeds. Verification is per-action — no
-    # elevation window is granted.
+    # be replayed once verification succeeds. Verification is scoped to that
+    # single action.
     step_up_visible: bool = False
     step_up_password: str = ""
     step_up_2fa: str = ""

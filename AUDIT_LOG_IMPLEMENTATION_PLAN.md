@@ -10,7 +10,7 @@ mutations) commit silently — the only logging anywhere in `admin.py` is
 `logger.exception(...)` on the *error* path (`admin.py:186`).
 
 This plan covers **attribution** (who/what/when). It is independent of, and
-complementary to, the sudo-mode step-up plan (which covers *proof the legitimate
+complementary to, the step-up re-auth plan (which covers *proof the legitimate
 admin was present*). Build this one first: it is cheaper, has zero UX cost, and
 stands on its own.
 
@@ -108,7 +108,7 @@ Notes:
 
 The table uses `CREATE TABLE IF NOT EXISTS`, so existing databases get it on
 next boot with no migration step. No existing table is altered, so there is no
-`ALTER TABLE` / `PRAGMA table_info` dance here (unlike the sudo-mode plan).
+`ALTER TABLE` / `PRAGMA table_info` dance here (unlike the step-up re-auth plan).
 Existing rows in other tables are untouched.
 
 ## New module: `app/app/persistence_audit.py`

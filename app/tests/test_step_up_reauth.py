@@ -2,8 +2,8 @@
 
 Covers the ``verify_step_up_credentials`` helper, the admin role-change
 prompt + dialog flow (which always requires the acting admin's own
-credentials — no elevation window is granted), the step-up rate limit, the
-per-action flows for admin deletion and currency updates.
+credentials), the step-up rate limit, and the per-action flows for admin
+deletion and currency updates.
 """
 
 import asyncio
@@ -30,7 +30,7 @@ from tests.test_admin_user_lifecycle import (
 
 @pytest.fixture
 def temp_db(tmp_path: Path):
-    persistence = Persistence(db_path=tmp_path / "sudo-mode.db")
+    persistence = Persistence(db_path=tmp_path / "step-up-reauth.db")
     try:
         yield persistence
     finally:
@@ -196,7 +196,7 @@ def test_role_change_always_prompts_for_step_up(temp_db: Persistence):
 
 
 def test_role_change_reprompts_after_previous_success(temp_db: Persistence):
-    """No elevation window: a second role change re-prompts even right after one succeeded."""
+    """A second role change re-prompts even right after one succeeded."""
 
     async def scenario():
         root, root_session = await _create_root_session(temp_db)

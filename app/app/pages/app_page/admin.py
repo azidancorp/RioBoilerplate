@@ -10,19 +10,20 @@ import pandas as pd
 
 import rio
 from app.persistence import Persistence
-from app.data_models import AppUser
+from app.data_models import AppUser, UserSession
 from app.permissions import can_manage_role, check_access, get_manageable_roles, get_default_role
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.session_validation import (
+    StepUpResult,
     perform_step_up,
     refresh_attached_user_session,
     reject_stale_user_session,
     require_elevated_session,
+    verify_step_up_credentials,
 )
 from app.currency import major_to_minor, format_minor_amount, attach_currency_name
 from app.validation import SecuritySanitizer
-from app.config import config
 from app.scripts.message_utils import send_password_reset_email
 from app.components.center_component import CenterComponent
 from app.components.responsive import ResponsiveComponent, WIDTH_FULL
@@ -83,7 +84,8 @@ class AdminPage(ResponsiveComponent):
     # User deletion fields
     delete_user_identifier: str = ""
     delete_user_confirmation: str = ""
-    delete_user_password: str = ""
+    delete_user_step_up_password: str = ""
+    delete_user_step_up_2fa: str = ""
     delete_user_error: str = ""
     delete_user_success: str = ""
 
@@ -188,6 +190,52 @@ class AdminPage(ResponsiveComponent):
             scope=sensitive_action_policy(scope).scope,
             key=rate_limit_key(scope, f"{self.current_user.id}:{target}"),
         )
+
+    def _clear_delete_step_up_fields(self) -> None:
+        self.delete_user_step_up_password = ""
+        self.delete_user_step_up_2fa = ""
+
+    async def _verify_actor_step_up(
+        self,
+        persistence: Persistence,
+        *,
+        password: str,
+        two_factor_code: str | None,
+    ) -> StepUpResult:
+        if not self.current_user:
+            return StepUpResult(
+                ok=False,
+                error_message="You must be logged in to perform this action",
+            )
+
+        decision = self._check_sensitive_limit(persistence, "admin_step_up")
+        if not decision.allowed:
+            return StepUpResult(
+                ok=False,
+                error_message=rate_limited_message(
+                    "Too many verification attempts.",
+                    decision.retry_after_seconds,
+                ),
+            )
+
+        try:
+            user_session = self.session[UserSession]
+        except KeyError:
+            return StepUpResult(
+                ok=False,
+                error_message="Your session has expired. Please log in again.",
+            )
+
+        result = await verify_step_up_credentials(
+            persistence,
+            user_session,
+            self.current_user,
+            password=password,
+            two_factor_code=two_factor_code,
+        )
+        if result.ok:
+            self._clear_rate_limit(persistence, "admin_step_up", "")
+        return result
 
     def _admin_error_message(self, action: str, exc: Exception) -> str:
         if isinstance(exc, PermissionError):
@@ -691,6 +739,8 @@ class AdminPage(ResponsiveComponent):
         )
         if not result.ok:
             self.step_up_error = result.error_message or "Verification failed."
+            self.step_up_password = ""
+            self.step_up_2fa = ""
             self.force_refresh()
             return
 
@@ -724,18 +774,21 @@ class AdminPage(ResponsiveComponent):
         if not self.current_user:
             self.delete_user_error = "You must be logged in to perform this action"
             self.delete_user_success = ""
+            self._clear_delete_step_up_fields()
             self.force_refresh()
             return
 
         if not self.delete_user_identifier or self.delete_user_identifier == "":
             self.delete_user_error = "Please enter an email or username to delete"
             self.delete_user_success = ""
+            self._clear_delete_step_up_fields()
             self.force_refresh()
             return
 
         if self.delete_user_confirmation != f"DELETE USER {self.delete_user_identifier}":
             self.delete_user_error = f'Please type "DELETE USER {self.delete_user_identifier}" exactly to confirm deletion'
             self.delete_user_success = ""
+            self._clear_delete_step_up_fields()
             self.force_refresh()
             return
 
@@ -746,6 +799,7 @@ class AdminPage(ResponsiveComponent):
         except KeyError:
             self.delete_user_error = f"User not found: {self.delete_user_identifier}"
             self.delete_user_success = ""
+            self._clear_delete_step_up_fields()
             self.force_refresh()
             return
 
@@ -755,20 +809,7 @@ class AdminPage(ResponsiveComponent):
         if not can_manage_role(self.current_user.role, target_role):
             self.delete_user_error = f"You do not have permission to delete users with role: {target_role} because your role is {self.current_user.role}"
             self.delete_user_success = ""
-            self.force_refresh()
-            return
-
-        # Validate admin deletion password
-        if not self.delete_user_password or self.delete_user_password == "":
-            self.delete_user_error = "Please enter the admin deletion password"
-            self.delete_user_success = ""
-            self.force_refresh()
-            return
-
-        # Check admin deletion password against centralized config
-        if not config.ADMIN_DELETION_PASSWORD:
-            self.delete_user_error = "ADMIN_DELETION_PASSWORD is not set. Please configure your environment variables."
-            self.delete_user_success = ""
+            self._clear_delete_step_up_fields()
             self.force_refresh()
             return
 
@@ -783,12 +824,19 @@ class AdminPage(ResponsiveComponent):
                 decision.retry_after_seconds,
             )
             self.delete_user_success = ""
+            self._clear_delete_step_up_fields()
             self.force_refresh()
             return
 
-        if self.delete_user_password != config.ADMIN_DELETION_PASSWORD:
-            self.delete_user_error = "Incorrect admin deletion password"
+        result = await self._verify_actor_step_up(
+            persistence,
+            password=self.delete_user_step_up_password,
+            two_factor_code=self.delete_user_step_up_2fa or None,
+        )
+        if not result.ok:
+            self.delete_user_error = result.error_message or "Verification failed."
             self.delete_user_success = ""
+            self._clear_delete_step_up_fields()
             self.force_refresh()
             return
 
@@ -797,10 +845,8 @@ class AdminPage(ResponsiveComponent):
 
         # Delete the user
         try:
-            success = await persistence.delete_user(
+            success = await persistence.admin_delete_user(
                 user_id=target_user.id,
-                password=self.delete_user_password,  # Use entered admin deletion password
-                two_factor_code=None,  # No 2FA needed for admin deletion
                 actor=self.current_user,
                 client_ip=self._client_ip(),
             )
@@ -810,7 +856,7 @@ class AdminPage(ResponsiveComponent):
                 # Clear the fields
                 self.delete_user_identifier = ""
                 self.delete_user_confirmation = ""
-                self.delete_user_password = ""
+                self._clear_delete_step_up_fields()
                 self.delete_user_error = ""
                 persistence.clear_rate_limit(
                     scope=sensitive_action_policy("admin_delete_user").scope,
@@ -822,10 +868,12 @@ class AdminPage(ResponsiveComponent):
             else:
                 self.delete_user_error = "Failed to delete user"
                 self.delete_user_success = ""
+                self._clear_delete_step_up_fields()
                 self.force_refresh()
         except Exception as e:
             self.delete_user_error = self._admin_error_message("deleting user", e)
             self.delete_user_success = ""
+            self._clear_delete_step_up_fields()
             self.force_refresh()
 
     async def _on_currency_submit(self, _: rio.TextInputConfirmEvent | None = None) -> None:
@@ -991,19 +1039,22 @@ class AdminPage(ResponsiveComponent):
                 f"{self.step_up_pending_new_role}.",
                 overflow="wrap",
             ),
-            rio.TextInput(
+        ]
+
+        if self.current_user and self.current_user.auth_provider == "password":
+            contents.append(rio.TextInput(
                 label="Your Password",
                 text=self.bind().step_up_password,
                 is_secret=True,
                 on_confirm=self._on_step_up_submit,
-            ),
-        ]
+            ))
 
         if self.current_user and self.current_user.two_factor_enabled:
             contents.append(
                 rio.TextInput(
                     label="2FA or Recovery Code",
                     text=self.bind().step_up_2fa,
+                    is_secret=True,
                     on_confirm=self._on_step_up_submit,
                 )
             )
@@ -1039,6 +1090,44 @@ class AdminPage(ResponsiveComponent):
         if not self.current_user or self.df is None:
             return rio.Text("Error: Could not load user information")
 
+        requires_step_up_password = self.current_user.auth_provider == "password"
+        requires_step_up_2fa = self.current_user.two_factor_enabled
+
+        delete_user_inputs: list[rio.Component] = [
+            rio.TextInput(
+                label="Email or Username to Delete",
+                text=self.bind().delete_user_identifier,
+                on_confirm=self._on_delete_user_pressed,
+            ),
+            rio.TextInput(
+                label='Type "DELETE USER identifier" to confirm',
+                text=self.bind().delete_user_confirmation,
+                on_confirm=self._on_delete_user_pressed,
+            ),
+        ]
+        if requires_step_up_password:
+            delete_user_inputs.append(rio.TextInput(
+                label="Your Password",
+                text=self.bind().delete_user_step_up_password,
+                is_secret=True,
+                on_confirm=self._on_delete_user_pressed,
+            ))
+        if requires_step_up_2fa:
+            delete_user_inputs.append(
+                rio.TextInput(
+                    label="2FA or Recovery Code",
+                    text=self.bind().delete_user_step_up_2fa,
+                    is_secret=True,
+                    on_confirm=self._on_delete_user_pressed,
+                )
+            )
+        delete_user_inputs.append(
+            rio.Button(
+                "Delete User",
+                on_press=self._on_delete_user_pressed,
+                shape="rounded",
+            )
+        )
         return CenterComponent(
             rio.Column(
                 rio.Text(
@@ -1373,28 +1462,8 @@ class AdminPage(ResponsiveComponent):
             ),
 
             self._responsive_form_layout(
-                rio.TextInput(
-                    label="Email or Username to Delete",
-                    text=self.bind().delete_user_identifier,
-                    on_confirm=self._on_delete_user_pressed
-                ),
-                rio.TextInput(
-                    label='Type "DELETE USER identifier" to confirm',
-                    text=self.bind().delete_user_confirmation,
-                    on_confirm=self._on_delete_user_pressed
-                ),
-                rio.TextInput(
-                    label="Admin Deletion Password",
-                    text=self.bind().delete_user_password,
-                    is_secret=True,
-                    on_confirm=self._on_delete_user_pressed
-                ),
-                rio.Button(
-                    "Delete User",
-                    on_press=self._on_delete_user_pressed,
-                    shape="rounded",
-                ),
-                proportions=[1, 1, 1, 1],
+                *delete_user_inputs,
+                proportions=[1] * len(delete_user_inputs),
             ),
 
             rio.Banner(

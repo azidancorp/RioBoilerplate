@@ -168,7 +168,7 @@ For each, build the audit attribution from the actor (reuse the existing
 | `user_edit`           | admin profile/email update (persistence)     | `_on_edit_user_pressed` (`admin.py:271`)     | `{"email":…, "username":…}` → new values |
 | `password_reset_sent` | reset-token creation (persistence)           | `_on_send_reset_pressed` (`admin.py:425`)    | `null` → `{"token_id": …}` (never the token itself) |
 | `user_create`         | `create_user` (persistence)                  | `_on_create_user_pressed` (`admin.py:189`)   | `null` → `{"email":…, "role":…}` |
-| `user_delete`         | `delete_user` (`persistence.py:878`)         | `_on_delete_user_pressed` (`admin.py:608`)   | `{"email":…, "role":…}` → `null` |
+| `user_delete`         | `delete_user` / `admin_delete_user` (persistence) | `_on_delete_user_pressed` (admin page)   | `{"email":…, "role":…}` → `null` |
 | `currency_adjust` / `currency_set` | currency adjust/set (persistence) | `_on_currency_submit` (`admin.py:718`) + API `api/currency.py:118,157` | `{"balance": old}` → `{"balance": new}` |
 
 Notes:
@@ -176,14 +176,14 @@ Notes:
   same transaction, so the target's email/role are snapshotted into
   `target_label`/`before`. Because the audit table has no FK cascade, the row
   persists after the user is gone.
-- **`user_delete` is also the self-service deletion path.** `delete_user` is
-  called not only by the admin handler but by a user deleting their **own**
-  account (`settings.py:355`), where there is no admin actor. Adding a required
-  `actor: AppUser` would break that call. Handle it explicitly: make `actor`
-  optional on `delete_user`, and audit both paths —
+- **`user_delete` covers two paths.** `delete_user` is the self-service path and
+  requires the target user's password plus optional target 2FA. Admin removal
+  uses `admin_delete_user` after caller-side actor step-up and a persistence-side
+  role-hierarchy check. Audit both paths —
   - admin path: `actor = self.current_user` (admin ≠ target);
-  - self-service path: pass the user themselves as actor and tag
-    `metadata={"self_service": true}` so actor == target reads correctly.
+  - self-service path: no admin actor; the persistence layer attributes the row
+    to the target user and tags `metadata={"self_service": true}` so actor ==
+    target reads correctly.
   This keeps the "every deletion is audited" invariant while distinguishing
   admin removals from self-deletions. (Decide in review whether self-deletions
   belong in the *admin* audit log at all, or only admin-initiated ones — see
@@ -202,8 +202,8 @@ Notes:
   detail to the ledger — or skip currency in v1 since the ledger already
   attributes it. **Decide in review** (see Open Questions). Recommended: log a
   thin audit row for symmetry so one table answers "all admin actions".
-- **Secrets never logged**: never store passwords, the `ADMIN_DELETION_PASSWORD`,
-  TOTP codes, recovery codes, or raw reset tokens in `before`/`after`/`metadata`.
+- **Secrets never logged**: never store passwords, shared secrets, TOTP codes,
+  recovery codes, or raw reset tokens in `before`/`after`/`metadata`.
 
 ### Acquiring `client_ip`
 
@@ -229,10 +229,10 @@ The codebase already derives request context via `context_from_rio_session`
      `admin_set_user_active`, `admin_issue_password_reset`) — no new actor param.
    - Add `actor` to `update_user_role` and `delete_user` only (the two that lack
      it), keyword-only to match the other four. **On both, make it
-     `actor: AppUser | None = None` (optional), not required** — these two
-     methods have no persistence-layer authorization today (they authorize in the
-     UI handler / via password), so `actor` here is purely for audit attribution.
-     Making it required would break existing actor-less callers:
+     `actor: AppUser | None = None` (optional), not required** — these actor
+     values are for audit attribution, while self-service `delete_user` still
+     authorizes via the target user's password/2FA. Making it required would
+     break existing actor-less callers:
      - `update_user_role` is called without an actor by
        `test_live_session_revalidation.py:123` (`update_user_role(user.id, "user")`).
      - `delete_user` is called without an actor by the self-service path
@@ -240,13 +240,11 @@ The codebase already derives request context via `context_from_rio_session`
 
      A call without an actor simply writes a null `actor_user_id` (self-service
      deletion additionally tags `metadata={"self_service": true}` — see below).
-   - **Do NOT add `_require_admin_actor_can_manage` to `delete_user`.** It keeps
-     its existing auth (`ADMIN_DELETION_PASSWORD` / user password / optional 2FA,
-     `persistence.py:884-899`), which intentionally permits self-deletion. The
-     helper dereferences `actor.role` (`persistence.py:286`, no `None`
-     tolerance) and would (a) crash on the `actor=None` self-service path and
-     (b) reject self-deletion since `can_manage_role(role, role)` is false. Any
-     read of `actor.*` inside `delete_user` must be guarded
+   - **Do NOT add `_require_admin_actor_can_manage` to self-service
+     `delete_user`.** It keeps target-user password / optional 2FA verification.
+     Admin-authorized deletion belongs in the separate `admin_delete_user` path
+     after caller-side actor step-up and must enforce role hierarchy itself.
+     Any read of `actor.*` inside shared deletion cleanup must be guarded
      (`if actor is not None and actor.id != user_id:`). `update_user_role`
      likewise must guard `actor.role`/`actor.id` behind an `actor is not None`
      check before using them in the audit row.
@@ -264,7 +262,8 @@ The codebase already derives request context via `context_from_rio_session`
    - The four methods that already take `actor: AppUser` are already passed
      `actor=self.current_user` by these handlers — leave that as-is. For the two
      newly-actor'd methods (`update_user_role`, `delete_user`), add
-     `actor=self.current_user`.
+     `actor=self.current_user`; admin deletion should call `admin_delete_user`
+     after per-action actor re-auth.
    - In each handler, also pass the `client_ip` from
      `context_from_rio_session(self.session)` into the persistence call.
 

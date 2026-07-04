@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-from app.config import config
 from app.data_models import AppUser
 from app.persistence import Persistence
 
@@ -26,14 +25,6 @@ def temp_db(tmp_path: Path):
         yield persistence
     finally:
         persistence.close()
-
-
-@pytest.fixture(autouse=True)
-def admin_deletion_password():
-    original = config.ADMIN_DELETION_PASSWORD
-    config.ADMIN_DELETION_PASSWORD = "admin-delete-pw"
-    yield
-    config.ADMIN_DELETION_PASSWORD = original
 
 
 async def _create_user(
@@ -89,9 +80,8 @@ def test_deletion_audit_row_survives_user_removal(temp_db: Persistence):
         target = await _create_user(temp_db, "victim@example.com", role="user")
         target_id = target.id
 
-        deleted = await temp_db.delete_user(
+        deleted = await temp_db.admin_delete_user(
             target_id,
-            password=config.ADMIN_DELETION_PASSWORD,
             actor=admin,
             client_ip="198.51.100.5",
         )
@@ -109,6 +99,24 @@ def test_deletion_audit_row_survives_user_removal(temp_db: Persistence):
         assert row["target_label"] == "victim@example.com"
         assert row["before"] == {"email": "victim@example.com", "role": "user"}
         assert row["after"] is None
+
+    asyncio.run(scenario())
+
+
+def test_admin_delete_user_enforces_actor_hierarchy(temp_db: Persistence):
+    async def scenario():
+        root = await _create_user(temp_db, "root-delete-denied@example.com", role="root")
+        admin = await _create_user(temp_db, "admin-delete-denied@example.com", role="admin")
+        peer_admin = await _create_user(temp_db, "peer-delete-denied@example.com", role="admin")
+
+        with pytest.raises(PermissionError):
+            await temp_db.admin_delete_user(root.id, actor=admin)
+
+        with pytest.raises(PermissionError):
+            await temp_db.admin_delete_user(peer_admin.id, actor=admin)
+
+        assert (await temp_db.get_user_by_id(root.id)).email == root.email
+        assert (await temp_db.get_user_by_id(peer_admin.id)).email == peer_admin.email
 
     asyncio.run(scenario())
 
@@ -207,7 +215,6 @@ def test_no_secret_material_in_audit_columns(temp_db: Persistence):
 
         assert secret_pw not in blob
         assert token.token not in blob
-        assert config.ADMIN_DELETION_PASSWORD not in blob
 
     asyncio.run(scenario())
 

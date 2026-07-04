@@ -70,5 +70,5 @@ Do a quick boot check from `app/` (where `rio.toml` lives), e.g. `cd app && time
 
 ## Secrets / Config
 - Secrets live in untracked `.env` (loaded via `python-dotenv`); use `.env.example` as the starting point.
-- App defaults live in `app/app/config.py`. Edit the file directly to customize behavior. Only true secrets (e.g., `ADMIN_DELETION_PASSWORD`) belong in `.env`.
+- App defaults live in `app/app/config.py`. Edit the file directly to customize behavior. Only true secrets (e.g., provider credentials or session secrets) belong in `.env`.
 - Non-secret behavior flags must stay code-configured in `app/app/config.py` (for example: email verification requirement/token TTLs and currency display/precision knobs). Do not add non-secret toggles to `.env` or `AppConfig.from_env`.

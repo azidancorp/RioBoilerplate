@@ -1,4 +1,3 @@
-import secrets
 import sqlite3
 import threading
 import uuid
@@ -1024,23 +1023,56 @@ class Persistence:
         except KeyError:
             return False
 
-        admin_password = config.ADMIN_DELETION_PASSWORD
-        admin_override = bool(
-            admin_password and secrets.compare_digest(password, admin_password)
-        )
-
         user_password_valid = False
         if user.auth_provider == "password":
             user_password_valid = user.verify_password(password)
 
-        if not (user_password_valid or admin_override):
+        if not user_password_valid:
             return False
 
-        if user.two_factor_enabled and not admin_override:
+        if user.two_factor_enabled:
             result = self.verify_two_factor_challenge(user_id, two_factor_code)
             if not result.ok:
                 return False
 
+        return await self._delete_user_authorized(
+            user,
+            actor=actor,
+            client_ip=client_ip,
+        )
+
+    async def admin_delete_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        actor: AppUser,
+        client_ip: str | None = None,
+    ) -> bool:
+        try:
+            user = await self.get_user_by_id(user_id)
+        except KeyError:
+            return False
+
+        self._require_admin_actor_can_manage(
+            actor=actor,
+            target_role=user.role,
+            action="delete",
+        )
+
+        return await self._delete_user_authorized(
+            user,
+            actor=actor,
+            client_ip=client_ip,
+        )
+
+    async def _delete_user_authorized(
+        self,
+        user: AppUser,
+        *,
+        actor: AppUser | None,
+        client_ip: str | None,
+    ) -> bool:
+        user_id = user.id
         cursor = self._get_cursor()
         uid = str(user_id)
 
@@ -1059,33 +1091,39 @@ class Persistence:
             audit_actor_role = actor.role
             audit_metadata = None
 
-        # Write the audit row before the cascade deletes so the target's
-        # email/role are snapshotted. The audit table has no FK cascade, so this
-        # row persists after the user is gone.
-        self.record_admin_action(
-            actor_user_id=audit_actor_id,
-            actor_role=audit_actor_role,
-            action="user_delete",
-            target_user_id=user_id,
-            target_label=user.email,
-            before={"email": user.email, "role": user.role},
-            after=None,
-            metadata=audit_metadata,
-            client_ip=client_ip,
-            commit=False,
-        )
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
 
-        for table in (
-            "user_sessions",
-            "password_reset_tokens",
-            "oauth_login_handoffs",
-            "two_factor_recovery_codes",
-            "profiles",
-        ):
-            cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
-        # email_verification_tokens is cleaned up by ON DELETE CASCADE.
-        cursor.execute("DELETE FROM users WHERE id = ?", (uid,))
-        self.conn.commit()
+            # Write the audit row before the cascade deletes so the target's
+            # email/role are snapshotted. The audit table has no FK cascade, so this
+            # row persists after the user is gone.
+            self.record_admin_action(
+                actor_user_id=audit_actor_id,
+                actor_role=audit_actor_role,
+                action="user_delete",
+                target_user_id=user_id,
+                target_label=user.email,
+                before={"email": user.email, "role": user.role},
+                after=None,
+                metadata=audit_metadata,
+                client_ip=client_ip,
+                commit=False,
+            )
+
+            for table in (
+                "user_sessions",
+                "password_reset_tokens",
+                "oauth_login_handoffs",
+                "two_factor_recovery_codes",
+                "profiles",
+            ):
+                cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
+            # email_verification_tokens is cleaned up by ON DELETE CASCADE.
+            cursor.execute("DELETE FROM users WHERE id = ?", (uid,))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return True
 
     async def create_profile(self, user_id: str, full_name: str, email: str,

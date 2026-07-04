@@ -88,11 +88,6 @@ class AppConfig:
     # while still supporting explicit expiry checks in persistence.
     RECOVERY_CODE_TTL_DAYS: int = 36500  # ~100 years; effectively never expires
 
-    # Admin Deletion Password
-    # -----------------------
-    # REQUIRED for admin user deletion operations. Set via ADMIN_DELETION_PASSWORD env var.
-    ADMIN_DELETION_PASSWORD: str = ""
-
     # Sudo Mode (Step-Up Re-Auth)
     # ---------------------------
     # How long a sensitive-admin-action elevation lasts after a successful
@@ -163,7 +158,6 @@ class AppConfig:
         Non-secret behavior defaults are intentionally edited in this module.
         """
         return cls(
-            ADMIN_DELETION_PASSWORD=os.getenv("ADMIN_DELETION_PASSWORD", ""),
             SESSION_SECRET_KEY=os.getenv("SESSION_SECRET_KEY", ""),
             GOOGLE_CLIENT_ID=os.getenv("GOOGLE_CLIENT_ID", ""),
             GOOGLE_CLIENT_SECRET=os.getenv("GOOGLE_CLIENT_SECRET", ""),
@@ -174,9 +168,6 @@ class AppConfig:
 
 # Global configuration instance with environment-provided secrets applied.
 config = AppConfig.from_env()
-
-if not config.ADMIN_DELETION_PASSWORD:
-    print("WARNING: ADMIN_DELETION_PASSWORD is not set. User deletion operations will be unavailable.", file=sys.stderr)
 
 if "localhost" in config.APP_URL or "127.0.0.1" in config.APP_URL:
     print("WARNING: APP_URL is set to a localhost address. Password-reset and email-verification links will not work in production. Update APP_URL in config.py before deploying.", file=sys.stderr)

@@ -122,7 +122,7 @@ def test_health_response_does_not_expose_paths_or_raw_errors(tmp_path, monkeypat
     db_path = tmp_path / "corrupt-secret-path.db"
     db_path.write_text("not a sqlite database", encoding="utf-8")
     monkeypatch.setattr(health_module, "HEALTH_DB_PATH", db_path)
-    monkeypatch.setenv("ADMIN_DELETION_PASSWORD", "secret-health-test-value")
+    monkeypatch.setenv("SESSION_SECRET_KEY", "secret-health-test-value")
 
     client = _client()
     try:

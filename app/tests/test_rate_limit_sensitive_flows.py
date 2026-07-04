@@ -144,7 +144,8 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.change_role_error = ""
     component.delete_user_identifier = ""
     component.delete_user_confirmation = ""
-    component.delete_user_password = ""
+    component.delete_user_step_up_password = ""
+    component.delete_user_step_up_2fa = ""
     component.delete_user_error = ""
     component.delete_user_success = ""
     component.step_up_visible = False
@@ -387,12 +388,7 @@ def test_admin_change_role_success_clears_rate_limit_bucket(temp_db: Persistence
     asyncio.run(scenario())
 
 
-def test_admin_delete_user_success_clears_rate_limit_bucket(
-    temp_db: Persistence,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(config, "ADMIN_DELETION_PASSWORD", "DeletePass!234")
-
+def test_admin_delete_user_success_clears_rate_limit_bucket(temp_db: Persistence):
     async def scenario():
         admin = await _create_user(temp_db, "admin-delete-clear@example.com")
         target = await _create_user(temp_db, "target-delete-clear@example.com")
@@ -402,7 +398,7 @@ def test_admin_delete_user_success_clears_rate_limit_bucket(
             session,
             delete_user_identifier=target.email,
             delete_user_confirmation=f"DELETE USER {target.email}",
-            delete_user_password="DeletePass!234",
+            delete_user_step_up_password="VeryStrongPass!9",
         )
         key = rate_limit_key("admin_delete_user", f"{admin.id}:{target.id}")
 

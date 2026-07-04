@@ -466,3 +466,28 @@ def test_step_up_attempts_are_rate_limited(
         assert refreshed.role == target.role
 
     asyncio.run(scenario())
+
+
+def test_admin_delete_uses_actor_step_up_and_bypasses_target_2fa(temp_db: Persistence):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        target = await _create_user(temp_db, "delete-2fa-target@example.com")
+        temp_db.set_2fa_secret(target.id, pyotp.random_base32())
+
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(
+            session,
+            delete_user_identifier=target.email,
+            delete_user_confirmation=f"DELETE USER {target.email}",
+            delete_user_step_up_password=PASSWORD,
+        )
+
+        await AdminPage._on_delete_user_pressed(page)
+
+        assert page.delete_user_error == ""
+        assert target.email in page.delete_user_success
+        with pytest.raises(KeyError):
+            await temp_db.get_user_by_id(target.id)
+        assert require_elevated_session(session) is None
+
+    asyncio.run(scenario())

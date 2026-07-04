@@ -191,11 +191,7 @@ cd /root/[APP_NAME]
 nano .env
 ```
 
-**Required `.env` additions:**
-
-```
-ADMIN_DELETION_PASSWORD="<strong admin password>"
-```
+Add any deployment-specific secrets required by the providers you enable.
 
 > **Note:** Other behavior settings (email validation, username login, currency names, password policy) are hardcoded in `app/app/config.py`. Edit that file directly to customize behavior. See `docs/configuration/email-validation.md` for the email/username validation knobs.
 > **Note:** Email provider host/sender/TLS defaults also live in `app/app/config.py`; only credential/secret values such as `RIO_SMTP_PASSWORD` belong in `.env`.

@@ -110,6 +110,19 @@ async def _create_root_session(persistence: Persistence) -> tuple[AppUser, UserS
     return root, session
 
 
+async def _create_oauth_root_session(persistence: Persistence) -> tuple[AppUser, UserSession]:
+    root = AppUser.create_social_user(
+        email="oauth-root-lifecycle@example.com",
+        provider="google",
+        provider_user_id="oauth-root-lifecycle",
+    )
+    root.role = "root"
+    await persistence.create_user(root)
+    root = await persistence.get_user_by_id(root.id)
+    session = await persistence.create_session(root.id)
+    return root, session
+
+
 def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component = object.__new__(AdminPage)
     component._session_ = session
@@ -134,6 +147,8 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.edit_user_email = ""
     component.edit_user_username = ""
     component.edit_user_full_name = ""
+    component.edit_user_step_up_password = ""
+    component.edit_user_step_up_2fa = ""
     component.edit_user_error = ""
     component.edit_user_success = ""
     component.active_user_identifier = ""
@@ -445,6 +460,148 @@ def test_admin_page_rejects_higher_role_edit_status_and_reset(
 
         assert "do not have permission" in reset_page.reset_user_error
         assert sent == []
+
+    asyncio.run(scenario())
+
+
+def test_admin_email_edit_requires_actor_step_up(temp_db: Persistence):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        target = await temp_db.admin_create_user(
+            email="email-stepup-target@example.com",
+            password=PASSWORD,
+            role="user",
+            actor=root,
+        )
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(
+            session,
+            edit_user_identifier=target.email,
+            edit_user_email="new-email-stepup-target@example.com",
+            edit_user_step_up_password="wrong-password",
+        )
+
+        await AdminPage._on_edit_user_pressed(page)
+
+        assert page.edit_user_error == "Current password is incorrect"
+        assert page.edit_user_step_up_password == ""
+        refreshed = await temp_db.get_user_by_id(target.id)
+        assert refreshed.email == target.email
+
+        page.edit_user_step_up_password = PASSWORD
+        await AdminPage._on_edit_user_pressed(page)
+
+        assert page.edit_user_error == ""
+        assert "new-email-stepup-target@example.com" in page.edit_user_success
+        refreshed = await temp_db.get_user_by_id(target.id)
+        assert refreshed.email == "new-email-stepup-target@example.com"
+
+    asyncio.run(scenario())
+
+
+def test_oauth_admin_without_step_up_path_gets_actionable_errors(temp_db: Persistence):
+    async def scenario():
+        root, root_session = await _create_oauth_root_session(temp_db)
+        target = await temp_db.admin_create_user(
+            email="oauth-stepup-target@example.com",
+            password=PASSWORD,
+            role="user",
+            actor=root,
+        )
+        session = _FakeSession(temp_db, root_session, root)
+        expected = "Set up a password or 2FA to perform this action."
+
+        role_page = _mount_admin(
+            session,
+            change_role_identifier=target.email,
+            change_role_new_role="admin",
+        )
+        await AdminPage._on_change_role_pressed(role_page)
+        assert role_page.change_role_error == expected
+        assert role_page.step_up_visible is False
+        assert (await temp_db.get_user_by_id(target.id)).role == "user"
+
+        edit_page = _mount_admin(
+            session,
+            edit_user_identifier=target.email,
+            edit_user_email="oauth-stepup-new@example.com",
+        )
+        await AdminPage._on_edit_user_pressed(edit_page)
+        assert edit_page.edit_user_error == expected
+        assert (await temp_db.get_user_by_id(target.id)).email == target.email
+
+        delete_page = _mount_admin(
+            session,
+            delete_user_identifier=target.email,
+            delete_user_confirmation=f"DELETE USER {target.email}",
+        )
+        await AdminPage._on_delete_user_pressed(delete_page)
+        assert delete_page.delete_user_error == expected
+        assert (await temp_db.get_user_by_id(target.id)).email == target.email
+
+        currency_page = _mount_admin(
+            session,
+            currency_user_identifier=target.email,
+            currency_amount="25",
+        )
+        await AdminPage._on_currency_submit(currency_page)
+        assert currency_page.currency_error == expected
+        refreshed = await temp_db.get_user_by_id(target.id)
+        assert refreshed.primary_currency_balance == target.primary_currency_balance
+
+    asyncio.run(scenario())
+
+
+def test_admin_non_email_profile_edit_does_not_require_step_up(temp_db: Persistence):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        target = await temp_db.admin_create_user(
+            email="non-email-edit-target@example.com",
+            password=PASSWORD,
+            role="user",
+            actor=root,
+        )
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(
+            session,
+            edit_user_identifier=target.email,
+            edit_user_username="newusername",
+            edit_user_full_name="New Display Name",
+        )
+
+        await AdminPage._on_edit_user_pressed(page)
+
+        assert page.edit_user_error == ""
+        refreshed = await temp_db.get_user_by_id(target.id)
+        assert refreshed.email == target.email
+        assert refreshed.username == "newusername"
+        profile = await temp_db.get_profile_by_user_id(str(target.id))
+        assert profile["full_name"] == "New Display Name"
+
+    asyncio.run(scenario())
+
+
+def test_admin_email_step_up_prompt_uses_cached_target_email(temp_db: Persistence):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        target = await temp_db.admin_create_user(
+            email="same-email-target@example.com",
+            password=PASSWORD,
+            role="user",
+            actor=root,
+            username="sameemail",
+        )
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(session)
+        page.users = [target]
+
+        page.edit_user_identifier = target.email
+        page.edit_user_email = target.email.upper()
+        assert page._edit_email_step_up_may_be_required() is False
+
+        page.edit_user_identifier = "sameemail"
+        page.edit_user_email = "changed-email-target@example.com"
+        assert page._edit_email_step_up_may_be_required() is True
 
     asyncio.run(scenario())
 

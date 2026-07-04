@@ -64,6 +64,8 @@ class AdminPage(ResponsiveComponent):
     edit_user_email: str = ""
     edit_user_username: str = ""
     edit_user_full_name: str = ""
+    edit_user_step_up_password: str = ""
+    edit_user_step_up_2fa: str = ""
     edit_user_error: str = ""
     edit_user_success: str = ""
 
@@ -203,6 +205,39 @@ class AdminPage(ResponsiveComponent):
         self.currency_step_up_password = ""
         self.currency_step_up_2fa = ""
 
+    def _clear_edit_step_up_fields(self) -> None:
+        self.edit_user_step_up_password = ""
+        self.edit_user_step_up_2fa = ""
+
+    def _edit_email_step_up_may_be_required(self) -> bool:
+        new_email = (self.edit_user_email or "").strip()
+        if not new_email:
+            return False
+
+        identifier = (self.edit_user_identifier or "").strip().lower()
+        if not identifier:
+            return True
+
+        for user in self.users:
+            if identifier not in {
+                str(user.id).lower(),
+                user.email.lower(),
+                (user.username or "").lower(),
+            }:
+                continue
+            return new_email.lower() != user.email.lower()
+
+        return True
+
+    def _step_up_unavailable_message(self) -> str | None:
+        if (
+            self.current_user
+            and self.current_user.auth_provider != "password"
+            and not self.current_user.two_factor_enabled
+        ):
+            return "Set up a password or 2FA to perform this action."
+        return None
+
     async def _verify_actor_step_up(
         self,
         persistence: Persistence,
@@ -215,6 +250,10 @@ class AdminPage(ResponsiveComponent):
                 ok=False,
                 error_message="You must be logged in to perform this action",
             )
+
+        unavailable_message = self._step_up_unavailable_message()
+        if unavailable_message:
+            return StepUpResult(ok=False, error_message=unavailable_message)
 
         decision = self._check_sensitive_limit(persistence, "admin_step_up")
         if not decision.allowed:
@@ -352,6 +391,7 @@ class AdminPage(ResponsiveComponent):
         if not identifier:
             self.edit_user_error = "Please enter a user email, username, or ID"
             self.edit_user_success = ""
+            self._clear_edit_step_up_fields()
             self.force_refresh()
             return
 
@@ -363,6 +403,7 @@ class AdminPage(ResponsiveComponent):
         if not any(updates.values()):
             self.edit_user_error = "Enter at least one field to update"
             self.edit_user_success = ""
+            self._clear_edit_step_up_fields()
             self.force_refresh()
             return
 
@@ -371,6 +412,7 @@ class AdminPage(ResponsiveComponent):
         except KeyError:
             self.edit_user_error = f"User not found: {identifier}"
             self.edit_user_success = ""
+            self._clear_edit_step_up_fields()
             self.force_refresh()
             return
 
@@ -379,10 +421,27 @@ class AdminPage(ResponsiveComponent):
                 f"You do not have permission to edit users with role: {target_user.role}"
             )
             self.edit_user_success = ""
+            self._clear_edit_step_up_fields()
             self.force_refresh()
             return
 
         persistence = self.session[Persistence]
+        email_is_changing = (
+            updates["email"] is not None
+            and updates["email"].lower() != target_user.email.lower()
+        )
+        unavailable_message = (
+            self._step_up_unavailable_message()
+            if email_is_changing
+            else None
+        )
+        if unavailable_message:
+            self.edit_user_error = unavailable_message
+            self.edit_user_success = ""
+            self._clear_edit_step_up_fields()
+            self.force_refresh()
+            return
+
         decision = self._check_sensitive_limit(
             persistence,
             "admin_edit_user",
@@ -394,8 +453,24 @@ class AdminPage(ResponsiveComponent):
                 decision.retry_after_seconds,
             )
             self.edit_user_success = ""
+            self._clear_edit_step_up_fields()
             self.force_refresh()
             return
+
+        if email_is_changing:
+            result = await self._verify_actor_step_up(
+                persistence,
+                password=self.edit_user_step_up_password,
+                two_factor_code=self.edit_user_step_up_2fa or None,
+            )
+            if not result.ok:
+                self.edit_user_error = result.error_message or "Verification failed."
+                self.edit_user_success = ""
+                self._clear_edit_step_up_fields()
+                self.force_refresh()
+                return
+        else:
+            self._clear_edit_step_up_fields()
 
         try:
             updated = await persistence.admin_update_user_profile(
@@ -409,6 +484,7 @@ class AdminPage(ResponsiveComponent):
         except Exception as exc:
             self.edit_user_error = self._admin_error_message("updating user", exc)
             self.edit_user_success = ""
+            self._clear_edit_step_up_fields()
             self.force_refresh()
             return
 
@@ -419,6 +495,7 @@ class AdminPage(ResponsiveComponent):
         self.edit_user_email = ""
         self.edit_user_username = ""
         self.edit_user_full_name = ""
+        self._clear_edit_step_up_fields()
         await self._load_user_data()
         self.force_refresh()
 
@@ -673,6 +750,10 @@ class AdminPage(ResponsiveComponent):
         # only passed by `_on_step_up_submit` immediately after a successful
         # credential check.
         if not step_up_verified:
+            unavailable_message = self._step_up_unavailable_message()
+            if unavailable_message:
+                self.change_role_error = unavailable_message
+                return False
             self._show_step_up_dialog(identifier=identifier, new_role=new_role)
             return False
 
@@ -842,6 +923,14 @@ class AdminPage(ResponsiveComponent):
             self.force_refresh()
             return
 
+        unavailable_message = self._step_up_unavailable_message()
+        if unavailable_message:
+            self.delete_user_error = unavailable_message
+            self.delete_user_success = ""
+            self._clear_delete_step_up_fields()
+            self.force_refresh()
+            return
+
         decision = self._check_sensitive_limit(
             persistence,
             "admin_delete_user",
@@ -977,6 +1066,14 @@ class AdminPage(ResponsiveComponent):
             minor_amount = major_to_minor(amount_decimal)
         except ValueError:
             self.currency_error = "Amount must be a valid number"
+            self.currency_success = ""
+            self._clear_currency_step_up_fields()
+            self.force_refresh()
+            return
+
+        unavailable_message = self._step_up_unavailable_message()
+        if unavailable_message:
+            self.currency_error = unavailable_message
             self.currency_success = ""
             self._clear_currency_step_up_fields()
             self.force_refresh()
@@ -1157,16 +1254,58 @@ class AdminPage(ResponsiveComponent):
 
         requires_step_up_password = self.current_user.auth_provider == "password"
         requires_step_up_2fa = self.current_user.two_factor_enabled
+        step_up_unavailable_message = self._step_up_unavailable_message()
+        currency_step_up_active = bool(
+            (self.currency_user_identifier or "").strip()
+            or (self.currency_amount or "").strip()
+        )
+        delete_step_up_active = bool(
+            (self.delete_user_identifier or "").strip()
+            or (self.delete_user_confirmation or "").strip()
+        )
+
+        edit_step_up_inputs: list[rio.Component] = []
+        if self._edit_email_step_up_may_be_required():
+            if step_up_unavailable_message:
+                edit_step_up_inputs.append(
+                    rio.Banner(
+                        text=step_up_unavailable_message,
+                        style="danger",
+                    )
+                )
+            elif requires_step_up_password:
+                edit_step_up_inputs.append(rio.TextInput(
+                    label="Your Password",
+                    text=self.bind().edit_user_step_up_password,
+                    is_secret=True,
+                    on_confirm=self._on_edit_user_pressed,
+                ))
+            if not step_up_unavailable_message and requires_step_up_2fa:
+                edit_step_up_inputs.append(
+                    rio.TextInput(
+                        label="2FA or Recovery Code",
+                        text=self.bind().edit_user_step_up_2fa,
+                        is_secret=True,
+                        on_confirm=self._on_edit_user_pressed,
+                    )
+                )
 
         currency_step_up_inputs: list[rio.Component] = []
-        if requires_step_up_password:
+        if step_up_unavailable_message and currency_step_up_active:
+            currency_step_up_inputs.append(
+                rio.Banner(
+                    text=step_up_unavailable_message,
+                    style="danger",
+                )
+            )
+        elif requires_step_up_password:
             currency_step_up_inputs.append(rio.TextInput(
                 label="Your Password",
                 text=self.bind().currency_step_up_password,
                 is_secret=True,
                 on_confirm=self._on_currency_submit,
             ))
-        if requires_step_up_2fa:
+        if not step_up_unavailable_message and requires_step_up_2fa:
             currency_step_up_inputs.append(
                 rio.TextInput(
                     label="2FA or Recovery Code",
@@ -1188,14 +1327,23 @@ class AdminPage(ResponsiveComponent):
                 on_confirm=self._on_delete_user_pressed,
             ),
         ]
-        if requires_step_up_password:
+        delete_step_up_notice = (
+            rio.Banner(
+                text=step_up_unavailable_message,
+                style="danger",
+                margin_top=1,
+            )
+            if step_up_unavailable_message and delete_step_up_active
+            else rio.Spacer(min_height=0, grow_x=False, grow_y=False)
+        )
+        if not step_up_unavailable_message and requires_step_up_password:
             delete_user_inputs.append(rio.TextInput(
                 label="Your Password",
                 text=self.bind().delete_user_step_up_password,
                 is_secret=True,
                 on_confirm=self._on_delete_user_pressed,
             ))
-        if requires_step_up_2fa:
+        if not step_up_unavailable_message and requires_step_up_2fa:
             delete_user_inputs.append(
                 rio.TextInput(
                     label="2FA or Recovery Code",
@@ -1346,6 +1494,11 @@ class AdminPage(ResponsiveComponent):
                 ),
                 proportions=[1, 1, 1, 1],
             ),
+
+            self._responsive_form_layout(
+                *edit_step_up_inputs,
+                proportions=[1] * len(edit_step_up_inputs),
+            ) if edit_step_up_inputs else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
 
             rio.Button(
                 "Update User",
@@ -1559,6 +1712,8 @@ class AdminPage(ResponsiveComponent):
                 *delete_user_inputs,
                 proportions=[1] * len(delete_user_inputs),
             ),
+
+            delete_step_up_notice,
 
             rio.Banner(
                 text=self.delete_user_success,

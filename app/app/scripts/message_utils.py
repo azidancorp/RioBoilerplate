@@ -19,8 +19,8 @@ from app.validation import SecuritySanitizer
 
 logger = logging.getLogger(__name__)
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "contact_messages"
 _EMAIL_OUTBOX_DIR = Path(__file__).resolve().parent.parent / "data" / "email_outbox"
+_MAX_CONTACT_ID_ATTEMPTS = 1000
 
 
 def create_contact_submission(name: str, email: str, message: str) -> Dict[str, Any]:
@@ -58,25 +58,31 @@ def create_contact_submission(name: str, email: str, message: str) -> Dict[str, 
 
 def _persist_contact_submission(name: str, email: str, message: str) -> Dict[str, int]:
     timestamp = datetime.now(timezone.utc)
-    entry_id = int(timestamp.timestamp() * 1000)
+    initial_entry_id = int(timestamp.timestamp() * 1000)
+    data_dir = Path(config.CONTACT_SUBMISSIONS_DIR).expanduser()
+    data_dir.mkdir(parents=True, exist_ok=True)
 
-    submission = {
-        "id": entry_id,
-        "name": name,
-        "email": email,
-        "message": message,
-        "timestamp": timestamp.isoformat(),
-    }
+    for offset in range(_MAX_CONTACT_ID_ATTEMPTS):
+        entry_id = initial_entry_id + offset
+        submission = {
+            "id": entry_id,
+            "name": name,
+            "email": email,
+            "message": message,
+            "timestamp": timestamp.isoformat(),
+        }
+        file_path = data_dir / f"contact-{entry_id}.json"
 
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    file_path = _DATA_DIR / f"contact-{entry_id}.json"
+        try:
+            with file_path.open("x", encoding="utf-8") as handle:
+                json.dump(submission, handle, indent=2)
+        except FileExistsError:
+            continue
 
-    with file_path.open("w", encoding="utf-8") as handle:
-        json.dump(submission, handle, indent=2)
+        _notify_contact_submission(submission)
+        return {"id": entry_id}
 
-    _notify_contact_submission(submission)
-
-    return {"id": entry_id}
+    raise OSError("Unable to allocate a unique contact submission ID.")
 
 
 def _notify_contact_submission(submission: Dict[str, Any]) -> None:

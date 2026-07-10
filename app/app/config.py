@@ -8,6 +8,7 @@ including authentication, validation, and feature toggles.
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -101,6 +102,12 @@ class AppConfig:
     # so it is loaded from env. Non-secret display behavior stays code-configured.
     CONTACT_NTFY_CHANNEL: str = ""
     CONTACT_NTFY_PRIORITY: str = "default"
+    # Keep contact data outside the application package so replacing deployed
+    # code does not remove submissions. Container deployments should point this
+    # at a persistent mounted volume.
+    CONTACT_SUBMISSIONS_DIR: Path = (
+        Path.home() / ".local" / "share" / "rio-boilerplate" / "contact_messages"
+    )
 
     # Rate Limiting
     # -------------

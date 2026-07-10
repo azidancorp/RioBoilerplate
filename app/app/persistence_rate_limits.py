@@ -219,11 +219,16 @@ def clear_rate_limit(
 ) -> None:
     conn = _get_connection(persistence)
     cursor = persistence._get_cursor()
-    cursor.execute(
-        "DELETE FROM rate_limit_buckets WHERE scope = ? AND key_hash = ?",
-        (scope, hash_rate_limit_key(key)),
-    )
-    conn.commit()
+    try:
+        cursor.execute(
+            "DELETE FROM rate_limit_buckets WHERE scope = ? AND key_hash = ?",
+            (scope, hash_rate_limit_key(key)),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def cleanup_rate_limits(

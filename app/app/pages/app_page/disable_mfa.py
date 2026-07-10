@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
 import rio
 
 from app.persistence import Persistence
-from app.persistence_auth import TwoFactorFailure
+from app.persistence_auth import TwoFactorFailure, TwoFactorMethod
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.session_validation import require_fresh_user_session
 from app.components.center_component import CenterComponent
 from app.components.responsive import WIDTH_COMFORTABLE
+
+
+logger = logging.getLogger(__name__)
 
 
 @rio.page(
@@ -33,7 +37,10 @@ class DisableMFA(rio.Component):
 
         # If the user does not have a secret, redirect them
         if not self.two_factor_enabled:
-            self.session.navigate_to("/app/settings")
+            self.password = ""
+            self.verification_code = ""
+            self.session.navigate_to("/app/settings", replace=True)
+            return
 
     async def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
@@ -44,6 +51,16 @@ class DisableMFA(rio.Component):
             return
         user_session, user = fresh_session
         persistence = self.session[Persistence]
+        expected_secret = user.two_factor_secret
+
+        if not expected_secret:
+            self.two_factor_enabled = False
+            self.password = ""
+            self.verification_code = ""
+            self.error_message = "Two-factor authentication is already disabled."
+            self.session.navigate_to("/app/settings", replace=True)
+            self.force_refresh()
+            return
 
         # Validate password first
         if not self.password:
@@ -74,6 +91,15 @@ class DisableMFA(rio.Component):
             user_session.user_id,
             self.verification_code,
         )
+        if result.method == TwoFactorMethod.NOT_REQUIRED:
+            self.two_factor_enabled = False
+            self.password = ""
+            self.verification_code = ""
+            self.error_message = "Two-factor authentication is already disabled."
+            self.session.navigate_to("/app/settings", replace=True)
+            self.force_refresh()
+            return
+
         if not result.ok:
             if result.failure == TwoFactorFailure.INVALID_FORMAT:
                 self.error_message = result.failure_detail or "Invalid 2FA or recovery code format."
@@ -84,20 +110,30 @@ class DisableMFA(rio.Component):
             self.force_refresh()
             return
 
-        persistence.clear_rate_limit(
-            scope=sensitive_action_policy("mfa_disable").scope,
-            key=limit_key,
-        )
-        self.disable_2fa()
-
-    def disable_2fa(self) -> None:
-        fresh_session = require_fresh_user_session(self.session)
-        if fresh_session is None:
+        if not persistence.disable_two_factor(
+            user_session.user_id,
+            expected_secret=expected_secret,
+        ):
+            self.password = ""
+            self.verification_code = ""
+            self.error_message = "Two-factor authentication changed. Please try again."
+            self.session.navigate_to("/app/settings", replace=True)
+            self.force_refresh()
             return
-        user_session, _ = fresh_session
-        persistence = self.session[Persistence]
-        persistence.set_2fa_secret(user_session.user_id, None)
-        self.session.navigate_to("/app/settings")
+
+        self.two_factor_enabled = False
+        self.password = ""
+        self.verification_code = ""
+        try:
+            persistence.clear_rate_limit(
+                scope=sensitive_action_policy("mfa_disable").scope,
+                key=limit_key,
+            )
+        except Exception:
+            logger.exception(
+                "MFA disable committed but its rate-limit bucket could not be cleared."
+            )
+        self.session.navigate_to("/app/settings", replace=True)
 
     def build(self) -> rio.Component:
         return CenterComponent(

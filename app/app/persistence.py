@@ -32,6 +32,7 @@ from app.persistence_schema import initialize_schema
 
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "app.db"
+TwoFactorStateConflict = persistence_auth.TwoFactorStateConflict
 
 
 class BootstrapRequiredError(RuntimeError):
@@ -163,8 +164,32 @@ class Persistence:
     def list_admin_actions(self, **kwargs) -> list[dict[str, t.Any]]:
         return persistence_audit.list_admin_actions(self, **kwargs)
 
-    def generate_recovery_codes(self, user_id: uuid.UUID, count: int = 10) -> list[str]:
-        return persistence_auth.generate_recovery_codes(self, user_id, count=count)
+    def generate_recovery_codes(
+        self,
+        user_id: uuid.UUID,
+        count: int = 10,
+        *,
+        expected_secret: str | None = None,
+    ) -> list[str]:
+        return persistence_auth.generate_recovery_codes(
+            self,
+            user_id,
+            count=count,
+            expected_secret=expected_secret,
+        )
+
+    def enroll_two_factor(
+        self,
+        user_id: uuid.UUID,
+        secret: str,
+        count: int = 10,
+    ) -> list[str]:
+        return persistence_auth.enroll_two_factor(
+            self,
+            user_id,
+            secret,
+            count=count,
+        )
 
     def get_recovery_codes_summary(self, user_id: uuid.UUID) -> dict[str, t.Any]:
         return persistence_auth.get_recovery_codes_summary(self, user_id)
@@ -981,6 +1006,9 @@ class Persistence:
 
     def set_2fa_secret(self, user_id: uuid.UUID, secret: str | None) -> None:
         persistence_auth.set_2fa_secret(self, user_id, secret)
+
+    def disable_two_factor(self, user_id: uuid.UUID, expected_secret: str) -> bool:
+        return persistence_auth.disable_two_factor(self, user_id, expected_secret)
 
     async def invalidate_all_sessions(self, user_id: uuid.UUID) -> None:
         await persistence_auth.invalidate_all_sessions(self, user_id)

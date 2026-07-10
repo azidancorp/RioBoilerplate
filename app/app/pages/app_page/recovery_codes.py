@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 from datetime import timezone
+import logging
 import rio
 
 from app.components.center_component import CenterComponent
 from app.components.responsive import WIDTH_COMFORTABLE
 from app.persistence import Persistence
-from app.persistence_auth import TwoFactorFailure
+from app.persistence_auth import (
+    TwoFactorFailure,
+    TwoFactorMethod,
+    TwoFactorStateConflict,
+)
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.session_validation import require_fresh_user_session
+
+
+logger = logging.getLogger(__name__)
 
 
 @rio.page(
@@ -40,7 +48,11 @@ class ManageRecoveryCodes(rio.Component):
 
         if not user.two_factor_secret:
             # Recovery codes are only relevant when 2FA is enabled.
-            self.session.navigate_to("/app/settings")
+            self.password = ""
+            self.verification_code = ""
+            self.recovery_codes = ()
+            self.show_recovery_codes = False
+            self.session.navigate_to("/app/settings", replace=True)
             return
 
         self._refresh_summary(persistence, user_session.user_id)
@@ -65,6 +77,17 @@ class ManageRecoveryCodes(rio.Component):
             return
         user_session, user = fresh_session
         persistence = self.session[Persistence]
+        expected_secret = user.two_factor_secret
+
+        if not expected_secret:
+            self.password = ""
+            self.verification_code = ""
+            self.recovery_codes = ()
+            self.show_recovery_codes = False
+            self.error_message = "Two-factor authentication is no longer enabled."
+            self.session.navigate_to("/app/settings", replace=True)
+            self.force_refresh()
+            return
 
         if not self.password:
             self.error_message = "Please enter your account password."
@@ -94,6 +117,16 @@ class ManageRecoveryCodes(rio.Component):
             user_session.user_id,
             self.verification_code,
         )
+        if result.method == TwoFactorMethod.NOT_REQUIRED:
+            self.password = ""
+            self.verification_code = ""
+            self.recovery_codes = ()
+            self.show_recovery_codes = False
+            self.error_message = "Two-factor authentication is no longer enabled."
+            self.session.navigate_to("/app/settings", replace=True)
+            self.force_refresh()
+            return
+
         if not result.ok:
             if result.failure == TwoFactorFailure.INVALID_FORMAT:
                 self.error_message = result.failure_detail or "Invalid 2FA or recovery code format."
@@ -104,18 +137,42 @@ class ManageRecoveryCodes(rio.Component):
             self.force_refresh()
             return
 
-        persistence.clear_rate_limit(
-            scope=sensitive_action_policy("recovery_codes_regenerate").scope,
-            key=limit_key,
-        )
-        codes = persistence.generate_recovery_codes(user_session.user_id)
+        try:
+            codes = persistence.generate_recovery_codes(
+                user_session.user_id,
+                expected_secret=expected_secret,
+            )
+        except TwoFactorStateConflict:
+            self.password = ""
+            self.verification_code = ""
+            self.recovery_codes = ()
+            self.show_recovery_codes = False
+            self.error_message = "Two-factor authentication changed. Please try again."
+            self.session.navigate_to("/app/settings", replace=True)
+            self.force_refresh()
+            return
+
         self.recovery_codes = tuple(codes)
         self.show_recovery_codes = True
         self.error_message = ""
         self.success_message = ""
         self.password = ""
         self.verification_code = ""
-        self._refresh_summary(persistence, user_session.user_id)
+        try:
+            persistence.clear_rate_limit(
+                scope=sensitive_action_policy("recovery_codes_regenerate").scope,
+                key=limit_key,
+            )
+        except Exception:
+            logger.exception(
+                "Recovery codes committed but their rate-limit bucket could not be cleared."
+            )
+        try:
+            self._refresh_summary(persistence, user_session.user_id)
+        except Exception:
+            logger.exception(
+                "Recovery codes committed but their summary could not be refreshed."
+            )
         self.force_refresh()
 
     def _on_acknowledge_recovery_codes(self, _event=None) -> None:

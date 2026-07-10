@@ -34,6 +34,10 @@ class TwoFactorFailure(str, Enum):
     INVALID_CODE = "invalid_code"
 
 
+class TwoFactorStateConflict(RuntimeError):
+    """Raised when an MFA mutation no longer matches the user's current state."""
+
+
 @dataclass(frozen=True)
 class TwoFactorChallengeResult:
     ok: bool
@@ -71,6 +75,14 @@ def _get_connection(persistence: AuthPersistence) -> sqlite3.Connection:
     return persistence.conn
 
 
+def _require_top_level_transaction(conn: sqlite3.Connection) -> None:
+    """Keep MFA lifecycle operations from owning a caller's open transaction."""
+    if conn.in_transaction:
+        raise RuntimeError(
+            "MFA lifecycle operations cannot run inside an existing transaction."
+        )
+
+
 def _generate_recovery_code() -> str:
     """
     Generate a human-friendly recovery code in the format XXXX-XXXX-XXXX.
@@ -96,54 +108,134 @@ def _hash_one_time_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _replace_recovery_codes(
+    cursor: sqlite3.Cursor,
+    user_id: uuid.UUID,
+    count: int,
+) -> list[str]:
+    """Replace recovery codes using the caller's existing transaction."""
+    normalized_user_id = str(user_id)
+    cursor.execute(
+        "DELETE FROM two_factor_recovery_codes WHERE user_id = ?",
+        (normalized_user_id,),
+    )
+
+    new_codes: list[str] = []
+    for _ in range(count):
+        code = _generate_recovery_code()
+        normalized_code = _normalize_recovery_code(code)
+        created_at = datetime.now(timezone.utc)
+        valid_until = created_at + timedelta(days=config.RECOVERY_CODE_TTL_DAYS)
+        code_hash = _hash_one_time_token(normalized_code)
+
+        cursor.execute(
+            """
+            INSERT INTO two_factor_recovery_codes (
+                user_id, code_hash, created_at, valid_until, used_at
+            ) VALUES (?, ?, ?, ?, NULL)
+            """,
+            (
+                normalized_user_id,
+                code_hash,
+                created_at.timestamp(),
+                valid_until.timestamp(),
+            ),
+        )
+        new_codes.append(code)
+
+    return new_codes
+
+
 def generate_recovery_codes(
     persistence: AuthPersistence,
     user_id: uuid.UUID,
     count: int = 10,
+    *,
+    expected_secret: str | None = None,
 ) -> list[str]:
     """
     Generate a fresh set of recovery codes for a user, replacing any existing codes.
+
+    Recovery codes may only be generated while MFA is enabled. When
+    ``expected_secret`` is supplied, the current factor must still match the factor
+    that was verified by the caller.
     """
     conn = _get_connection(persistence)
-    normalized_user_id = str(user_id)
     cursor = persistence._get_cursor()
-    new_codes: list[str] = []
+    _require_top_level_transaction(conn)
 
     try:
         conn.execute("BEGIN IMMEDIATE")
 
-        # Clear existing codes within the same transaction to keep operations atomic.
-        invalidate_recovery_codes(persistence, user_id, commit=False)
+        cursor.execute(
+            "SELECT two_factor_secret FROM users WHERE id = ?",
+            (str(user_id),),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise KeyError(user_id)
 
-        for _ in range(count):
-            code = _generate_recovery_code()
-            normalized_code = _normalize_recovery_code(code)
-            created_at = datetime.now(timezone.utc)
-            valid_until = created_at + timedelta(days=config.RECOVERY_CODE_TTL_DAYS)
-            code_hash = _hash_one_time_token(normalized_code)
-
-            cursor.execute(
-                """
-                INSERT INTO two_factor_recovery_codes (
-                    user_id, code_hash, created_at, valid_until, used_at
-                ) VALUES (?, ?, ?, ?, NULL)
-                """,
-                (
-                    normalized_user_id,
-                    code_hash,
-                    created_at.timestamp(),
-                    valid_until.timestamp(),
-                ),
+        current_secret = t.cast(str | None, row[0])
+        if not current_secret:
+            raise TwoFactorStateConflict("Two-factor authentication is not enabled.")
+        if expected_secret is not None and current_secret != expected_secret:
+            raise TwoFactorStateConflict(
+                "Two-factor authentication changed before recovery codes were generated."
             )
-            new_codes.append(code)
+
+        new_codes = _replace_recovery_codes(cursor, user_id, count)
 
         conn.commit()
     except Exception:
-        conn.rollback()
+        if conn.in_transaction:
+            conn.rollback()
         raise
 
     # TODO: Send notification email once email infrastructure supports recovery code events.
     return new_codes
+
+
+def enroll_two_factor(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+    secret: str,
+    count: int = 10,
+) -> list[str]:
+    """Atomically enable MFA and create recovery codes for a disabled user."""
+    normalized_secret = secret.strip()
+    if not normalized_secret:
+        raise ValueError("Two-factor secret must not be empty.")
+
+    conn = _get_connection(persistence)
+    cursor = persistence._get_cursor()
+    _require_top_level_transaction(conn)
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            """
+            UPDATE users
+            SET two_factor_secret = ?
+            WHERE id = ?
+              AND (two_factor_secret IS NULL OR two_factor_secret = '')
+            """,
+            (normalized_secret, str(user_id)),
+        )
+        if cursor.rowcount != 1:
+            cursor.execute("SELECT 1 FROM users WHERE id = ?", (str(user_id),))
+            if cursor.fetchone() is None:
+                raise KeyError(user_id)
+            raise TwoFactorStateConflict("Two-factor authentication is already enabled.")
+
+        recovery_codes = _replace_recovery_codes(cursor, user_id, count)
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+    # TODO: Send notification email once email infrastructure supports recovery code events.
+    return recovery_codes
 
 
 def invalidate_recovery_codes(
@@ -632,20 +724,113 @@ def set_2fa_secret(
     user_id: uuid.UUID,
     secret: str | None,
 ) -> None:
-    """Enable or Disable 2FA for a user.
-    Set to str if enabling, or to None if disabling
+    """Compatibility helper for setting up or clearing MFA.
+
+    New enrollment code should use :func:`enroll_two_factor`, and verified disable
+    flows should use :func:`disable_two_factor`. This helper remains for existing
+    callers, but it rejects replacement of an already configured factor and keeps
+    disable cleanup atomic.
     """
     conn = _get_connection(persistence)
-    if secret is not None:
-        secret = secret.strip() or None
     cursor = persistence._get_cursor()
-    cursor.execute(
-        "UPDATE users SET two_factor_secret = ? WHERE id = ?",
-        (secret, str(user_id)),
-    )
-    conn.commit()
-    if secret is None:
-        invalidate_recovery_codes(persistence, user_id)
+
+    if secret is not None:
+        secret = secret.strip()
+        if not secret:
+            raise ValueError("Two-factor secret must not be empty.")
+
+    _require_top_level_transaction(conn)
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if secret is None:
+            cursor.execute(
+                "UPDATE users SET two_factor_secret = NULL WHERE id = ?",
+                (str(user_id),),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(user_id)
+            cursor.execute(
+                "DELETE FROM two_factor_recovery_codes WHERE user_id = ?",
+                (str(user_id),),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE users
+                SET two_factor_secret = ?
+                WHERE id = ?
+                  AND (two_factor_secret IS NULL OR two_factor_secret = '')
+                """,
+                (secret, str(user_id)),
+            )
+            if cursor.rowcount == 1:
+                # Pre-fix failures could leave recovery rows behind while MFA was
+                # disabled. Never activate those stale codes for a newly bound
+                # factor.
+                cursor.execute(
+                    "DELETE FROM two_factor_recovery_codes WHERE user_id = ?",
+                    (str(user_id),),
+                )
+            else:
+                cursor.execute(
+                    "SELECT two_factor_secret FROM users WHERE id = ?",
+                    (str(user_id),),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise KeyError(user_id)
+                if row[0] == secret:
+                    conn.commit()
+                    return
+                raise TwoFactorStateConflict(
+                    "Two-factor authentication is already enabled."
+                )
+
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+
+def disable_two_factor(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+    expected_secret: str,
+) -> bool:
+    """Atomically disable the exact MFA factor verified by the caller."""
+    conn = _get_connection(persistence)
+    cursor = persistence._get_cursor()
+    _require_top_level_transaction(conn)
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            """
+            UPDATE users
+            SET two_factor_secret = NULL
+            WHERE id = ? AND two_factor_secret = ?
+            """,
+            (str(user_id), expected_secret),
+        )
+        if cursor.rowcount != 1:
+            cursor.execute("SELECT 1 FROM users WHERE id = ?", (str(user_id),))
+            if cursor.fetchone() is None:
+                raise KeyError(user_id)
+            conn.rollback()
+            return False
+
+        cursor.execute(
+            "DELETE FROM two_factor_recovery_codes WHERE user_id = ?",
+            (str(user_id),),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 async def invalidate_all_sessions(

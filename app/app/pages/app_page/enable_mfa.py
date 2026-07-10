@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import io
+import logging
 import qrcode
 import pyotp
 import rio
 
 from app.persistence import Persistence
+from app.persistence_auth import TwoFactorStateConflict
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.session_validation import require_fresh_user_session
 from app.components.center_component import CenterComponent
 from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
 from app.validation import SecuritySanitizer
+
+
+logger = logging.getLogger(__name__)
 
 
 @rio.page(
@@ -30,7 +35,14 @@ class EnableMFA(ResponsiveComponent):
     recovery_codes: tuple[str, ...] = ()
     show_recovery_codes: bool = False
 
-    # Cleanup method removed as QR codes are now generated in memory
+    def _scrub_setup_state(self) -> None:
+        self.password = ""
+        self.temporary_two_factor_secret = ""
+        self.verification_code = ""
+        self.qr_code_image_bytes = None
+        self.secret = None
+        self.recovery_codes = ()
+        self.show_recovery_codes = False
 
     @rio.event.on_populate
     async def on_populate(self):
@@ -41,12 +53,14 @@ class EnableMFA(ResponsiveComponent):
 
         # If the user already has a 2FA secret, redirect them
         if user.two_factor_secret:
-            self.session.navigate_to("/app/settings")
+            self._scrub_setup_state()
+            self.session.navigate_to("/app/settings", replace=True)
+            return
 
         # create a new 2FA secret
+        self._scrub_setup_state()
         self.temporary_two_factor_secret = pyotp.random_base32()
-        self.recovery_codes = ()
-        self.show_recovery_codes = False
+        self.error_message = ""
 
         # Generate a QR code for the secret
         totp_uri = pyotp.TOTP(self.temporary_two_factor_secret).provisioning_uri(
@@ -70,11 +84,30 @@ class EnableMFA(ResponsiveComponent):
         Called when user presses "Verify" button.
         Requires password verification before enabling 2FA.
         """
+        # A rapid double-submit can queue a second event before the successful
+        # recovery-code view reaches the client. Keep that one-time display intact.
+        if self.show_recovery_codes:
+            return
+
         fresh_session = require_fresh_user_session(self.session)
         if fresh_session is None:
             return
         user_session, user = fresh_session
         persistence = self.session[Persistence]
+
+        if user.two_factor_secret:
+            self._scrub_setup_state()
+            self.error_message = "Two-factor authentication is already enabled."
+            self.session.navigate_to("/app/settings", replace=True)
+            self.force_refresh()
+            return
+
+        if not self.temporary_two_factor_secret:
+            self._scrub_setup_state()
+            self.error_message = "Two-factor setup has expired. Please start again."
+            self.session.navigate_to("/app/settings", replace=True)
+            self.force_refresh()
+            return
 
         # Validate password first
         if not self.password:
@@ -118,34 +151,39 @@ class EnableMFA(ResponsiveComponent):
         # Verify TOTP code
         is_code_matching = self.verify_totp()
         if is_code_matching:
-            persistence.clear_rate_limit(
-                scope=sensitive_action_policy("mfa_enable").scope,
-                key=limit_key,
-            )
-            self.set_totp_secret_in_db()
+            try:
+                recovery_codes = persistence.enroll_two_factor(
+                    user_session.user_id,
+                    self.temporary_two_factor_secret,
+                )
+            except TwoFactorStateConflict:
+                self._scrub_setup_state()
+                self.error_message = "Two-factor authentication is already enabled."
+                self.session.navigate_to("/app/settings", replace=True)
+                self.force_refresh()
+                return
+
+            self.recovery_codes = tuple(recovery_codes)
+            self.show_recovery_codes = True
+            self.error_message = ""
+            self.password = ""
+            self.temporary_two_factor_secret = ""
+            self.verification_code = ""
+            self.qr_code_image_bytes = None
+            self.secret = None
+            try:
+                persistence.clear_rate_limit(
+                    scope=sensitive_action_policy("mfa_enable").scope,
+                    key=limit_key,
+                )
+            except Exception:
+                logger.exception(
+                    "MFA enrollment committed but its rate-limit bucket could not be cleared."
+                )
+            self.force_refresh()
         else:
             self.error_message = "Invalid verification code. Please try again."
             self.force_refresh()
-
-    def set_totp_secret_in_db(self, _=None) -> None:
-        """
-        Persists the user's TOTP secret.
-        """
-        fresh_session = require_fresh_user_session(self.session)
-        if fresh_session is None:
-            return
-        user_session, _ = fresh_session
-        secret = self.temporary_two_factor_secret
-        persistence = self.session[Persistence]
-        persistence.set_2fa_secret(user_session.user_id, secret)
-
-        recovery_codes = persistence.generate_recovery_codes(user_session.user_id)
-        self.recovery_codes = tuple(recovery_codes)
-        self.show_recovery_codes = True
-        self.error_message = ""
-        self.password = ""
-        self.verification_code = ""
-        self.force_refresh()
 
     def _on_acknowledge_recovery_codes(self, _event=None) -> None:
         """Navigate back to settings after the user confirms they've stored the codes."""

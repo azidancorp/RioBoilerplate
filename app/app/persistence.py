@@ -752,10 +752,10 @@ class Persistence:
         if user.auth_provider != "password":
             raise ValueError("Cannot issue a password reset for an external-auth user.")
         reset_token = await self.create_reset_token(user_id)
-        # create_reset_token commits on its own (and is preceded by a separate
-        # clear_reset_tokens commit), so this audit row cannot share that
-        # transaction without refactoring the reset-token flow. For v1 accept
-        # best-effort ordering: write the row right after the token is created.
+        # create_reset_token owns and commits its atomic token-replacement
+        # transaction, so this audit row cannot share that transaction without
+        # refactoring the reset-token flow. For v1 accept best-effort ordering:
+        # write the row right after the token is created.
         # The raw token is never stored — only the issuance fact + expiry.
         self.record_admin_action(
             actor_user_id=actor.id,

@@ -275,24 +275,66 @@ def create_session_table(persistence: SchemaPersistence) -> None:
 
 def create_password_reset_tokens_table(persistence: SchemaPersistence) -> None:
     """
-    Create the 'password_reset_tokens' table in the database if it does not exist.
-    The table stores hashed reset tokens that allow users to reset passwords.
+    Create the password-reset token table and enforce one token per user.
+
+    Installing the unique index is also the migration marker. Existing tokens
+    are intentionally invalidated the first time the index is installed because
+    a legacy database may contain raced siblings or tokens that survived a
+    password change. The writer lock keeps that one-time purge from racing with
+    another application process starting against the same database.
     """
     cursor = persistence._get_cursor()
     conn = _get_connection(persistence)
 
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS password_reset_tokens (
-            token_hash TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            valid_until REAL NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(id)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                token_hash TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                valid_until REAL NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """
         )
-    """
-    )
-    conn.commit()
+
+        cursor.execute("PRAGMA index_list(password_reset_tokens)")
+        index_row = next(
+            (
+                row
+                for row in cursor.fetchall()
+                if row[1] == "idx_password_reset_tokens_user_id"
+            ),
+            None,
+        )
+
+        if index_row is None:
+            cursor.execute("DELETE FROM password_reset_tokens")
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX idx_password_reset_tokens_user_id
+                ON password_reset_tokens(user_id)
+                """
+            )
+        else:
+            is_unique = bool(index_row[2])
+            is_partial = bool(index_row[4])
+            cursor.execute(
+                "PRAGMA index_info(idx_password_reset_tokens_user_id)"
+            )
+            indexed_columns = [row[2] for row in cursor.fetchall()]
+            if not is_unique or is_partial or indexed_columns != ["user_id"]:
+                raise RuntimeError(
+                    "Malformed idx_password_reset_tokens_user_id index: "
+                    "expected a non-partial unique index on user_id"
+                )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def create_email_verification_tokens_table(persistence: SchemaPersistence) -> None:

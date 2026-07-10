@@ -277,6 +277,7 @@ def test_successful_mounted_password_change_logs_out_invalidated_session(temp_db
             change_password_confirm_password=NEW_PASSWORD,
             change_password_passwords_match=True,
         )
+        reset_token = await temp_db.create_reset_token(user.id)
 
         await Settings._on_confirm_password_change_pressed(page)
 
@@ -285,6 +286,8 @@ def test_successful_mounted_password_change_logs_out_invalidated_session(temp_db
         assert refreshed.verify_password(NEW_PASSWORD)
         with pytest.raises(KeyError):
             await temp_db.get_session_by_auth_token(user_session.id)
+        with pytest.raises(KeyError):
+            await temp_db.get_user_by_reset_token(reset_token.token)
         _assert_logged_out(session)
 
     asyncio.run(scenario())

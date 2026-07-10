@@ -865,7 +865,7 @@ async def update_password(
     new_password: str,
 ) -> None:
     """
-    Update a user's password hash and salt.
+    Update a user's password and invalidate their sessions and reset tokens.
 
     ## Parameters
 
@@ -895,6 +895,10 @@ async def update_password(
         if cursor.rowcount == 0:
             raise KeyError(user_id)
 
+        cursor.execute(
+            "DELETE FROM password_reset_tokens WHERE user_id = ?",
+            (str(user_id),),
+        )
         cursor.execute(
             "DELETE FROM user_sessions WHERE user_id = ?",
             (str(user_id),),
@@ -1001,11 +1005,15 @@ async def consume_reset_token_and_update_password(
             return False
 
         cursor.execute(
-            "SELECT is_active FROM users WHERE id = ?",
+            "SELECT is_active, auth_provider FROM users WHERE id = ?",
             (str(user_id),),
         )
         user_row = cursor.fetchone()
-        if user_row is None or not bool(user_row[0]):
+        if (
+            user_row is None
+            or not bool(user_row[0])
+            or str(user_row[1]) != "password"
+        ):
             cursor.execute(
                 "DELETE FROM password_reset_tokens WHERE token_hash = ?",
                 (token_hash,),
@@ -1025,8 +1033,8 @@ async def consume_reset_token_and_update_password(
             raise KeyError(user_id)
 
         cursor.execute(
-            "DELETE FROM password_reset_tokens WHERE token_hash = ?",
-            (token_hash,),
+            "DELETE FROM password_reset_tokens WHERE user_id = ?",
+            (str(user_id),),
         )
         cursor.execute(
             "DELETE FROM user_sessions WHERE user_id = ?",
@@ -1058,37 +1066,60 @@ async def create_reset_token(
     ## Raises
 
     `KeyError`: If the user does not exist
+    `ValueError`: If the user is inactive or does not use password authentication
+    `RuntimeError`: If issuance is attempted inside an existing transaction
     """
     conn = _get_connection(persistence)
-
-    # First verify the user exists
-    user = await persistence.get_user_by_id(user_id)
-    if not user.is_active:
-        raise ValueError("Cannot create a reset token for an inactive user.")
-
-    # Remove any existing tokens for this user to enforce single-use semantics
-    await clear_reset_tokens(persistence, user_id)
-
     cursor = persistence._get_cursor()
-    reset_token = ExpirableVerificationToken.create(
-        user_id=user_id,
-        valid_for=timedelta(minutes=config.PASSWORD_RESET_TOKEN_TTL_MINUTES),
-    )
-    hashed_token = _hash_one_time_token(reset_token.token)
+    if conn.in_transaction:
+        raise RuntimeError(
+            "Password reset token issuance cannot run inside an existing transaction."
+        )
 
-    cursor.execute(
-        """
-        INSERT INTO password_reset_tokens (token_hash, user_id, created_at, valid_until)
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            hashed_token,
-            str(reset_token.user_id),
-            reset_token.created_at.timestamp(),
-            reset_token.valid_until.timestamp(),
-        ),
-    )
-    conn.commit()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            "SELECT is_active, auth_provider FROM users WHERE id = ?",
+            (str(user_id),),
+        )
+        user_row = cursor.fetchone()
+        if user_row is None:
+            raise KeyError(user_id)
+        if not bool(user_row[0]):
+            raise ValueError("Cannot create a reset token for an inactive user.")
+        if str(user_row[1]) != "password":
+            raise ValueError(
+                "Cannot create a reset token for an external-auth user."
+            )
+
+        reset_token = ExpirableVerificationToken.create(
+            user_id=user_id,
+            valid_for=timedelta(minutes=config.PASSWORD_RESET_TOKEN_TTL_MINUTES),
+        )
+        hashed_token = _hash_one_time_token(reset_token.token)
+
+        cursor.execute(
+            "DELETE FROM password_reset_tokens WHERE user_id = ?",
+            (str(user_id),),
+        )
+        cursor.execute(
+            """
+            INSERT INTO password_reset_tokens (token_hash, user_id, created_at, valid_until)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                hashed_token,
+                str(reset_token.user_id),
+                reset_token.created_at.timestamp(),
+                reset_token.valid_until.timestamp(),
+            ),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
     return reset_token
 
 

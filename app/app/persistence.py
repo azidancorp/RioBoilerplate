@@ -937,38 +937,63 @@ class Persistence:
         if not validate_role(new_role):
             raise ValueError(f"Invalid role: {new_role}. Must be one of: {', '.join(get_all_roles())}")
 
-        cursor = self._get_cursor()
-        target_user = await self.get_user_by_id(user_id)
-        old_role = target_user.role
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
 
-        cursor.execute(
-            "UPDATE users SET role = ? WHERE id = ?",
-            (new_role, str(user_id)),
-        )
+        conn = self.conn
+        if conn.in_transaction:
+            raise RuntimeError(
+                "Role changes cannot run inside an existing transaction."
+            )
+        cursor = conn.cursor()
+        uid = str(user_id)
 
-        if cursor.rowcount == 0:
-            raise KeyError(user_id)
+        try:
+            # Acquire the writer lock before reading the old role so concurrent
+            # role changes cannot record a stale "before" value in the audit log.
+            conn.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                "SELECT email, role FROM users WHERE id = ?",
+                (uid,),
+            )
+            target_row = cursor.fetchone()
+            if target_row is None:
+                raise KeyError(user_id)
+            target_email, old_role = target_row
 
-        cursor.execute(
-            "UPDATE user_sessions SET role = ? WHERE user_id = ?",
-            (new_role, str(user_id)),
-        )
+            cursor.execute(
+                "UPDATE users SET role = ? WHERE id = ?",
+                (new_role, uid),
+            )
 
-        # actor is optional (this method has no persistence-layer authz; it is
-        # gated in the UI handler). Guard every actor.* read behind a None check.
-        self.record_admin_action(
-            actor_user_id=actor.id if actor is not None else None,
-            actor_role=actor.role if actor is not None else None,
-            action="role_change",
-            target_user_id=user_id,
-            target_label=target_user.email,
-            before={"role": old_role},
-            after={"role": new_role},
-            client_ip=client_ip,
-            commit=False,
-        )
+            if cursor.rowcount == 0:
+                raise KeyError(user_id)
 
-        self.conn.commit()
+            cursor.execute(
+                "UPDATE user_sessions SET role = ? WHERE user_id = ?",
+                (new_role, uid),
+            )
+
+            # actor is optional (this method has no persistence-layer authz; it is
+            # gated in the UI handler). Guard every actor.* read behind a None check.
+            self.record_admin_action(
+                actor_user_id=actor.id if actor is not None else None,
+                actor_role=actor.role if actor is not None else None,
+                action="role_change",
+                target_user_id=user_id,
+                target_label=target_email,
+                before={"role": old_role},
+                after={"role": new_role},
+                client_ip=client_ip,
+                commit=False,
+            )
+
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
 
     async def create_session(self, user_id: uuid.UUID) -> UserSession:
         return await persistence_auth.create_session(self, user_id)

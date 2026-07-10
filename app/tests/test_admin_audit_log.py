@@ -6,6 +6,9 @@ backward-compatible actor-less call paths.
 """
 
 import asyncio
+import concurrent.futures
+import sqlite3
+import threading
 import uuid
 from pathlib import Path
 
@@ -67,6 +70,178 @@ def test_role_change_writes_single_row_atomically(temp_db: Persistence):
         assert row["outcome"] == "success"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("trigger_sql", "error_message"),
+    [
+        (
+            """
+            CREATE TRIGGER fail_role_session_update
+            BEFORE UPDATE OF role ON user_sessions
+            BEGIN
+                SELECT RAISE(ABORT, 'injected session update failure');
+            END
+            """,
+            "injected session update failure",
+        ),
+        (
+            """
+            CREATE TRIGGER fail_role_audit_insert
+            BEFORE INSERT ON admin_audit_log
+            WHEN NEW.action = 'role_change'
+            BEGIN
+                SELECT RAISE(ABORT, 'injected audit insert failure');
+            END
+            """,
+            "injected audit insert failure",
+        ),
+    ],
+    ids=("session-update", "audit-insert"),
+)
+def test_role_change_rolls_back_every_write_on_failure(
+    temp_db: Persistence,
+    trigger_sql: str,
+    error_message: str,
+):
+    async def scenario():
+        admin = await _create_user(temp_db, "rollback-admin@example.com", role="admin")
+        target = await _create_user(temp_db, "rollback-target@example.com")
+        await temp_db.create_session(target.id)
+
+        temp_db.conn.execute(trigger_sql)
+        temp_db.conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError, match=error_message):
+            await temp_db.update_user_role(target.id, "admin", actor=admin)
+
+        assert temp_db.conn.in_transaction is False
+        assert (await temp_db.get_user_by_id(target.id)).role == "user"
+        session_roles = temp_db.conn.execute(
+            "SELECT role FROM user_sessions WHERE user_id = ?",
+            (str(target.id),),
+        ).fetchall()
+        assert session_roles == [("user",)]
+        assert temp_db.list_admin_actions(
+            target_user_id=target.id,
+            action="role_change",
+        ) == []
+
+        # A later, unrelated commit must not publish any part of the failed role
+        # change on this connection.
+        await temp_db.update_notification_preferences(
+            admin.id,
+            email_notifications_enabled=False,
+        )
+        with sqlite3.connect(temp_db.db_path) as verifier:
+            assert verifier.execute(
+                "SELECT role FROM users WHERE id = ?",
+                (str(target.id),),
+            ).fetchone() == ("user",)
+            assert verifier.execute(
+                "SELECT role FROM user_sessions WHERE user_id = ?",
+                (str(target.id),),
+            ).fetchall() == [("user",)]
+            assert verifier.execute(
+                """
+                SELECT COUNT(*) FROM admin_audit_log
+                WHERE target_user_id = ? AND action = 'role_change'
+                """,
+                (str(target.id),),
+            ).fetchone() == (0,)
+
+    asyncio.run(scenario())
+
+
+def test_role_change_preserves_a_caller_owned_transaction(temp_db: Persistence):
+    async def scenario():
+        target = await _create_user(temp_db, "nested-role-change@example.com")
+        temp_db.conn.execute(
+            "UPDATE users SET email_notifications_enabled = 0 WHERE id = ?",
+            (str(target.id),),
+        )
+        assert temp_db.conn.in_transaction is True
+
+        with pytest.raises(
+            RuntimeError,
+            match="cannot run inside an existing transaction",
+        ):
+            await temp_db.update_user_role(target.id, "admin")
+
+        assert temp_db.conn.in_transaction is True
+        assert temp_db.conn.execute(
+            "SELECT email_notifications_enabled FROM users WHERE id = ?",
+            (str(target.id),),
+        ).fetchone() == (0,)
+        with sqlite3.connect(temp_db.db_path) as verifier:
+            assert verifier.execute(
+                "SELECT email_notifications_enabled FROM users WHERE id = ?",
+                (str(target.id),),
+            ).fetchone() == (1,)
+
+        temp_db.conn.rollback()
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_role_changes_record_a_coherent_audit_chain(
+    temp_db: Persistence,
+):
+    async def setup():
+        target = await _create_user(temp_db, "concurrent-role-change@example.com")
+        await temp_db.create_session(target.id)
+        return target
+
+    target = asyncio.run(setup())
+    original_get_user_by_id = temp_db.get_user_by_id
+    coordinate_reads = threading.Event()
+    stale_read_barrier = threading.Barrier(2)
+    start_barrier = threading.Barrier(2)
+
+    async def coordinated_get_user_by_id(user_id: uuid.UUID) -> AppUser:
+        user = await original_get_user_by_id(user_id)
+        if coordinate_reads.is_set() and not temp_db.conn.in_transaction:
+            stale_read_barrier.wait(timeout=5)
+        return user
+
+    temp_db.get_user_by_id = coordinated_get_user_by_id
+    coordinate_reads.set()
+
+    def change_role(new_role: str) -> None:
+        start_barrier.wait(timeout=5)
+        try:
+            asyncio.run(temp_db.update_user_role(target.id, new_role))
+        finally:
+            temp_db.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(change_role, new_role)
+            for new_role in ("admin", "root")
+        ]
+        for future in futures:
+            future.result(timeout=10)
+
+    coordinate_reads.clear()
+    actions = sorted(
+        temp_db.list_admin_actions(
+            target_user_id=target.id,
+            action="role_change",
+        ),
+        key=lambda action: action["id"],
+    )
+    assert len(actions) == 2
+
+    expected_before = {"role": "user"}
+    for action in actions:
+        assert action["before"] == expected_before
+        expected_before = action["after"]
+
+    assert (asyncio.run(temp_db.get_user_by_id(target.id))).role == expected_before["role"]
+    assert temp_db.conn.execute(
+        "SELECT role FROM user_sessions WHERE user_id = ?",
+        (str(target.id),),
+    ).fetchall() == [(expected_before["role"],)]
 
 
 def test_deletion_audit_row_survives_user_removal(temp_db: Persistence):

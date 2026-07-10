@@ -22,7 +22,8 @@ These edits are committed on the core repo and require **no migration code** for
 
 - `app/app/persistence_auth.py`
   - `create_session` — stores `_hash_one_time_token(session.id)`; returns the raw token unchanged.
-  - `update_session_duration` — matches `WHERE id = _hash_one_time_token(session.id)`.
+  - `get_and_extend_valid_session_by_auth_token` / `invalidate_session` — hash the raw token
+    before renewing or deleting its session row.
   - `get_session_by_auth_token` / `get_valid_session_by_auth_token` — hash the lookup input;
     return `UserSession(id=auth_token)` (the raw input), never `row[0]` (the stored hash).
     Token values were also removed from the `KeyError` messages (no token in logs).

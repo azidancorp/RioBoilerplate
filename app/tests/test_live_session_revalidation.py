@@ -1,12 +1,15 @@
 import asyncio
+import concurrent.futures
 import importlib.util
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
 
+from app.config import config
 from app.data_models import AppUser, UserSession, UserSettings
 from app.persistence import Persistence
 
@@ -92,6 +95,15 @@ async def _create_root_session(persistence: Persistence) -> tuple[AppUser, UserS
     return user, session
 
 
+def _session_row_count(persistence: Persistence, auth_token: str) -> int:
+    cursor = persistence._get_cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM user_sessions WHERE id = ?",
+        (persistence._hash_one_time_token(auth_token),),
+    )
+    return cursor.fetchone()[0]
+
+
 def _guard_event(persistence: Persistence, session: UserSession, url_segment: str):
     return SimpleNamespace(
         session=FakeRioSession(persistence, session),
@@ -172,5 +184,233 @@ def test_session_start_rejects_inactive_stored_auth_token(temp_db: Persistence):
 
         assert UserSession not in fresh_session.attachments
         assert AppUser not in fresh_session.attachments
+
+    asyncio.run(scenario())
+
+
+def test_stale_validation_cannot_renew_an_invalidated_session(
+    temp_db: Persistence,
+):
+    async def scenario():
+        _, created_session = await _create_root_session(temp_db)
+        stale_session, _ = temp_db.get_valid_session_by_auth_token(created_session.id)
+        revoker = Persistence(db_path=temp_db.db_path)
+
+        try:
+            await revoker.invalidate_all_sessions(created_session.user_id)
+        finally:
+            revoker.close()
+
+        assert stale_session.id == created_session.id
+        assert _session_row_count(temp_db, created_session.id) == 0
+        with pytest.raises(KeyError):
+            await temp_db.get_and_extend_valid_session_by_auth_token(
+                created_session.id,
+                valid_for=timedelta(days=7),
+            )
+        with pytest.raises(KeyError):
+            temp_db.get_valid_session_by_auth_token(created_session.id)
+
+    asyncio.run(scenario())
+
+
+def test_session_start_attaches_nothing_when_atomic_renewal_fails(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        from app import on_session_start
+
+        _, created_session = await _create_root_session(temp_db)
+        renewal_attempts: list[tuple[str, timedelta]] = []
+
+        async def reject_renewal(
+            auth_token: str,
+            *,
+            valid_for: timedelta,
+        ) -> tuple[UserSession, AppUser]:
+            renewal_attempts.append((auth_token, valid_for))
+            raise KeyError("Session was revoked before renewal")
+
+        monkeypatch.setattr(
+            temp_db,
+            "get_and_extend_valid_session_by_auth_token",
+            reject_renewal,
+        )
+        fresh_session = FreshRioSession(temp_db, created_session.id)
+
+        await on_session_start(fresh_session)
+
+        assert renewal_attempts == [(created_session.id, timedelta(days=7))]
+        assert UserSession not in fresh_session.attachments
+        assert AppUser not in fresh_session.attachments
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_legitimate_session_renewals_both_succeed(
+    temp_db: Persistence,
+):
+    _, created_session = asyncio.run(_create_root_session(temp_db))
+    start_barrier = Barrier(2)
+
+    def renew() -> tuple[UserSession, AppUser]:
+        persistence = Persistence(db_path=temp_db.db_path)
+        try:
+            start_barrier.wait(timeout=10)
+            return asyncio.run(
+                persistence.get_and_extend_valid_session_by_auth_token(
+                    created_session.id,
+                    valid_for=timedelta(days=7),
+                )
+            )
+        finally:
+            persistence.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(renew) for _ in range(2)]
+        results = [future.result(timeout=20) for future in futures]
+
+    assert [session.id for session, _ in results] == [
+        created_session.id,
+        created_session.id,
+    ]
+    assert all(user.id == created_session.user_id for _, user in results)
+    assert _session_row_count(temp_db, created_session.id) == 1
+    temp_db.get_valid_session_by_auth_token(created_session.id)
+
+
+@pytest.mark.parametrize(
+    "ordering",
+    ["renew_then_invalidate", "invalidate_then_renew"],
+)
+def test_session_renewal_and_invalidation_orderings_end_revoked(
+    temp_db: Persistence,
+    ordering: str,
+):
+    async def scenario():
+        _, created_session = await _create_root_session(temp_db)
+
+        if ordering == "renew_then_invalidate":
+            renewed_session, _ = (
+                await temp_db.get_and_extend_valid_session_by_auth_token(
+                    created_session.id,
+                    valid_for=timedelta(days=7),
+                )
+            )
+            assert renewed_session.id == created_session.id
+            await temp_db.invalidate_session(created_session.id)
+        else:
+            await temp_db.invalidate_session(created_session.id)
+            with pytest.raises(KeyError):
+                await temp_db.get_and_extend_valid_session_by_auth_token(
+                    created_session.id,
+                    valid_for=timedelta(days=7),
+                )
+
+        assert _session_row_count(temp_db, created_session.id) == 0
+        with pytest.raises(KeyError):
+            temp_db.get_valid_session_by_auth_token(created_session.id)
+
+    asyncio.run(scenario())
+
+
+def test_invalidate_session_is_idempotent(temp_db: Persistence):
+    async def scenario():
+        _, created_session = await _create_root_session(temp_db)
+
+        await temp_db.invalidate_session(created_session.id)
+        await temp_db.invalidate_session(created_session.id)
+
+        assert _session_row_count(temp_db, created_session.id) == 0
+
+    asyncio.run(scenario())
+
+
+def test_session_renewal_clamps_to_absolute_deadline(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        monkeypatch.setattr(config, "SESSION_ABSOLUTE_MAX_DAYS", 2)
+        _, created_session = await _create_root_session(temp_db)
+        now = datetime.now(timezone.utc)
+        created_at = now - timedelta(days=1)
+        absolute_deadline = created_at + timedelta(days=2)
+        cursor = temp_db._get_cursor()
+        cursor.execute(
+            """
+            UPDATE user_sessions
+            SET created_at = ?, valid_until = ?
+            WHERE id = ?
+            """,
+            (
+                created_at.timestamp(),
+                (now + timedelta(hours=1)).timestamp(),
+                temp_db._hash_one_time_token(created_session.id),
+            ),
+        )
+        temp_db.conn.commit()
+
+        renewed_session, _ = (
+            await temp_db.get_and_extend_valid_session_by_auth_token(
+                created_session.id,
+                valid_for=timedelta(days=7),
+            )
+        )
+        stored_session = await temp_db.get_session_by_auth_token(created_session.id)
+
+        assert renewed_session.valid_until.timestamp() == pytest.approx(
+            absolute_deadline.timestamp(),
+            abs=1e-6,
+        )
+        assert stored_session.valid_until == renewed_session.valid_until
+
+    asyncio.run(scenario())
+
+
+def test_session_renewal_rejects_elapsed_absolute_deadline(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        from app import on_session_start
+
+        monkeypatch.setattr(config, "SESSION_ABSOLUTE_MAX_DAYS", 1)
+        _, created_session = await _create_root_session(temp_db)
+        now = datetime.now(timezone.utc)
+        cursor = temp_db._get_cursor()
+        cursor.execute(
+            """
+            UPDATE user_sessions
+            SET created_at = ?, valid_until = ?
+            WHERE id = ?
+            """,
+            (
+                (now - timedelta(days=2)).timestamp(),
+                (now + timedelta(days=1)).timestamp(),
+                temp_db._hash_one_time_token(created_session.id),
+            ),
+        )
+        temp_db.conn.commit()
+
+        # This represents a legacy row created before a shorter absolute limit
+        # was configured: the sliding expiry is still in the future, but its
+        # absolute lifetime has already elapsed.
+        temp_db.get_valid_session_by_auth_token(created_session.id)
+        with pytest.raises(KeyError):
+            await temp_db.get_and_extend_valid_session_by_auth_token(
+                created_session.id,
+                valid_for=timedelta(days=7),
+            )
+
+        fresh_session = FreshRioSession(temp_db, created_session.id)
+        await on_session_start(fresh_session)
+
+        assert UserSession not in fresh_session.attachments
+        assert AppUser not in fresh_session.attachments
+        assert _session_row_count(temp_db, created_session.id) == 0
+        with pytest.raises(KeyError):
+            await temp_db.get_session_by_auth_token(created_session.id)
 
     asyncio.run(scenario())

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pyotp
+import pytest
 
 from app import passwords as password_utils
 from app.data_models import AppUser, UserSettings
@@ -287,12 +288,8 @@ def test_update_password_stores_argon2id_and_invalidates_sessions(tmp_path: Path
             assert stored.verify_password("NewPass!123")
             assert not stored.verify_password("OldPass!123")
 
-            try:
-                persistence.get_valid_session_by_auth_token(session.id)
-                session_valid = True
-            except KeyError:
-                session_valid = False
-            assert session_valid is False
+            with pytest.raises(KeyError):
+                await persistence.get_session_by_auth_token(session.id)
         finally:
             persistence.close()
 
@@ -332,12 +329,8 @@ def test_reset_token_success_updates_password_consumes_token_and_invalidates_ses
                 "AnotherPass!123",
             ) is False
 
-            try:
-                persistence.get_valid_session_by_auth_token(session.id)
-                session_valid = True
-            except KeyError:
-                session_valid = False
-            assert session_valid is False
+            with pytest.raises(KeyError):
+                await persistence.get_session_by_auth_token(session.id)
         finally:
             persistence.close()
 

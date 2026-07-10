@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -54,10 +54,15 @@ async def on_session_start(rio_session: rio.Session) -> None:
     # Get the persistence instance
     pers = rio_session[Persistence]
 
-    # Try to find a live session with the given auth token.
+    if not user_settings.auth_token:
+        return
+
+    # Revalidate and renew under one database write transaction. The returned
+    # objects are only attached after the renewed expiry commits successfully.
     try:
-        user_session, userinfo = pers.get_valid_session_by_auth_token(
+        user_session, userinfo = await pers.get_and_extend_valid_session_by_auth_token(
             user_settings.auth_token,
+            valid_for=timedelta(days=7),
         )
 
     # None was found - this auth token is invalid, expired, or inactive.
@@ -73,15 +78,6 @@ async def on_session_start(rio_session: rio.Session) -> None:
         # For a user to be considered logged in, a `UserInfo` also needs to
         # be attached.
         rio_session.attach(userinfo)
-
-        # Since this session has only just been used, let's extend its
-        # duration. This way users don't get logged out as long as they keep
-        # using the app.
-        await pers.update_session_duration(
-            user_session,
-            new_valid_until=datetime.now(tz=timezone.utc)
-            + timedelta(days=7),
-        )
 
 
 

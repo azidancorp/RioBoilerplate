@@ -340,52 +340,27 @@ async def create_session(
     return session
 
 
-async def update_session_duration(
+async def invalidate_session(
     persistence: AuthPersistence,
-    session: UserSession,
-    new_valid_until: datetime,
+    auth_token: str,
 ) -> None:
-    """
-    Extend the duration of an existing session. This will update the
-    session's validity timestamp both in the given object and the database.
+    """Invalidate one session by deleting its hashed bearer-token row."""
+    if not auth_token:
+        return
 
-    ## Parameters
-
-    `session`: The session whose duration to extend.
-
-    `new_valid_until`: The new timestamp until which the session should be
-        considered valid.
-    """
     conn = _get_connection(persistence)
-
-    # Enforce an absolute lifetime ceiling so the sliding window can't renew a
-    # session forever. The cap is measured from creation; clamping here means
-    # valid_until never advances past it, so every existing `valid_until <= now`
-    # check (Rio guards and the API auth dependency) expires the session once
-    # the ceiling is reached. A non-positive cap disables this.
-    if config.SESSION_ABSOLUTE_MAX_DAYS > 0:
-        absolute_deadline = session.created_at + timedelta(
-            days=config.SESSION_ABSOLUTE_MAX_DAYS
-        )
-        new_valid_until = min(new_valid_until, absolute_deadline)
-
-    session.valid_until = new_valid_until
-
     cursor = persistence._get_cursor()
-    cursor.execute(
-        """
-        UPDATE user_sessions
-        SET valid_until = ?
-        WHERE id = ?
-        """,
-        (
-            session.valid_until.timestamp(),
-            # session.id holds the raw token; the stored primary key is its
-            # SHA-256 hash, so hash before matching the row.
-            _hash_one_time_token(session.id),
-        ),
-    )
-    conn.commit()
+
+    try:
+        cursor.execute(
+            "DELETE FROM user_sessions WHERE id = ?",
+            (_hash_one_time_token(auth_token),),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 async def get_session_by_auth_token(
@@ -426,16 +401,12 @@ async def get_session_by_auth_token(
     )
 
 
-def get_valid_session_by_auth_token(
+def _get_valid_session_by_auth_token(
     persistence: AuthPersistence,
     auth_token: str,
+    *,
+    now: datetime,
 ) -> tuple[UserSession, AppUser]:
-    """
-    Retrieve a non-expired user session and its current user row.
-
-    This is intentionally synchronous so Rio page guards can revalidate
-    already-attached sessions before allowing protected navigation.
-    """
     cursor = persistence._get_cursor()
     cursor.execute(
         f"""
@@ -460,7 +431,7 @@ def get_valid_session_by_auth_token(
         raise KeyError("No session found for the supplied auth token")
 
     valid_until = datetime.fromtimestamp(row[3], tz=timezone.utc)
-    if valid_until <= datetime.now(tz=timezone.utc):
+    if valid_until <= now:
         raise KeyError("Session expired for the supplied auth token")
 
     # The session columns occupy indices 0-4; the user columns follow, so the
@@ -478,6 +449,93 @@ def get_valid_session_by_auth_token(
         role=user.role,
     )
 
+    return session, user
+
+
+def get_valid_session_by_auth_token(
+    persistence: AuthPersistence,
+    auth_token: str,
+) -> tuple[UserSession, AppUser]:
+    """
+    Retrieve a non-expired user session and its current user row.
+
+    This is intentionally synchronous so Rio page guards can revalidate
+    already-attached sessions before allowing protected navigation.
+    """
+    return _get_valid_session_by_auth_token(
+        persistence,
+        auth_token,
+        now=datetime.now(tz=timezone.utc),
+    )
+
+
+async def get_and_extend_valid_session_by_auth_token(
+    persistence: AuthPersistence,
+    auth_token: str,
+    *,
+    valid_for: timedelta,
+) -> tuple[UserSession, AppUser]:
+    """Atomically validate a live session and extend its sliding lifetime."""
+    if not auth_token:
+        raise KeyError("No session found for the supplied auth token")
+    if valid_for <= timedelta(0):
+        raise ValueError("Session extension duration must be positive")
+
+    conn = _get_connection(persistence)
+    cursor = persistence._get_cursor()
+
+    try:
+        # Keep this transaction free of awaits. BEGIN IMMEDIATE establishes the
+        # ordering point against concurrent revocations before we re-read state.
+        conn.execute("BEGIN IMMEDIATE")
+        now = datetime.now(tz=timezone.utc)
+        session, user = _get_valid_session_by_auth_token(
+            persistence,
+            auth_token,
+            now=now,
+        )
+
+        renewed_until = now + valid_for
+        if config.SESSION_ABSOLUTE_MAX_DAYS > 0:
+            absolute_deadline = session.created_at + timedelta(
+                days=config.SESSION_ABSOLUTE_MAX_DAYS
+            )
+            renewed_until = min(renewed_until, absolute_deadline)
+
+        if renewed_until <= now:
+            # Absolute expiry is terminal. Commit the deletion before raising so
+            # the failure handler does not roll it back and leave a bearer token
+            # usable through read-only API authentication.
+            cursor.execute(
+                "DELETE FROM user_sessions WHERE id = ?",
+                (_hash_one_time_token(auth_token),),
+            )
+            conn.commit()
+            raise KeyError("Session exceeded its absolute lifetime")
+
+        cursor.execute(
+            """
+            UPDATE user_sessions
+            SET valid_until = ?
+            WHERE id = ? AND valid_until > ?
+            """,
+            (
+                renewed_until.timestamp(),
+                _hash_one_time_token(auth_token),
+                now.timestamp(),
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise KeyError("Session expired before it could be extended")
+
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+    # Do not expose an expiry that was not committed successfully.
+    session.valid_until = renewed_until
     return session, user
 
 
@@ -595,8 +653,7 @@ async def invalidate_all_sessions(
     user_id: uuid.UUID,
 ) -> None:
     """
-    Invalidate all sessions for a given user by setting their valid_until
-    timestamp to the current time.
+    Invalidate all sessions for a given user by deleting their rows.
 
     ## Parameters
 
@@ -604,13 +661,17 @@ async def invalidate_all_sessions(
     """
     conn = _get_connection(persistence)
     cursor = persistence._get_cursor()
-    now = datetime.now(timezone.utc).timestamp()
 
-    cursor.execute(
-        "UPDATE user_sessions SET valid_until = ? WHERE user_id = ?",
-        (now, str(user_id)),
-    )
-    conn.commit()
+    try:
+        cursor.execute(
+            "DELETE FROM user_sessions WHERE user_id = ?",
+            (str(user_id),),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 async def update_password(
@@ -635,7 +696,6 @@ async def update_password(
     password_hash, password_salt, password_scheme = password_utils.hash_password(new_password)
     conn = _get_connection(persistence)
     cursor = persistence._get_cursor()
-    now = datetime.now(timezone.utc).timestamp()
 
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -651,8 +711,8 @@ async def update_password(
             raise KeyError(user_id)
 
         cursor.execute(
-            "UPDATE user_sessions SET valid_until = ? WHERE user_id = ?",
-            (now, str(user_id)),
+            "DELETE FROM user_sessions WHERE user_id = ?",
+            (str(user_id),),
         )
         conn.commit()
     except Exception:
@@ -727,7 +787,6 @@ async def consume_reset_token_and_update_password(
     password_hash, password_salt, password_scheme = password_utils.hash_password(new_password)
     token_hash = _hash_one_time_token(token)
     now = datetime.now(timezone.utc)
-    now_ts = now.timestamp()
     conn = _get_connection(persistence)
     cursor = persistence._get_cursor()
 
@@ -785,8 +844,8 @@ async def consume_reset_token_and_update_password(
             (token_hash,),
         )
         cursor.execute(
-            "UPDATE user_sessions SET valid_until = ? WHERE user_id = ?",
-            (now_ts, str(user_id)),
+            "DELETE FROM user_sessions WHERE user_id = ?",
+            (str(user_id),),
         )
         conn.commit()
         return True

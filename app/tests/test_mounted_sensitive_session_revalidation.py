@@ -266,7 +266,7 @@ def test_expired_mounted_settings_session_cannot_change_password(temp_db: Persis
 
 def test_successful_mounted_password_change_logs_out_invalidated_session(temp_db: Persistence):
     async def scenario():
-        user, _, session = await _create_user_with_session(
+        user, user_session, session = await _create_user_with_session(
             temp_db,
             "fresh-mounted-password@example.com",
         )
@@ -283,6 +283,8 @@ def test_successful_mounted_password_change_logs_out_invalidated_session(temp_db
         refreshed = await temp_db.get_user_by_id(user.id)
         assert not refreshed.verify_password(PASSWORD)
         assert refreshed.verify_password(NEW_PASSWORD)
+        with pytest.raises(KeyError):
+            await temp_db.get_session_by_auth_token(user_session.id)
         _assert_logged_out(session)
 
     asyncio.run(scenario())
@@ -413,7 +415,7 @@ def test_navbar_logout_clears_client_auth_token(temp_db: Persistence):
         await Navbar.on_logout(navbar)
 
         with pytest.raises(KeyError):
-            temp_db.get_valid_session_by_auth_token(user_session.id)
+            await temp_db.get_session_by_auth_token(user_session.id)
         _assert_logged_out(session)
 
     asyncio.run(scenario())

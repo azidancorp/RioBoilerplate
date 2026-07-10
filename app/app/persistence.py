@@ -2,7 +2,7 @@ import sqlite3
 import threading
 import uuid
 import typing as t
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.data_models import (
@@ -948,8 +948,20 @@ class Persistence:
     async def create_session(self, user_id: uuid.UUID) -> UserSession:
         return await persistence_auth.create_session(self, user_id)
 
-    async def update_session_duration(self, session: UserSession, new_valid_until: datetime) -> None:
-        await persistence_auth.update_session_duration(self, session, new_valid_until)
+    async def get_and_extend_valid_session_by_auth_token(
+        self,
+        auth_token: str,
+        *,
+        valid_for: timedelta,
+    ) -> tuple[UserSession, AppUser]:
+        return await persistence_auth.get_and_extend_valid_session_by_auth_token(
+            self,
+            auth_token,
+            valid_for=valid_for,
+        )
+
+    async def invalidate_session(self, auth_token: str) -> None:
+        await persistence_auth.invalidate_session(self, auth_token)
 
     async def get_session_by_auth_token(self, auth_token: str) -> UserSession:
         return await persistence_auth.get_session_by_auth_token(self, auth_token)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import typing as t
-from datetime import datetime, timezone
 
 import rio
 from app.persistence import Persistence
@@ -53,13 +52,9 @@ class Navbar(ResponsiveComponent):
             return
         user_session, _ = fresh_session
 
-        # Expire the session
+        # Revoke the server-side session before clearing local auth state.
         pers = self.session[Persistence]
-
-        await pers.update_session_duration(
-            user_session,
-            new_valid_until=datetime.now(tz=timezone.utc),
-        )
+        await pers.invalidate_session(user_session.id)
 
         reject_stale_user_session(self.session)
 

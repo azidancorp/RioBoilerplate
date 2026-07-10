@@ -100,12 +100,18 @@ async def _create_user(
     password: str = PASSWORD,
 ) -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
-    await persistence.create_user(user)
+    await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 
 
 async def _create_root_session(persistence: Persistence) -> tuple[AppUser, UserSession]:
-    root = await _create_user(persistence, "root-lifecycle@example.com")
+    root = AppUser.create_new_user_with_default_settings(
+        email="root-lifecycle@example.com",
+        password=PASSWORD,
+    )
+    root.role = "root"
+    await persistence._create_user_unchecked(root)
+    root = await persistence.get_user_by_id(root.id)
     session = await persistence.create_session(root.id)
     return root, session
 
@@ -117,7 +123,7 @@ async def _create_oauth_root_session(persistence: Persistence) -> tuple[AppUser,
         provider_user_id="oauth-root-lifecycle",
     )
     root.role = "root"
-    await persistence.create_user(root)
+    await persistence._create_user_unchecked(root)
     root = await persistence.get_user_by_id(root.id)
     session = await persistence.create_session(root.id)
     return root, session

@@ -8,7 +8,7 @@ from starlette.responses import RedirectResponse
 from app.api.auth_dependencies import get_persistence
 from app.data_models import AppUser
 from app.oauth_clients import get_oauth_client
-from app.persistence import Persistence
+from app.persistence import BootstrapRequiredError, Persistence
 from app.validation import SecuritySanitizer
 
 
@@ -99,7 +99,10 @@ async def oauth_callback(
                 username=None,
                 is_verified=True,
             )
-            await pers.create_user(user)
+            try:
+                await pers.create_user(user)
+            except BootstrapRequiredError:
+                return RedirectResponse("/login?oauth_error=bootstrap_required")
         else:
             return RedirectResponse("/login?oauth_error=account_exists")
 

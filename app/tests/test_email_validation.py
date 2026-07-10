@@ -64,7 +64,7 @@ def test_create_user_stores_normalized_email(tmp_path):
         )
 
         async def scenario():
-            await persistence.create_user(user)
+            await persistence._create_user_unchecked(user)
             stored_user = await persistence.get_user_by_email("me@domain.com")
             assert stored_user.email == "me@domain.com"
 
@@ -87,12 +87,12 @@ def test_create_user_applies_relaxed_identifier_safety_checks(tmp_path):
         )
 
         async def scenario():
-            await persistence.create_user(user)
+            await persistence._create_user_unchecked(user)
             stored_user = await persistence.get_user_by_email("username")
             assert stored_user.email == "username"
 
             with pytest.raises(HTTPException):
-                await persistence.create_user(dangerous_user)
+                await persistence._create_user_unchecked(dangerous_user)
 
         asyncio.run(scenario())
     finally:

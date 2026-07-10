@@ -31,7 +31,7 @@ def reset_currency_config():
 
 async def _create_user(persistence: Persistence, email: str, password: str = "password") -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
-    await persistence.create_user(user)
+    await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 
 

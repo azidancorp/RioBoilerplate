@@ -1,2 +1,7 @@
+# WARNING: Not production-ready as-is. Railway's container filesystem is
+# ephemeral and no volume is configured here, so the SQLite database is erased
+# on every deploy and restart. Do not point real users at this deployment until
+# the runtime-data relocation in docs/railway-readiness.md is complete and a
+# volume is mounted at the relocated data directory.
 [deploy]
-startCommand = "cd app && rio run --port ${PORT} --release --public"
+startCommand = "cd app && python -m app.scripts.prestart --strict-bootstrap && exec rio run --port ${PORT} --release --public"

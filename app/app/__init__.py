@@ -30,20 +30,12 @@ async def on_app_start(app: rio.App) -> None:
 
     if pers.get_user_count() == 0:
         bootstrap_command = "python -m app.scripts.bootstrap_root"
-        if config.ALLOW_PUBLIC_ROOT_BOOTSTRAP:
-            print(
-                "WARNING: No users are registered yet. The first account created "
-                "will be granted the 'root' role. For production, initialize the "
-                f"owner explicitly before public exposure: {bootstrap_command}",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                "WARNING: No users are registered yet and public root bootstrap "
-                "is disabled. Public signup cannot initialize this deployment. "
-                f"Run {bootstrap_command} before public exposure.",
-                file=sys.stderr,
-            )
+        print(
+            "WARNING: No users are registered yet. Password signup and OAuth "
+            "registration cannot initialize this deployment. "
+            f"Run {bootstrap_command} to create the verified root account.",
+            file=sys.stderr,
+        )
 
     # Now attach it to the session. This way, the persistence instance is
     # available to all components using `self.session[persistence.Persistence]`

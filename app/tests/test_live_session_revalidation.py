@@ -85,7 +85,8 @@ async def _create_root_session(persistence: Persistence) -> tuple[AppUser, UserS
         password="password",
         username="root",
     )
-    await persistence.create_user(user)
+    user.role = "root"
+    await persistence._create_user_unchecked(user)
     user = await persistence.get_user_by_id(user.id)
     session = await persistence.create_session(user.id)
     return user, session
@@ -161,7 +162,7 @@ def test_session_start_rejects_inactive_stored_auth_token(temp_db: Persistence):
             password="password",
             username="inactive-session",
         )
-        await temp_db.create_user(user)
+        await temp_db._create_user_unchecked(user)
         user = await temp_db.get_user_by_id(user.id)
         cached_session = await temp_db.create_session(user.id)
         await temp_db.admin_set_user_active(user.id, False, actor=root)

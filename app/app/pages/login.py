@@ -7,7 +7,7 @@ import uuid
 import rio
 from fastapi import HTTPException
 
-from app.persistence import Persistence
+from app.persistence import BootstrapRequiredError, Persistence
 from app.persistence_auth import TwoFactorFailure
 from app.data_models import AppUser, UserSettings, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
@@ -109,6 +109,10 @@ def _oauth_error_message(error_code: str) -> str:
         "unsupported_provider": "That sign-in provider is not supported.",
         "missing_provider_id": "Google did not return a valid account identifier.",
         "unverified_email": "Google sign-in requires a verified email address.",
+        "bootstrap_required": (
+            "This deployment must be initialized by an operator before Google "
+            "sign-in can create an account."
+        ),
         "account_exists": (
             "An account with this email already exists. Log in with your password, "
             "then link Google in settings once connected accounts are available."
@@ -534,10 +538,7 @@ class SignUpForm(rio.Component):
                 self.error_message = "Your password is weak. Please acknowledge this below or choose a stronger password."
                 return
 
-        if (
-            not config.ALLOW_PUBLIC_ROOT_BOOTSTRAP
-            and pers.get_user_count() == 0
-        ):
+        if pers.get_user_count() == 0:
             self.banner_style = "danger"
             self.error_message = (
                 "This deployment must be initialized by an operator. "
@@ -581,7 +582,12 @@ class SignUpForm(rio.Component):
         )
 
         # Store the user in the database
-        await pers.create_user(user_info)
+        try:
+            await pers.create_user(user_info)
+        except BootstrapRequiredError as exc:
+            self.banner_style = "danger"
+            self.error_message = str(exc)
+            return
 
         if config.REQUIRE_EMAIL_VERIFICATION:
             try:

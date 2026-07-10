@@ -6,7 +6,7 @@ from threading import Barrier
 
 from app.config import config
 from app.data_models import AppUser
-from app.permissions import get_default_role, get_first_user_role
+from app.permissions import get_default_role, get_highest_privilege_role
 from app.persistence import Persistence
 from app.scripts import bootstrap_root, prestart
 
@@ -58,7 +58,7 @@ def test_bootstrap_root_creates_one_verified_root(tmp_path: Path, capsys) -> Non
     user = users[0]
     assert user.email == "owner@example.com"
     assert user.username is None
-    assert user.role == get_first_user_role()
+    assert user.role == get_highest_privilege_role()
     assert user.is_verified is True
     assert user.verify_password(STRONG_PASSWORD)
 
@@ -122,7 +122,7 @@ def test_bootstrap_root_username_only_creates_root(
     assert len(users) == 1
     assert users[0].email == "owner"
     assert users[0].username == "owner"
-    assert users[0].role == get_first_user_role()
+    assert users[0].role == get_highest_privilege_role()
     assert users[0].is_verified is True
 
 
@@ -196,7 +196,7 @@ def test_concurrent_bootstrap_root_creates_one_verified_root(
 
     users = _list_users(db_path)
     assert len(users) == 1
-    assert users[0].role == get_first_user_role()
+    assert users[0].role == get_highest_privilege_role()
     assert users[0].is_verified is True
 
 
@@ -285,12 +285,8 @@ def test_bootstrap_root_db_path_targets_requested_database(
     assert not default_db_path.exists()
 
 
-def test_explicit_bootstrap_creates_root_when_public_fallback_disabled(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    db_path = tmp_path / "strict-public-disabled.db"
-    monkeypatch.setattr(config, "ALLOW_PUBLIC_ROOT_BOOTSTRAP", False)
+def test_explicit_bootstrap_creates_root(tmp_path: Path) -> None:
+    db_path = tmp_path / "explicit-bootstrap.db"
 
     assert bootstrap_root.main(
         [
@@ -307,7 +303,7 @@ def test_explicit_bootstrap_creates_root_when_public_fallback_disabled(
 
     users = _list_users(db_path)
     assert len(users) == 1
-    assert users[0].role == get_first_user_role()
+    assert users[0].role == get_highest_privilege_role()
 
 
 def test_prestart_strict_bootstrap_fails_empty_database(
@@ -329,11 +325,9 @@ def test_prestart_strict_bootstrap_fails_empty_database(
 
 def test_prestart_strict_bootstrap_fails_without_verified_root(
     tmp_path: Path,
-    monkeypatch,
     capsys,
 ) -> None:
     db_path = tmp_path / "prestart-unverified-user.db"
-    monkeypatch.setattr(config, "ALLOW_PUBLIC_ROOT_BOOTSTRAP", False)
 
     persistence = Persistence(db_path=db_path)
     try:
@@ -341,7 +335,7 @@ def test_prestart_strict_bootstrap_fails_without_verified_root(
             email="unverified@example.com",
             password=STRONG_PASSWORD,
         )
-        asyncio.run(persistence.create_user(user))
+        asyncio.run(persistence._create_user_unchecked(user))
     finally:
         persistence.close()
 
@@ -378,3 +372,15 @@ def test_prestart_strict_bootstrap_passes_after_bootstrap(tmp_path: Path) -> Non
     assert prestart.main(
         ["--db-path", str(db_path), "--strict-bootstrap"]
     ) == 0
+
+
+def test_railway_start_is_gated_by_strict_bootstrap() -> None:
+    railway_config = (
+        Path(__file__).resolve().parents[2] / "railway.toml"
+    ).read_text(encoding="utf-8")
+
+    strict_check = "python -m app.scripts.prestart --strict-bootstrap"
+    public_start = "exec rio run"
+    assert strict_check in railway_config
+    assert public_start in railway_config
+    assert railway_config.index(strict_check) < railway_config.index(public_start)

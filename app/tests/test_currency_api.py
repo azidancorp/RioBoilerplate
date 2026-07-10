@@ -50,7 +50,8 @@ def restore_currency_config():
 
 async def _create_user_with_session(persistence: Persistence, email: str) -> tuple[AppUser, str]:
     user = AppUser.create_new_user_with_default_settings(email=email, password="secret")
-    await persistence.create_user(user)
+    user.role = "root"
+    await persistence._create_user_unchecked(user)
     session = await persistence.create_session(user.id)
     return await persistence.get_user_by_id(user.id), session.id
 
@@ -61,7 +62,7 @@ async def _create_user_with_role(
     role: str,
 ) -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password="secret")
-    await persistence.create_user(user)
+    await persistence._create_user_unchecked(user)
     persistence.conn.execute(
         "UPDATE users SET role = ?, is_verified = 1 WHERE id = ?",
         (role, str(user.id)),
@@ -247,7 +248,8 @@ def test_set_endpoint_allows_oauth_actor_with_2fa_and_no_password(api_test_setup
         )
         user.auth_provider = "google"
         user.auth_provider_id = "google-oauth-totp-api"
-        await persistence.create_user(user)
+        user.role = "root"
+        await persistence._create_user_unchecked(user)
         user = await persistence.get_user_by_id(user.id)
         session = await persistence.create_session(user.id)
         return user, session.id
@@ -281,7 +283,7 @@ def test_inactive_user_bearer_token_is_rejected(api_test_setup):
             email="inactive-api-user@example.com",
             password="secret",
         )
-        await persistence.create_user(user)
+        await persistence._create_user_unchecked(user)
         user = await persistence.get_user_by_id(user.id)
         session = await persistence.create_session(user.id)
         persistence.conn.execute(

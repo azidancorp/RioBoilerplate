@@ -212,7 +212,7 @@ def test_create_user_stores_argon2id_password(tmp_path: Path):
                 email="create@example.com",
                 password="StrongPass!123",
             )
-            await persistence.create_user(user)
+            await persistence._create_user_unchecked(user)
             stored = await persistence.get_user_by_id(user.id)
 
             assert stored.password_scheme == password_utils.HASH_SCHEME_ARGON2ID
@@ -242,7 +242,7 @@ def test_non_password_provider_cannot_verify_or_upgrade(tmp_path: Path):
                 role="user",
                 is_verified=True,
             )
-            await persistence.create_user(external_user)
+            await persistence._create_user_unchecked(external_user)
             stored = await persistence.get_user_by_id(external_user.id)
 
             assert not stored.verify_password("Anything!123")
@@ -276,7 +276,7 @@ def test_update_password_stores_argon2id_and_invalidates_sessions(tmp_path: Path
                 email="update@example.com",
                 password="OldPass!123",
             )
-            await persistence.create_user(user)
+            await persistence._create_user_unchecked(user)
             session = await persistence.create_session(user.id)
 
             await persistence.update_password(user.id, "NewPass!123")
@@ -309,7 +309,7 @@ def test_reset_token_success_updates_password_consumes_token_and_invalidates_ses
                 email="reset-success@example.com",
                 password="OldPass!123",
             )
-            await persistence.create_user(user)
+            await persistence._create_user_unchecked(user)
             session = await persistence.create_session(user.id)
             reset_token = await persistence.create_reset_token(user.id)
 
@@ -352,7 +352,7 @@ def test_reset_token_success_with_mfa_updates_password_after_challenge(tmp_path:
                 email="reset-success-mfa@example.com",
                 password="OldPass!123",
             )
-            await persistence.create_user(user)
+            await persistence._create_user_unchecked(user)
             secret = pyotp.random_base32()
             persistence.set_2fa_secret(user.id, secret)
             reset_token = await persistence.create_reset_token(user.id)
@@ -398,7 +398,7 @@ def test_reset_token_password_update_is_transactional_on_hash_failure(
                 email="reset-transactional@example.com",
                 password="OldPass!123",
             )
-            await persistence.create_user(user)
+            await persistence._create_user_unchecked(user)
             reset_token = await persistence.create_reset_token(user.id)
 
             def fail_hash(_password: str):
@@ -432,7 +432,7 @@ def test_legacy_pbkdf2_user_can_be_upgraded_after_successful_verification(tmp_pa
         persistence = Persistence(db_path=tmp_path / "upgrade.db")
         try:
             legacy_user = _legacy_user("legacy@example.com", "LegacyPass!123")
-            await persistence.create_user(legacy_user)
+            await persistence._create_user_unchecked(legacy_user)
 
             stored_before = await persistence.get_user_by_id(legacy_user.id)
             assert stored_before.password_scheme == password_utils.HASH_SCHEME_PBKDF2_SHA256
@@ -460,7 +460,7 @@ def test_legacy_pbkdf2_user_is_upgraded_after_successful_login(tmp_path: Path):
         persistence = Persistence(db_path=tmp_path / "login-upgrade.db")
         try:
             legacy_user = _legacy_user("login-upgrade@example.com", "LegacyPass!123")
-            await persistence.create_user(legacy_user)
+            await persistence._create_user_unchecked(legacy_user)
 
             session = _FakeSession(persistence)
             form = _mount_login_form(
@@ -488,7 +488,7 @@ def test_wrong_login_password_does_not_upgrade_legacy_row(tmp_path: Path):
         persistence = Persistence(db_path=tmp_path / "login-wrong-upgrade.db")
         try:
             legacy_user = _legacy_user("login-wrong@example.com", "LegacyPass!123")
-            await persistence.create_user(legacy_user)
+            await persistence._create_user_unchecked(legacy_user)
 
             session = _FakeSession(persistence)
             form = _mount_login_form(
@@ -515,7 +515,7 @@ def test_legacy_pbkdf2_user_is_not_upgraded_before_mfa_success(tmp_path: Path):
         persistence = Persistence(db_path=tmp_path / "login-mfa-upgrade.db")
         try:
             legacy_user = _legacy_user("login-mfa@example.com", "LegacyPass!123")
-            await persistence.create_user(legacy_user)
+            await persistence._create_user_unchecked(legacy_user)
             secret = pyotp.random_base32()
             persistence.set_2fa_secret(legacy_user.id, secret)
 
@@ -551,7 +551,7 @@ def test_wrong_legacy_password_does_not_upgrade_row(tmp_path: Path):
         persistence = Persistence(db_path=tmp_path / "wrong-upgrade.db")
         try:
             legacy_user = _legacy_user("wrong-upgrade@example.com", "LegacyPass!123")
-            await persistence.create_user(legacy_user)
+            await persistence._create_user_unchecked(legacy_user)
 
             try:
                 await persistence.upgrade_user_password_hash(
@@ -581,7 +581,7 @@ def test_upgrade_helper_noops_for_existing_argon2id_row(tmp_path: Path):
                 email="noop-upgrade@example.com",
                 password="StrongPass!123",
             )
-            await persistence.create_user(user)
+            await persistence._create_user_unchecked(user)
 
             refreshed = await persistence.upgrade_user_password_hash(
                 user.id,

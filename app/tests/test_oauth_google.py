@@ -37,7 +37,7 @@ async def _create_password_user(
     password: str = "password",
 ) -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
-    await persistence.create_user(user)
+    await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 
 
@@ -52,8 +52,17 @@ async def _create_social_user(
         provider_user_id=provider_user_id,
         is_verified=True,
     )
-    await persistence.create_user(user)
+    await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
+
+
+async def _bootstrap_root(persistence: Persistence) -> AppUser:
+    root = AppUser.create_new_user_with_default_settings(
+        email="root@example.com",
+        password="VeryStrongPass!9",
+    )
+    assert await persistence.create_verified_root_user_if_empty(root)
+    return await persistence.get_user_by_id(root.id)
 
 
 class _FakeEvent:
@@ -198,6 +207,7 @@ def test_get_user_by_provider_identity(temp_db: Persistence):
 
 
 def test_google_callback_creates_social_user_and_handoff(monkeypatch, temp_db: Persistence):
+    asyncio.run(_bootstrap_root(temp_db))
     fake_client = _FakeOAuthClient(
         {
             "sub": "google-new-user",
@@ -219,10 +229,43 @@ def test_google_callback_creates_social_user_and_handoff(monkeypatch, temp_db: P
     async def scenario():
         user = await temp_db.get_user_by_provider_identity("google", "google-new-user")
         assert user.email == "new-google@example.com"
+        assert user.role == "user"
         handoff_user = await temp_db.consume_oauth_handoff(query["social_login_token"][0])
         assert handoff_user.id == user.id
 
     asyncio.run(scenario())
+
+
+def test_google_callback_requires_operator_bootstrap(monkeypatch, temp_db: Persistence):
+    fake_client = _FakeOAuthClient(
+        {
+            "sub": "google-first-user",
+            "email": "first-google@example.com",
+            "email_verified": True,
+        }
+    )
+    monkeypatch.setattr(oauth_module, "get_oauth_client", lambda provider: fake_client)
+    _patch_app_persistence(monkeypatch, temp_db)
+
+    with TestClient(app_module.fastapi_app, raise_server_exceptions=False) as client:
+        response = client.get("/auth/google/callback", follow_redirects=False)
+
+    assert response.status_code in {302, 307}
+    assert response.headers["location"] == "/login?oauth_error=bootstrap_required"
+    assert temp_db.get_user_count() == 0
+    assert temp_db.conn.execute(
+        "SELECT COUNT(*) FROM oauth_login_handoffs"
+    ).fetchone()[0] == 0
+
+
+def test_login_page_explains_oauth_bootstrap_requirement(temp_db: Persistence):
+    page = _new_login_page(temp_db, {"oauth_error": "bootstrap_required"})
+
+    asyncio.run(LoginPage.on_populate(page))
+
+    assert page.current_form == "login"
+    assert page.page_message_style == "danger"
+    assert "initialized by an operator" in page.page_message
 
 
 def test_google_callback_reuses_existing_provider_user(monkeypatch, temp_db: Persistence):

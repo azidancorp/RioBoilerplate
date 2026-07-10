@@ -79,7 +79,7 @@ async def _create_user_with_session(
     email: str,
 ) -> tuple[AppUser, UserSession, _FakeSession]:
     user = AppUser.create_new_user_with_default_settings(email=email, password=PASSWORD)
-    await persistence.create_user(user)
+    await persistence._create_user_unchecked(user)
     user = await persistence.get_user_by_id(user.id)
     user_session = await persistence.create_session(user.id)
     return user, user_session, _FakeSession(persistence, user_session, user)

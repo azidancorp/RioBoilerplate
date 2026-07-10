@@ -44,17 +44,23 @@ For detailed merge instructions and conflict resolution, see `UPSTREAM_MERGE_GUI
 2. Create and activate a virtual environment: `python -m venv venv` then `source venv/bin/activate` (or `venv\Scripts\activate` on Windows).
 3. Install dependencies: `pip install -r requirements.txt`.
 4. Copy `.env.example` to `.env` and set any provider/session secrets your deployment uses.
-5. Run the app from `app/`: `rio run`. By default, the first public signup on an empty local/dev database is promoted to the `root` role.
-6. On first run, the app creates a local SQLite database at `app/app/data/app.db`. This file is ignored by git and should remain a local runtime artifact.
+5. From the repository root, initialize the first verified root account: `cd app && python -m app.scripts.bootstrap_root`.
+6. Still in `app/`, start the development server: `rio run`.
+7. The app stores its local SQLite database at `app/app/data/app.db`. This file is ignored by git and should remain a local runtime artifact.
 
 Access the dev server at `http://localhost:8000`. Use `rio run --port 8000 --release` to mirror production settings. Replace `8000` with the port you actually chose when checking a different local run.
 
-For production or stricter deployments, initialize the first owner explicitly before exposing the app:
-```bash
-cd app
-python -m app.scripts.bootstrap_root
-```
-With no arguments, the command prompts for email and password. You can also pass values directly, for example `python -m app.scripts.bootstrap_root --email owner@example.com --password '<strong-password>'`. `--username owner` is optional; if you provide `--username` without `--email`, that username becomes the root login identifier. The command creates one verified `root` user only when the database is empty.
+Public password signup and OAuth registration cannot initialize an empty database. With no arguments, `bootstrap_root` prompts for email and password. You can also pass values directly, for example `python -m app.scripts.bootstrap_root --email owner@example.com --password '<strong-password>'`. `--username owner` is optional; if you provide `--username` without `--email`, that username becomes the root login identifier. The command creates one verified `root` user only when the database is empty.
+
+### Railway First Deployment
+
+> **Warning: not production-ready on Railway yet.** As shipped, `railway.toml` deploys with no volume attached, and Railway's container filesystem is ephemeral — the SQLite database is erased on every deploy and restart. Do not put real users on a Railway deployment until the runtime-data relocation described below is complete and a volume is mounted. The supported production path today is the VPS guide in `DEPLOYMENT_INSTRUCTIONS.md`; the outstanding Railway work and the root-bootstrap procedure are tracked in `docs/railway-readiness.md`.
+
+`railway.toml` runs strict prestart checks before starting the public server. On a fresh database, the deployment exits with a bootstrap error rather than exposing an unclaimed root slot. This fail-closed result is expected.
+
+Do not expose a Railway domain until the initial root has been created against the same persistent database the service will use. `railway run` and `railway shell` execute locally with Railway variables and do not modify the deployed SQLite volume.
+
+The current `app/app/data/` directory mixes mutable runtime state with tracked sample data, so it does not yet have a safe Railway volume mount target. Complete the runtime-data relocation tracked in `docs/railway-readiness.md` before treating this SQLite configuration as Railway-ready; mounting a volume over the whole directory would hide tracked application files.
 
 ## Everyday Development
 - `rio run` – hot-reloading dev server.
@@ -63,9 +69,9 @@ With no arguments, the command prompts for email and password. You can also pass
 
 ## Configuration
 - `.env` is for secrets only, such as `SESSION_SECRET_KEY` or provider credentials.
-- Non-secret behavior stays code-configured in `app/app/config.py`. Edit that file directly for app-specific defaults such as email validation, username login, password policy, first-root bootstrap policy, and currency naming/precision.
+- Non-secret behavior stays code-configured in `app/app/config.py`. Edit that file directly for app-specific defaults such as email validation, username login, password policy, and currency naming/precision.
 - Email validation and username-login behavior are documented in `docs/configuration/email-validation.md`.
-- `ALLOW_PUBLIC_ROOT_BOOTSTRAP=True` preserves the quick-start first-signup behavior. Set it to `False` when deployment must use `python -m app.scripts.bootstrap_root` instead.
+- Root initialization is intentionally not configurable: public registration never assigns a privileged role.
 - The runtime SQLite database file `app/app/data/app.db` is created locally on first run and is ignored by git.
 - Before going to production, replace the placeholder branding in `app/app/assets/` (`favicon.ico`, `logo.png`, `og_image.png`) with your own. The source script at `app/assets_src/build_brand_assets.py` shows how they were generated and can be adapted; run it from the outer `app/` directory with `python assets_src/build_brand_assets.py`.
 

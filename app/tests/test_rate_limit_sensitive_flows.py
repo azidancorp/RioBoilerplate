@@ -167,7 +167,7 @@ async def _create_user(
     password: str = "VeryStrongPass!9",
 ) -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
-    await persistence.create_user(user)
+    await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 
 
@@ -366,6 +366,11 @@ def test_admin_change_role_success_clears_rate_limit_bucket(temp_db: Persistence
     async def scenario():
         admin = await _create_user(temp_db, "admin-role-clear@example.com")
         target = await _create_user(temp_db, "target-role-clear@example.com")
+        admin.role = "root"
+        temp_db.conn.execute(
+            "UPDATE users SET role = ? WHERE id = ?", (admin.role, str(admin.id))
+        )
+        temp_db.conn.commit()
         admin_session = await temp_db.create_session(admin.id)
         session = _FakeSession(temp_db, admin_session, admin)
         page = _mount_admin(session)
@@ -395,6 +400,11 @@ def test_admin_delete_user_success_clears_rate_limit_bucket(temp_db: Persistence
     async def scenario():
         admin = await _create_user(temp_db, "admin-delete-clear@example.com")
         target = await _create_user(temp_db, "target-delete-clear@example.com")
+        admin.role = "root"
+        temp_db.conn.execute(
+            "UPDATE users SET role = ? WHERE id = ?", (admin.role, str(admin.id))
+        )
+        temp_db.conn.commit()
         admin_session = await temp_db.create_session(admin.id)
         session = _FakeSession(temp_db, admin_session, admin)
         page = _mount_admin(

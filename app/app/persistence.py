@@ -16,7 +16,7 @@ from app.config import config
 from app.permissions import (
     can_manage_role,
     get_default_role,
-    get_first_user_role,
+    get_highest_privilege_role,
     validate_role,
     get_all_roles,
 )
@@ -32,6 +32,11 @@ from app.persistence_schema import initialize_schema
 
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "app.db"
+
+
+class BootstrapRequiredError(RuntimeError):
+    """Raised when public registration is attempted before operator bootstrap."""
+
 
 # Schema setup is idempotent but does ~29 DDL statements, so we only run it once
 # per database file per process instead of on every Persistence() construction
@@ -171,7 +176,7 @@ class Persistence:
         cursor = self._get_cursor()
         cursor.execute(
             "SELECT 1 FROM users WHERE role = ? AND is_verified = 1 LIMIT 1",
-            (get_first_user_role(),),
+            (get_highest_privilege_role(),),
         )
         return cursor.fetchone() is not None
 
@@ -317,8 +322,14 @@ class Persistence:
                 f"User with role {actor.role} cannot {action} users with role {target_role}."
             )
 
-    # Spans users + profiles + currency ledger; must stay transactional.
-    async def create_user(self, user: AppUser) -> None:
+    async def _create_user_transaction(
+        self,
+        user: AppUser,
+        *,
+        assigned_role: str,
+        require_existing_user: bool,
+    ) -> None:
+        """Insert a user and its dependent records in one transaction."""
         # Even future username-only/anonymous mode should pass through this
         # validator; REQUIRE_VALID_EMAIL=False relaxes syntax, not safety checks.
         user.email = SecuritySanitizer.validate_email_format(
@@ -333,19 +344,16 @@ class Persistence:
         conn = self.conn
         cursor = conn.cursor()
         now_ts = datetime.now(timezone.utc).timestamp()
-        assigned_role = user.role
 
         try:
             conn.execute("BEGIN IMMEDIATE")
-
-            cursor.execute("SELECT COUNT(*) FROM users")
-            user_count = cursor.fetchone()[0]
-            if (
-                user_count == 0
-                and assigned_role == get_default_role()
-                and config.ALLOW_PUBLIC_ROOT_BOOTSTRAP
-            ):
-                assigned_role = get_first_user_role()
+            if require_existing_user:
+                cursor.execute("SELECT 1 FROM users LIMIT 1")
+                if cursor.fetchone() is None:
+                    raise BootstrapRequiredError(
+                        "This deployment must be initialized by an operator. "
+                        "Run python -m app.scripts.bootstrap_root."
+                    )
 
             self._insert_user_records(
                 cursor,
@@ -361,6 +369,23 @@ class Persistence:
 
         user.role = assigned_role
 
+    async def _create_user_unchecked(self, user: AppUser) -> None:
+        """Insert a trusted test/internal user with its explicitly assigned role."""
+        await self._create_user_transaction(
+            user,
+            assigned_role=user.role,
+            require_existing_user=False,
+        )
+
+    # Spans users + profiles + currency ledger; must stay transactional.
+    async def create_user(self, user: AppUser) -> None:
+        """Register a default-role user after operator bootstrap has completed."""
+        await self._create_user_transaction(
+            user,
+            assigned_role=get_default_role(),
+            require_existing_user=True,
+        )
+
     async def admin_create_user(
         self,
         *,
@@ -373,7 +398,7 @@ class Persistence:
         is_verified: bool = False,
         client_ip: str | None = None,
     ) -> AppUser:
-        """Create a user from the admin surface without public root bootstrap."""
+        """Create a user from the authenticated admin surface."""
         if not validate_role(role):
             raise ValueError(
                 f"Invalid role: {role}. Must be one of: {', '.join(get_all_roles())}"
@@ -735,7 +760,7 @@ class Persistence:
         conn = self.conn
         cursor = conn.cursor()
         now_ts = datetime.now(timezone.utc).timestamp()
-        root_role = get_first_user_role()
+        root_role = get_highest_privilege_role()
 
         try:
             conn.execute("BEGIN IMMEDIATE")

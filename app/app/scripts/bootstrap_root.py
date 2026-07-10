@@ -12,7 +12,7 @@ from typing import Iterable
 
 from app.config import config
 from app.data_models import AppUser
-from app.permissions import get_first_user_role
+from app.permissions import get_highest_privilege_role
 from app.persistence import DEFAULT_DB_PATH, Persistence
 from app.scripts.utils import get_password_strength
 
@@ -136,7 +136,7 @@ async def bootstrap_root(args: argparse.Namespace) -> int:
             password=password,
             username=username or None,
         )
-        user.role = get_first_user_role()
+        user.role = get_highest_privilege_role()
         user.is_verified = True
 
         original_require_valid_email = config.REQUIRE_VALID_EMAIL

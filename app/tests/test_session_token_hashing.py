@@ -29,7 +29,7 @@ async def _create_session(persistence: Persistence):
         password="password",
         username="root",
     )
-    await persistence.create_user(user)
+    await persistence._create_user_unchecked(user)
     user = await persistence.get_user_by_id(user.id)
     session = await persistence.create_session(user.id)
     return user, session

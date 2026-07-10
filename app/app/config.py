@@ -40,10 +40,6 @@ class AppConfig:
     # This only affects lookup fallback for usernames already stored on users.
     # The stock signup UI remains email-first.
     ALLOW_USERNAME_LOGIN: bool = False
-    # If True, a fresh database can still be initialized by public signup: the
-    # first default-role user is promoted to root. Set False for deployments
-    # that must run the explicit bootstrap_root CLI before public exposure.
-    ALLOW_PUBLIC_ROOT_BOOTSTRAP: bool = True
     # Enables the Google OAuth/OIDC routes when credentials are configured.
     # Keep this in code so deploy behavior is reviewable; credentials remain env-only.
     ENABLE_GOOGLE_LOGIN: bool = True

@@ -90,16 +90,6 @@ def get_default_role() -> str:
     """
     return max(ROLE_HIERARCHY.items(), key=lambda x: x[1])[0]
 
-def get_first_user_role() -> str:
-    """
-    Get the role assigned to the first user who registers.
-    This is the role with the highest privilege (lowest number).
-
-    Returns:
-        str: The first user role name (typically admin/root)
-    """
-    return min(ROLE_HIERARCHY.items(), key=lambda x: x[1])[0]
-
 def get_highest_privilege_role() -> str:
     """
     Get the role with the highest privilege level.

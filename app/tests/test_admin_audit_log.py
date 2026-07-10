@@ -36,12 +36,7 @@ async def _create_user(
 ) -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
     user.role = role
-    await persistence.create_user(user)
-    # create_user may promote the first user to root; force the requested role.
-    if user.role != role:
-        cursor = persistence._get_cursor()
-        cursor.execute("UPDATE users SET role = ? WHERE id = ?", (role, str(user.id)))
-        persistence.conn.commit()
+    await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 
 

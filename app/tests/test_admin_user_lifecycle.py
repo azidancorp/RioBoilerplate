@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import rio
 import rio.global_state as rio_global_state
 
+from app import permissions
 from app.config import config
 from app.data_models import AppUser, UserSettings, UserSession
 from app.pages.app_page import admin as admin_page_module
@@ -15,6 +17,7 @@ from app.pages.login import LoginForm
 from app.persistence import Persistence
 from app.rate_limits import rate_limit_key, sensitive_action_policy
 from app.scripts import message_utils
+from app.session_validation import StepUpResult
 
 
 PASSWORD = "VeryStrongPass!9"
@@ -147,6 +150,8 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.create_user_password = ""
     component.create_user_role = "user"
     component.create_user_is_verified = False
+    component.create_user_step_up_password = ""
+    component.create_user_step_up_2fa = ""
     component.create_user_error = ""
     component.create_user_success = ""
     component.edit_user_identifier = ""
@@ -160,9 +165,13 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.active_user_identifier = ""
     component.active_user_is_active = True
     component.active_user_confirmation = ""
+    component.active_user_step_up_password = ""
+    component.active_user_step_up_2fa = ""
     component.active_user_error = ""
     component.active_user_success = ""
     component.reset_user_identifier = ""
+    component.reset_user_step_up_password = ""
+    component.reset_user_step_up_2fa = ""
     component.reset_user_error = ""
     component.reset_user_success = ""
     component.delete_user_identifier = ""
@@ -290,6 +299,211 @@ def test_admin_page_can_create_lower_privilege_user_and_clear_limit(
         assert created.is_verified is True
         profile = await temp_db.get_profile_by_user_id(str(created.id))
         assert profile["full_name"] == "New User"
+
+    asyncio.run(scenario())
+
+
+def test_admin_page_privileged_creation_requires_actor_step_up(
+    temp_db: Persistence,
+):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(
+            session,
+            create_user_email="step-up-admin@example.com",
+            create_user_password="AttackerChosen!9",
+            create_user_role="admin",
+            create_user_is_verified=True,
+            create_user_step_up_password="not-the-root-password",
+        )
+
+        await AdminPage._on_create_user_pressed(page)
+
+        assert page.create_user_error == "Current password is incorrect"
+        assert page.create_user_step_up_password == ""
+        with pytest.raises(KeyError):
+            await temp_db.get_user_by_email("step-up-admin@example.com")
+
+        page.create_user_step_up_password = PASSWORD
+        await AdminPage._on_create_user_pressed(page)
+
+        assert page.create_user_error == ""
+        assert page.create_user_step_up_password == ""
+        created = await temp_db.get_user_by_email("step-up-admin@example.com")
+        assert created.role == "admin"
+        assert created.is_active is True
+        assert created.is_verified is True
+        assert created.verify_password("AttackerChosen!9") is True
+
+    asyncio.run(scenario())
+
+
+def test_new_admin_step_up_actions_warn_when_recovery_codes_are_used(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sent: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        admin_page_module,
+        "send_password_reset_email",
+        lambda **kwargs: sent.append(kwargs),
+    )
+
+    async def use_recovery_code(*args, **kwargs):
+        return StepUpResult(ok=True, used_recovery_code=True)
+
+    monkeypatch.setattr(
+        AdminPage,
+        "_verify_actor_step_up",
+        use_recovery_code,
+    )
+    expected_warning = (
+        "A recovery code was used. Generate a new set to stay protected."
+    )
+
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        session = _FakeSession(temp_db, root_session, root)
+        target = await temp_db.admin_create_user(
+            email="recovery-warning-target@example.com",
+            password=PASSWORD,
+            role="user",
+            actor=root,
+        )
+
+        create_page = _mount_admin(
+            session,
+            create_user_email="recovery-warning-admin@example.com",
+            create_user_password="AttackerChosen!9",
+            create_user_role="admin",
+            create_user_step_up_password=PASSWORD,
+        )
+        await AdminPage._on_create_user_pressed(create_page)
+        assert "recovery-warning-admin@example.com" in create_page.create_user_success
+        assert create_page.create_user_error == expected_warning
+
+        duplicate_create_page = _mount_admin(
+            session,
+            create_user_email="recovery-warning-admin@example.com",
+            create_user_password="AttackerChosen!9",
+            create_user_role="admin",
+            create_user_step_up_password=PASSWORD,
+        )
+        await AdminPage._on_create_user_pressed(duplicate_create_page)
+        assert duplicate_create_page.create_user_success == ""
+        assert duplicate_create_page.create_user_error == (
+            f"A user with that email already exists. {expected_warning}"
+        )
+
+        reset_page = _mount_admin(
+            session,
+            reset_user_identifier=target.email,
+            reset_user_step_up_password=PASSWORD,
+        )
+        await AdminPage._on_send_reset_pressed(reset_page)
+        assert target.email in reset_page.reset_user_success
+        assert reset_page.reset_user_error == expected_warning
+        assert len(sent) == 1
+
+        active_page = _mount_admin(
+            session,
+            active_user_identifier=target.email,
+            active_user_is_active=False,
+            active_user_confirmation=f"DEACTIVATE {target.email}",
+            active_user_step_up_password=PASSWORD,
+        )
+        await AdminPage._on_set_active_pressed(active_page)
+        assert "deactivated" in active_page.active_user_success
+        assert active_page.active_user_error == expected_warning
+        assert (await temp_db.get_user_by_id(target.id)).is_active is False
+
+    asyncio.run(scenario())
+
+
+def test_privileged_creation_gate_uses_configured_role_hierarchy(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        permissions,
+        "ROLE_HIERARCHY",
+        {"root": 1, "admin": 3, "user": 4},
+    )
+
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        page = _mount_admin(
+            _FakeSession(temp_db, root_session, root),
+            create_user_email="renumbered-admin@example.com",
+            create_user_password="AttackerChosen!9",
+            create_user_role="admin",
+            create_user_step_up_password="not-the-root-password",
+        )
+
+        await AdminPage._on_create_user_pressed(page)
+
+        assert page.create_user_error == "Current password is incorrect"
+        with pytest.raises(KeyError):
+            await temp_db.get_user_by_email("renumbered-admin@example.com")
+
+    asyncio.run(scenario())
+
+
+def test_create_role_change_clears_hidden_step_up_credentials(
+    temp_db: Persistence,
+):
+    page = _mount_admin(
+        _FakeSession(temp_db),
+        create_user_role="admin",
+        create_user_step_up_password="secret-password",
+        create_user_step_up_2fa="123456",
+    )
+
+    AdminPage._on_create_role_change(
+        page,
+        rio.DropdownChangeEvent(value="user"),
+    )
+
+    assert page.create_user_role == "user"
+    assert page.create_user_step_up_password == ""
+    assert page.create_user_step_up_2fa == ""
+
+
+def test_privileged_creation_rechecks_actor_role_after_step_up(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(
+            session,
+            create_user_email="demotion-race-admin@example.com",
+            create_user_password="AttackerChosen!9",
+            create_user_role="admin",
+            create_user_step_up_password=PASSWORD,
+        )
+
+        async def demote_actor_during_step_up(*args, **kwargs):
+            temp_db.conn.execute(
+                "UPDATE users SET role = ? WHERE id = ?",
+                ("admin", str(root.id)),
+            )
+            temp_db.conn.commit()
+            return StepUpResult(ok=True)
+
+        monkeypatch.setattr(
+            AdminPage,
+            "_verify_actor_step_up",
+            demote_actor_during_step_up,
+        )
+
+        await AdminPage._on_create_user_pressed(page)
+
+        assert "do not have permission" in page.create_user_error
+        with pytest.raises(KeyError):
+            await temp_db.get_user_by_email("demotion-race-admin@example.com")
 
     asyncio.run(scenario())
 
@@ -505,7 +719,17 @@ def test_admin_email_edit_requires_actor_step_up(temp_db: Persistence):
     asyncio.run(scenario())
 
 
-def test_oauth_admin_without_step_up_path_gets_actionable_errors(temp_db: Persistence):
+def test_oauth_admin_without_step_up_path_gets_actionable_errors(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sent: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        admin_page_module,
+        "send_password_reset_email",
+        lambda **kwargs: sent.append(kwargs),
+    )
+
     async def scenario():
         root, root_session = await _create_oauth_root_session(temp_db)
         target = await temp_db.admin_create_user(
@@ -516,6 +740,37 @@ def test_oauth_admin_without_step_up_path_gets_actionable_errors(temp_db: Persis
         )
         session = _FakeSession(temp_db, root_session, root)
         expected = "Set up a password or 2FA to perform this action."
+
+        create_page = _mount_admin(
+            session,
+            create_user_email="oauth-created-admin@example.com",
+            create_user_password=PASSWORD,
+            create_user_role="admin",
+            create_user_is_verified=True,
+        )
+        await AdminPage._on_create_user_pressed(create_page)
+        assert create_page.create_user_error == expected
+        with pytest.raises(KeyError):
+            await temp_db.get_user_by_email("oauth-created-admin@example.com")
+
+        active_page = _mount_admin(
+            session,
+            active_user_identifier=target.email,
+            active_user_is_active=False,
+            active_user_confirmation=f"DEACTIVATE {target.email}",
+        )
+        await AdminPage._on_set_active_pressed(active_page)
+        assert active_page.active_user_error == expected
+        assert (await temp_db.get_user_by_id(target.id)).is_active is True
+
+        reset_page = _mount_admin(
+            session,
+            reset_user_identifier=target.email,
+        )
+        await AdminPage._on_send_reset_pressed(reset_page)
+        assert reset_page.reset_user_error == expected
+        assert sent == []
+        assert _reset_token_count(temp_db, target.id) == 0
 
         role_page = _mount_admin(
             session,
@@ -815,7 +1070,14 @@ def test_admin_page_deactivates_reactivates_and_sends_password_reset(
             active_user_identifier=target.email,
             active_user_is_active=False,
             active_user_confirmation=f"DEACTIVATE {target.email}",
+            active_user_step_up_password="wrong-password",
         )
+        await AdminPage._on_set_active_pressed(deactivate_page)
+        assert deactivate_page.active_user_error == "Current password is incorrect"
+        assert deactivate_page.active_user_step_up_password == ""
+        assert (await temp_db.get_user_by_id(target.id)).is_active is True
+
+        deactivate_page.active_user_step_up_password = PASSWORD
         await AdminPage._on_set_active_pressed(deactivate_page)
         assert deactivate_page.active_user_error == ""
         assert "deactivated" in deactivate_page.active_user_success
@@ -834,7 +1096,14 @@ def test_admin_page_deactivates_reactivates_and_sends_password_reset(
             session,
             active_user_identifier=target.email,
             active_user_is_active=True,
+            active_user_step_up_password="wrong-password",
         )
+        await AdminPage._on_set_active_pressed(reactivate_page)
+        assert reactivate_page.active_user_error == "Current password is incorrect"
+        assert reactivate_page.active_user_step_up_password == ""
+        assert (await temp_db.get_user_by_id(target.id)).is_active is False
+
+        reactivate_page.active_user_step_up_password = PASSWORD
         await AdminPage._on_set_active_pressed(reactivate_page)
         assert reactivate_page.active_user_error == ""
         assert "activated" in reactivate_page.active_user_success
@@ -842,7 +1111,16 @@ def test_admin_page_deactivates_reactivates_and_sends_password_reset(
         reset_page = _mount_admin(
             session,
             reset_user_identifier=target.email,
+            reset_user_step_up_password="wrong-password",
         )
+        await AdminPage._on_send_reset_pressed(reset_page)
+
+        assert reset_page.reset_user_error == "Current password is incorrect"
+        assert reset_page.reset_user_step_up_password == ""
+        assert sent == []
+        assert _reset_token_count(temp_db, target.id) == 0
+
+        reset_page.reset_user_step_up_password = PASSWORD
         await AdminPage._on_send_reset_pressed(reset_page)
 
         assert reset_page.reset_user_error == ""

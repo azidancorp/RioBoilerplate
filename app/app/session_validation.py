@@ -6,7 +6,7 @@ import rio
 
 from app.data_models import AppUser, UserSession, UserSettings
 from app.persistence import Persistence
-from app.persistence_auth import TwoFactorFailure
+from app.persistence_auth import TwoFactorFailure, TwoFactorMethod
 
 
 def detach_auth_attachments(session: rio.Session) -> None:
@@ -76,8 +76,7 @@ async def verify_step_up_credentials(
     Mirrors the verification sequence of ``settings.py`` password-change:
     verify the user's own password, then (if 2FA is enabled) verify their TOTP /
     recovery code via the centralized verifier. Used per-action by sensitive
-    mutations (role changes, admin-authorized user deletion, currency updates);
-    success grants nothing durable — each action re-verifies.
+    admin mutations; success grants nothing durable — each action re-verifies.
 
     OAuth-only admins (``auth_provider != "password"``) cannot satisfy a password
     leg — ``verify_password`` short-circuits to ``False`` for them — so the
@@ -109,10 +108,26 @@ async def verify_step_up_credentials(
             user_session.user_id,
             two_factor_code,
         )
+        if result.method == TwoFactorMethod.NOT_REQUIRED:
+            return StepUpResult(
+                ok=False,
+                error_message="Two-factor authentication changed. Please try again.",
+            )
         if not result.ok:
             if result.failure == TwoFactorFailure.MISSING_CODE:
                 return StepUpResult(ok=False, error_message="2FA code is required")
             return StepUpResult(ok=False, error_message="Invalid 2FA or recovery code.")
         used_recovery_code = result.used_recovery_code
+    else:
+        result = persistence.verify_two_factor_challenge(
+            user_session.user_id,
+            None,
+            consume_recovery_code=False,
+        )
+        if result.method != TwoFactorMethod.NOT_REQUIRED:
+            return StepUpResult(
+                ok=False,
+                error_message="Two-factor authentication changed. Please try again.",
+            )
 
     return StepUpResult(ok=True, used_recovery_code=used_recovery_code)

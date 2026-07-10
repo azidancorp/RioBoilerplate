@@ -3,7 +3,8 @@
 Covers the ``verify_step_up_credentials`` helper, the admin role-change
 prompt + dialog flow (which always requires the acting admin's own
 credentials), the step-up rate limit, and the per-action flows for admin
-deletion and currency updates.
+deletion and currency updates. Admin lifecycle tests cover privileged creation,
+account-status changes, password-reset issuance, and email changes.
 """
 
 import asyncio
@@ -22,6 +23,7 @@ from app.session_validation import verify_step_up_credentials
 from tests.test_admin_user_lifecycle import (
     PASSWORD,
     _FakeSession,
+    _create_oauth_root_session,
     _create_root_session,
     _create_user,
     _mount_admin,
@@ -160,6 +162,61 @@ def test_verify_step_up_credentials_consumes_recovery_code(temp_db: Persistence)
             temp_db, root_session, root, password=PASSWORD, two_factor_code=codes[0]
         )
         assert reuse.ok is False
+
+    asyncio.run(scenario())
+
+
+def test_verify_step_up_credentials_rejects_removed_oauth_factor(
+    temp_db: Persistence,
+):
+    async def scenario():
+        root, root_session = await _create_oauth_root_session(temp_db)
+        secret = pyotp.random_base32()
+        temp_db.set_2fa_secret(root.id, secret)
+        root = await temp_db.get_user_by_id(root.id)
+        assert root.two_factor_enabled is True
+
+        assert temp_db.disable_two_factor(root.id, expected_secret=secret) is True
+        assert (await temp_db.get_user_by_id(root.id)).two_factor_enabled is False
+
+        result = await verify_step_up_credentials(
+            temp_db,
+            root_session,
+            root,
+            password="",
+            two_factor_code=None,
+        )
+
+        assert result.ok is False
+        assert result.error_message == (
+            "Two-factor authentication changed. Please try again."
+        )
+
+    asyncio.run(scenario())
+
+
+def test_verify_step_up_credentials_rejects_new_password_factor(
+    temp_db: Persistence,
+):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        assert root.two_factor_enabled is False
+
+        temp_db.set_2fa_secret(root.id, pyotp.random_base32())
+        assert (await temp_db.get_user_by_id(root.id)).two_factor_enabled is True
+
+        result = await verify_step_up_credentials(
+            temp_db,
+            root_session,
+            root,
+            password=PASSWORD,
+            two_factor_code=None,
+        )
+
+        assert result.ok is False
+        assert result.error_message == (
+            "Two-factor authentication changed. Please try again."
+        )
 
     asyncio.run(scenario())
 

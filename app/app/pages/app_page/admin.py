@@ -11,7 +11,13 @@ import pandas as pd
 import rio
 from app.persistence import Persistence
 from app.data_models import AppUser, UserSession
-from app.permissions import can_manage_role, check_access, get_manageable_roles, get_default_role
+from app.permissions import (
+    can_manage_role,
+    check_access,
+    get_default_role,
+    get_manageable_roles,
+    get_role_level,
+)
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.session_validation import (
@@ -27,6 +33,18 @@ from app.components.center_component import CenterComponent
 from app.components.responsive import ResponsiveComponent, WIDTH_FULL
 
 logger = logging.getLogger(__name__)
+RECOVERY_CODE_USED_MESSAGE = (
+    "A recovery code was used. Generate a new set to stay protected."
+)
+
+
+def _with_recovery_code_warning(message: str, used_recovery_code: bool) -> str:
+    if not used_recovery_code:
+        return message
+    if not message:
+        return RECOVERY_CODE_USED_MESSAGE
+    return f"{message} {RECOVERY_CODE_USED_MESSAGE}"
+
 
 @rio.page(
     name="AdminPage",
@@ -56,6 +74,8 @@ class AdminPage(ResponsiveComponent):
     create_user_password: str = ""
     create_user_role: str = field(default_factory=get_default_role)
     create_user_is_verified: bool = False
+    create_user_step_up_password: str = ""
+    create_user_step_up_2fa: str = ""
     create_user_error: str = ""
     create_user_success: str = ""
 
@@ -73,11 +93,15 @@ class AdminPage(ResponsiveComponent):
     active_user_identifier: str = ""
     active_user_is_active: bool = True
     active_user_confirmation: str = ""
+    active_user_step_up_password: str = ""
+    active_user_step_up_2fa: str = ""
     active_user_error: str = ""
     active_user_success: str = ""
 
     # Password reset fields
     reset_user_identifier: str = ""
+    reset_user_step_up_password: str = ""
+    reset_user_step_up_2fa: str = ""
     reset_user_error: str = ""
     reset_user_success: str = ""
 
@@ -201,6 +225,18 @@ class AdminPage(ResponsiveComponent):
         self.delete_user_step_up_password = ""
         self.delete_user_step_up_2fa = ""
 
+    def _clear_create_step_up_fields(self) -> None:
+        self.create_user_step_up_password = ""
+        self.create_user_step_up_2fa = ""
+
+    def _clear_active_step_up_fields(self) -> None:
+        self.active_user_step_up_password = ""
+        self.active_user_step_up_2fa = ""
+
+    def _clear_reset_step_up_fields(self) -> None:
+        self.reset_user_step_up_password = ""
+        self.reset_user_step_up_2fa = ""
+
     def _clear_currency_step_up_fields(self) -> None:
         self.currency_step_up_password = ""
         self.currency_step_up_2fa = ""
@@ -208,6 +244,15 @@ class AdminPage(ResponsiveComponent):
     def _clear_edit_step_up_fields(self) -> None:
         self.edit_user_step_up_password = ""
         self.edit_user_step_up_2fa = ""
+
+    def _create_user_step_up_required(self, role: str | None = None) -> bool:
+        candidate_role = self.create_user_role if role is None else role
+        try:
+            return get_role_level((candidate_role or "").strip()) < get_role_level(
+                get_default_role()
+            )
+        except ValueError:
+            return False
 
     def _edit_email_step_up_may_be_required(self) -> bool:
         new_email = (self.edit_user_email or "").strip()
@@ -302,27 +347,35 @@ class AdminPage(ResponsiveComponent):
 
     async def _on_create_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         if not self._refresh_current_user_authorization():
+            self._clear_create_step_up_fields()
             return
 
         if not self.current_user:
             self.create_user_error = "You must be logged in to perform this action"
             self.create_user_success = ""
+            self._clear_create_step_up_fields()
             self.force_refresh()
             return
 
         email = (self.create_user_email or "").strip()
         password = self.create_user_password or ""
         role = (self.create_user_role or "").strip()
+        username = (self.create_user_username or "").strip() or None
+        full_name = (self.create_user_full_name or "").strip() or None
+        is_verified = bool(self.create_user_is_verified)
+        step_up_required = self._create_user_step_up_required(role)
 
         if not email:
             self.create_user_error = "Please enter an email"
             self.create_user_success = ""
+            self._clear_create_step_up_fields()
             self.force_refresh()
             return
 
         if len(password.strip()) < 8:
             self.create_user_error = "Password must be at least 8 characters"
             self.create_user_success = ""
+            self._clear_create_step_up_fields()
             self.force_refresh()
             return
 
@@ -336,10 +389,21 @@ class AdminPage(ResponsiveComponent):
                 f"You do not have permission to create users with role: {role}"
             )
             self.create_user_success = ""
+            self._clear_create_step_up_fields()
             self.force_refresh()
             return
 
         persistence = self.session[Persistence]
+        unavailable_message = (
+            self._step_up_unavailable_message() if step_up_required else None
+        )
+        if unavailable_message:
+            self.create_user_error = unavailable_message
+            self.create_user_success = ""
+            self._clear_create_step_up_fields()
+            self.force_refresh()
+            return
+
         decision = self._check_sensitive_limit(
             persistence,
             "admin_create_user",
@@ -351,8 +415,46 @@ class AdminPage(ResponsiveComponent):
                 decision.retry_after_seconds,
             )
             self.create_user_success = ""
+            self._clear_create_step_up_fields()
             self.force_refresh()
             return
+
+        used_recovery_code = False
+        if step_up_required:
+            try:
+                result = await self._verify_actor_step_up(
+                    persistence,
+                    password=self.create_user_step_up_password,
+                    two_factor_code=self.create_user_step_up_2fa or None,
+                )
+            finally:
+                self._clear_create_step_up_fields()
+            if not result.ok:
+                self.create_user_error = result.error_message or "Verification failed."
+                self.create_user_success = ""
+                self.force_refresh()
+                return
+            used_recovery_code = result.used_recovery_code
+
+            if not self._refresh_current_user_authorization():
+                return
+            try:
+                can_create_role = bool(
+                    self.current_user
+                    and can_manage_role(self.current_user.role, role)
+                )
+            except ValueError:
+                can_create_role = False
+            if not can_create_role:
+                self.create_user_error = _with_recovery_code_warning(
+                    f"You do not have permission to create users with role: {role}",
+                    used_recovery_code,
+                )
+                self.create_user_success = ""
+                self.force_refresh()
+                return
+        else:
+            self._clear_create_step_up_fields()
 
         try:
             created = await persistence.admin_create_user(
@@ -360,26 +462,34 @@ class AdminPage(ResponsiveComponent):
                 password=password,
                 role=role,
                 actor=self.current_user,
-                username=(self.create_user_username or "").strip() or None,
-                full_name=(self.create_user_full_name or "").strip() or None,
-                is_verified=self.create_user_is_verified,
+                username=username,
+                full_name=full_name,
+                is_verified=is_verified,
                 client_ip=self._client_ip(),
             )
         except Exception as exc:
-            self.create_user_error = self._admin_error_message("creating user", exc)
+            self.create_user_error = _with_recovery_code_warning(
+                self._admin_error_message("creating user", exc),
+                used_recovery_code,
+            )
             self.create_user_success = ""
+            self._clear_create_step_up_fields()
             self.force_refresh()
             return
 
         self._clear_rate_limit(persistence, "admin_create_user", email)
         self.create_user_success = f"Created user {created.email}"
-        self.create_user_error = ""
+        self.create_user_error = _with_recovery_code_warning(
+            "",
+            used_recovery_code,
+        )
         self.create_user_email = ""
         self.create_user_username = ""
         self.create_user_full_name = ""
         self.create_user_password = ""
         self.create_user_role = get_default_role()
         self.create_user_is_verified = False
+        self._clear_create_step_up_fields()
         await self._load_user_data()
         self.force_refresh()
 
@@ -501,12 +611,16 @@ class AdminPage(ResponsiveComponent):
 
     async def _on_set_active_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         if not self._refresh_current_user_authorization():
+            self._clear_active_step_up_fields()
             return
 
         identifier = (self.active_user_identifier or "").strip()
+        is_active = bool(self.active_user_is_active)
+        confirmation = (self.active_user_confirmation or "").strip()
         if not identifier:
             self.active_user_error = "Please enter a user email, username, or ID"
             self.active_user_success = ""
+            self._clear_active_step_up_fields()
             self.force_refresh()
             return
 
@@ -515,6 +629,7 @@ class AdminPage(ResponsiveComponent):
         except KeyError:
             self.active_user_error = f"User not found: {identifier}"
             self.active_user_success = ""
+            self._clear_active_step_up_fields()
             self.force_refresh()
             return
 
@@ -523,20 +638,30 @@ class AdminPage(ResponsiveComponent):
                 f"You do not have permission to update users with role: {target_user.role}"
             )
             self.active_user_success = ""
+            self._clear_active_step_up_fields()
             self.force_refresh()
             return
 
-        if not self.active_user_is_active:
+        if not is_active:
             expected_confirmation = f"DEACTIVATE {target_user.email}"
-            if self.active_user_confirmation.strip() != expected_confirmation:
+            if confirmation != expected_confirmation:
                 self.active_user_error = (
                     f'Type "{expected_confirmation}" to confirm deactivation.'
                 )
                 self.active_user_success = ""
+                self._clear_active_step_up_fields()
                 self.force_refresh()
                 return
 
         persistence = self.session[Persistence]
+        unavailable_message = self._step_up_unavailable_message()
+        if unavailable_message:
+            self.active_user_error = unavailable_message
+            self.active_user_success = ""
+            self._clear_active_step_up_fields()
+            self.force_refresh()
+            return
+
         decision = self._check_sensitive_limit(
             persistence,
             "admin_set_user_active",
@@ -548,43 +673,89 @@ class AdminPage(ResponsiveComponent):
                 decision.retry_after_seconds,
             )
             self.active_user_success = ""
+            self._clear_active_step_up_fields()
+            self.force_refresh()
+            return
+
+        try:
+            result = await self._verify_actor_step_up(
+                persistence,
+                password=self.active_user_step_up_password,
+                two_factor_code=self.active_user_step_up_2fa or None,
+            )
+        finally:
+            self._clear_active_step_up_fields()
+        if not result.ok:
+            self.active_user_error = result.error_message or "Verification failed."
+            self.active_user_success = ""
+            self.force_refresh()
+            return
+
+        if not self._refresh_current_user_authorization():
+            return
+        try:
+            target_user = await persistence.get_user_by_id(target_user.id)
+        except KeyError:
+            self.active_user_error = _with_recovery_code_warning(
+                f"User not found: {identifier}",
+                result.used_recovery_code,
+            )
+            self.active_user_success = ""
+            self.force_refresh()
+            return
+        if not self._can_manage_user(target_user):
+            self.active_user_error = _with_recovery_code_warning(
+                f"You do not have permission to update users with role: {target_user.role}",
+                result.used_recovery_code,
+            )
+            self.active_user_success = ""
             self.force_refresh()
             return
 
         try:
             updated = await persistence.admin_set_user_active(
                 target_user.id,
-                self.active_user_is_active,
+                is_active,
                 actor=self.current_user,
                 client_ip=self._client_ip(),
             )
         except Exception as exc:
-            self.active_user_error = self._admin_error_message(
-                "updating account status",
-                exc,
+            self.active_user_error = _with_recovery_code_warning(
+                self._admin_error_message(
+                    "updating account status",
+                    exc,
+                ),
+                result.used_recovery_code,
             )
             self.active_user_success = ""
+            self._clear_active_step_up_fields()
             self.force_refresh()
             return
 
         self._clear_rate_limit(persistence, "admin_set_user_active", str(target_user.id))
         status_text = "activated" if updated.is_active else "deactivated"
         self.active_user_success = f"User {updated.email} has been {status_text}"
-        self.active_user_error = ""
+        self.active_user_error = _with_recovery_code_warning(
+            "",
+            result.used_recovery_code,
+        )
         self.active_user_identifier = ""
         self.active_user_confirmation = ""
         self.active_user_is_active = True
+        self._clear_active_step_up_fields()
         await self._load_user_data()
         self.force_refresh()
 
     async def _on_send_reset_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         if not self._refresh_current_user_authorization():
+            self._clear_reset_step_up_fields()
             return
 
         identifier = (self.reset_user_identifier or "").strip()
         if not identifier:
             self.reset_user_error = "Please enter a user email, username, or ID"
             self.reset_user_success = ""
+            self._clear_reset_step_up_fields()
             self.force_refresh()
             return
 
@@ -593,6 +764,7 @@ class AdminPage(ResponsiveComponent):
         except KeyError:
             self.reset_user_error = f"User not found: {identifier}"
             self.reset_user_success = ""
+            self._clear_reset_step_up_fields()
             self.force_refresh()
             return
 
@@ -601,16 +773,26 @@ class AdminPage(ResponsiveComponent):
                 f"You do not have permission to reset users with role: {target_user.role}"
             )
             self.reset_user_success = ""
+            self._clear_reset_step_up_fields()
             self.force_refresh()
             return
 
         if not target_user.is_active:
             self.reset_user_error = "Reactivate this user before sending a password reset"
             self.reset_user_success = ""
+            self._clear_reset_step_up_fields()
             self.force_refresh()
             return
 
         persistence = self.session[Persistence]
+        unavailable_message = self._step_up_unavailable_message()
+        if unavailable_message:
+            self.reset_user_error = unavailable_message
+            self.reset_user_success = ""
+            self._clear_reset_step_up_fields()
+            self.force_refresh()
+            return
+
         decision = self._check_sensitive_limit(
             persistence,
             "admin_send_password_reset",
@@ -620,6 +802,50 @@ class AdminPage(ResponsiveComponent):
             self.reset_user_error = rate_limited_message(
                 "Too many password reset attempts.",
                 decision.retry_after_seconds,
+            )
+            self.reset_user_success = ""
+            self._clear_reset_step_up_fields()
+            self.force_refresh()
+            return
+
+        try:
+            result = await self._verify_actor_step_up(
+                persistence,
+                password=self.reset_user_step_up_password,
+                two_factor_code=self.reset_user_step_up_2fa or None,
+            )
+        finally:
+            self._clear_reset_step_up_fields()
+        if not result.ok:
+            self.reset_user_error = result.error_message or "Verification failed."
+            self.reset_user_success = ""
+            self.force_refresh()
+            return
+
+        if not self._refresh_current_user_authorization():
+            return
+        try:
+            target_user = await persistence.get_user_by_id(target_user.id)
+        except KeyError:
+            self.reset_user_error = _with_recovery_code_warning(
+                f"User not found: {identifier}",
+                result.used_recovery_code,
+            )
+            self.reset_user_success = ""
+            self.force_refresh()
+            return
+        if not self._can_manage_user(target_user):
+            self.reset_user_error = _with_recovery_code_warning(
+                f"You do not have permission to reset users with role: {target_user.role}",
+                result.used_recovery_code,
+            )
+            self.reset_user_success = ""
+            self.force_refresh()
+            return
+        if not target_user.is_active:
+            self.reset_user_error = _with_recovery_code_warning(
+                "Reactivate this user before sending a password reset",
+                result.used_recovery_code,
             )
             self.reset_user_success = ""
             self.force_refresh()
@@ -637,11 +863,15 @@ class AdminPage(ResponsiveComponent):
                 valid_until=reset_token.valid_until,
             )
         except Exception as exc:
-            self.reset_user_error = self._admin_error_message(
-                "sending password reset",
-                exc,
+            self.reset_user_error = _with_recovery_code_warning(
+                self._admin_error_message(
+                    "sending password reset",
+                    exc,
+                ),
+                result.used_recovery_code,
             )
             self.reset_user_success = ""
+            self._clear_reset_step_up_fields()
             self.force_refresh()
             return
 
@@ -651,8 +881,12 @@ class AdminPage(ResponsiveComponent):
             str(target_user.id),
         )
         self.reset_user_success = f"Password reset email sent to {target_user.email}"
-        self.reset_user_error = ""
+        self.reset_user_error = _with_recovery_code_warning(
+            "",
+            result.used_recovery_code,
+        )
         self.reset_user_identifier = ""
+        self._clear_reset_step_up_fields()
         self.force_refresh()
 
     async def _load_user_data(self) -> None:
@@ -870,9 +1104,7 @@ class AdminPage(ResponsiveComponent):
         # it resets change_role_error on the success path. On a failed update we
         # leave its error message in place rather than clobber it.
         if result.used_recovery_code and updated:
-            self.change_role_error = (
-                "A recovery code was used. Generate a new set to stay protected."
-            )
+            self.change_role_error = RECOVERY_CODE_USED_MESSAGE
 
         self.force_refresh()
 
@@ -1163,6 +1395,11 @@ class AdminPage(ResponsiveComponent):
         self.create_user_is_verified = event.is_on
         self.force_refresh()
 
+    def _on_create_role_change(self, event: rio.DropdownChangeEvent) -> None:
+        self.create_user_role = event.value
+        self._clear_create_step_up_fields()
+        self.force_refresh()
+
     def _on_active_status_toggle(self, event: rio.SwitchChangeEvent) -> None:
         self.active_user_is_active = event.is_on
         self.force_refresh()
@@ -1185,6 +1422,58 @@ class AdminPage(ResponsiveComponent):
             spacing=self.flow_spacing,
             proportions=proportions,
         )
+
+    def _build_inline_step_up_action_inputs(
+        self,
+        *,
+        password_binding: t.Any,
+        two_factor_binding: t.Any,
+        on_submit: t.Callable[..., t.Any],
+        button_label: str,
+        show_credentials: bool,
+        show_unavailable_message: bool,
+    ) -> list[rio.Component]:
+        inputs: list[rio.Component] = []
+        unavailable_message = self._step_up_unavailable_message()
+
+        if show_credentials:
+            if unavailable_message:
+                if show_unavailable_message:
+                    inputs.append(
+                        rio.Banner(text=unavailable_message, style="danger")
+                    )
+            elif self.current_user and self.current_user.auth_provider == "password":
+                inputs.append(
+                    rio.TextInput(
+                        label="Your Password",
+                        text=password_binding,
+                        is_secret=True,
+                        on_confirm=on_submit,
+                    )
+                )
+
+            if (
+                not unavailable_message
+                and self.current_user
+                and self.current_user.two_factor_enabled
+            ):
+                inputs.append(
+                    rio.TextInput(
+                        label="2FA or Recovery Code",
+                        text=two_factor_binding,
+                        is_secret=True,
+                        on_confirm=on_submit,
+                    )
+                )
+
+        inputs.append(
+            rio.Button(
+                button_label,
+                on_press=on_submit,
+                shape="rounded",
+            )
+        )
+        return inputs
 
     def _build_step_up_dialog(self) -> rio.Component:
         """Inline re-auth prompt shown before a sensitive role change.
@@ -1262,6 +1551,37 @@ class AdminPage(ResponsiveComponent):
         delete_step_up_active = bool(
             (self.delete_user_identifier or "").strip()
             or (self.delete_user_confirmation or "").strip()
+        )
+        create_step_up_required = self._create_user_step_up_required()
+        active_step_up_active = bool(
+            (self.active_user_identifier or "").strip()
+            or (self.active_user_confirmation or "").strip()
+        )
+        reset_step_up_active = bool((self.reset_user_identifier or "").strip())
+
+        create_step_up_inputs = self._build_inline_step_up_action_inputs(
+            password_binding=self.bind().create_user_step_up_password,
+            two_factor_binding=self.bind().create_user_step_up_2fa,
+            on_submit=self._on_create_user_pressed,
+            button_label="Create User",
+            show_credentials=create_step_up_required,
+            show_unavailable_message=create_step_up_required,
+        )
+        active_step_up_inputs = self._build_inline_step_up_action_inputs(
+            password_binding=self.bind().active_user_step_up_password,
+            two_factor_binding=self.bind().active_user_step_up_2fa,
+            on_submit=self._on_set_active_pressed,
+            button_label="Apply Status",
+            show_credentials=True,
+            show_unavailable_message=active_step_up_active,
+        )
+        reset_step_up_inputs = self._build_inline_step_up_action_inputs(
+            password_binding=self.bind().reset_user_step_up_password,
+            two_factor_binding=self.bind().reset_user_step_up_2fa,
+            on_submit=self._on_send_reset_pressed,
+            button_label="Send Reset Email",
+            show_credentials=True,
+            show_unavailable_message=reset_step_up_active,
         )
 
         edit_step_up_inputs: list[rio.Component] = []
@@ -1367,6 +1687,18 @@ class AdminPage(ResponsiveComponent):
             if currency_step_up_inputs
             else rio.Spacer(min_height=0, grow_x=False, grow_y=False)
         )
+        create_step_up_row = self._responsive_form_layout(
+            *create_step_up_inputs,
+            proportions=[1] * len(create_step_up_inputs),
+        )
+        active_step_up_row = self._responsive_form_layout(
+            *active_step_up_inputs,
+            proportions=[1] * len(active_step_up_inputs),
+        )
+        reset_step_up_row = self._responsive_form_layout(
+            *reset_step_up_inputs,
+            proportions=[1] * len(reset_step_up_inputs),
+        )
 
         return CenterComponent(
             rio.Column(
@@ -1437,7 +1769,8 @@ class AdminPage(ResponsiveComponent):
                         role: role
                         for role in get_manageable_roles(self.current_user.role)
                     },
-                    selected_value=self.bind().create_user_role,
+                    selected_value=self.create_user_role,
+                    on_change=self._on_create_role_change,
                 ),
                 rio.Row(
                     rio.Text("Verified"),
@@ -1447,13 +1780,10 @@ class AdminPage(ResponsiveComponent):
                     ),
                     spacing=1,
                 ),
-                rio.Button(
-                    "Create User",
-                    on_press=self._on_create_user_pressed,
-                    shape="rounded",
-                ),
-                proportions=[1, 1, 1, 1],
+                proportions=[1, 1, 1],
             ),
+
+            create_step_up_row,
 
             rio.Banner(
                 text=self.create_user_success,
@@ -1540,12 +1870,7 @@ class AdminPage(ResponsiveComponent):
                     ),
                     spacing=1,
                 ),
-                rio.Button(
-                    "Apply Status",
-                    on_press=self._on_set_active_pressed,
-                    shape="rounded",
-                ),
-                proportions=[1, 1, 1],
+                proportions=[2, 1],
             ),
 
             rio.TextInput(
@@ -1557,6 +1882,8 @@ class AdminPage(ResponsiveComponent):
                 text=self.bind().active_user_confirmation,
                 on_confirm=self._on_set_active_pressed,
             ) if not self.active_user_is_active else rio.Spacer(min_height=0, grow_x=False, grow_y=False),
+
+            active_step_up_row,
 
             rio.Banner(
                 text=self.active_user_success,
@@ -1583,13 +1910,10 @@ class AdminPage(ResponsiveComponent):
                     text=self.bind().reset_user_identifier,
                     on_confirm=self._on_send_reset_pressed,
                 ),
-                rio.Button(
-                    "Send Reset Email",
-                    on_press=self._on_send_reset_pressed,
-                    shape="rounded",
-                ),
-                proportions=[2, 1],
+                proportions=[1],
             ),
+
+            reset_step_up_row,
 
             rio.Banner(
                 text=self.reset_user_success,

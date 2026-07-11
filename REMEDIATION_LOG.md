@@ -358,3 +358,20 @@ decision not to change it.
 - Added both-direction and exact-boundary tests plus same-side no-refresh cases.
 - Verification: 7 responsive policy/behavior tests and all 16 page-smoke tests
   passed (23 total).
+
+### 2026-07-11 — Admin UI reacts to locked-write authorization loss
+
+- When a persistence mutation rejects an administrator at the final locked
+  authorization check, the Admin page now immediately refreshes the actor's
+  real session and role instead of leaving stale controls visible with only an
+  error banner.
+- A revoked/expired session is detached, its HTTP-only auth token is cleared,
+  and the browser returns home. A demoted actor keeps the still-valid session
+  with its new role but loses Admin state and is also sent home.
+- Ordinary target-level permission denials still leave a currently authorized
+  administrator on the page with the friendly error message.
+- Added deterministic tests that change authorization after the page precheck
+  but immediately before the persistence writer lock, proving no user/audit
+  write and the correct revoke-versus-demotion cleanup.
+- Verification: 40 admin lifecycle/authorization tests and all 16 page-smoke
+  tests passed.

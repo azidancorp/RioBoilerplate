@@ -354,6 +354,82 @@ def test_admin_page_can_create_lower_privilege_user_and_clear_limit(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("authorization_change", ["demote", "revoke"])
+def test_admin_page_reacts_to_transaction_time_authorization_loss(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+    authorization_change: str,
+):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(
+            session,
+            create_user_email=f"late-{authorization_change}@example.com",
+            create_user_password=PASSWORD,
+            create_user_role="user",
+        )
+        original_admin_create_user = temp_db.admin_create_user
+
+        async def lose_authorization_before_locked_write(**kwargs):
+            _race_admin_authorization(
+                temp_db,
+                actor_user_id=root.id,
+                authorization_change=authorization_change,
+            )
+            return await original_admin_create_user(**kwargs)
+
+        monkeypatch.setattr(
+            temp_db,
+            "admin_create_user",
+            lose_authorization_before_locked_write,
+        )
+
+        await AdminPage._on_create_user_pressed(page)
+
+        with pytest.raises(KeyError):
+            await temp_db.get_user_by_email(
+                f"late-{authorization_change}@example.com"
+            )
+        assert temp_db.list_admin_actions(action="user_create") == []
+        assert page.current_user is None
+        assert page.users == []
+        assert session.navigation_target == "/"
+
+        if authorization_change == "revoke":
+            assert UserSession not in session._attachments
+            assert AppUser not in session._attachments
+            assert session[UserSettings].auth_token == ""
+        else:
+            assert session[UserSession].role == "user"
+            assert session[AppUser].role == "user"
+            assert session[UserSettings].auth_token == root_session.id
+
+    asyncio.run(scenario())
+
+
+def test_admin_permission_error_keeps_a_still_authorized_actor_on_page(
+    temp_db: Persistence,
+):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(session)
+        assert page._refresh_current_user_authorization() is True
+
+        message = page._admin_error_message(
+            "managing a peer",
+            PermissionError("You cannot manage that user."),
+        )
+
+        assert message == "You cannot manage that user."
+        assert page.current_user is not None
+        assert page.current_user.role == "root"
+        assert session.navigation_target is None
+
+    asyncio.run(scenario())
+
+
 def test_admin_creation_requires_weak_password_acknowledgement_when_allowed(
     temp_db: Persistence,
     monkeypatch,

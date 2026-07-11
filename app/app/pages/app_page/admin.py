@@ -354,6 +354,7 @@ class AdminPage(ResponsiveComponent):
 
     def _admin_error_message(self, action: str, exc: Exception) -> str:
         if isinstance(exc, PermissionError):
+            self._refresh_current_user_authorization()
             return str(exc)
         if isinstance(exc, KeyError):
             return "The user no longer exists. Refresh the page and try again."

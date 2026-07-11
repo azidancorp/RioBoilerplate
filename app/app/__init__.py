@@ -67,7 +67,10 @@ async def on_session_start(rio_session: rio.Session) -> None:
 
     # None was found - this auth token is invalid, expired, or inactive.
     except KeyError:
-        pass
+        # Persist the cleared value so a bad HTTP-only cookie is not retried on
+        # every connection.
+        user_settings.auth_token = ""
+        rio_session.attach(user_settings)
 
     # A session was found. Welcome back!
     else:

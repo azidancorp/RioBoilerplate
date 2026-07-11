@@ -189,6 +189,7 @@ def test_session_start_rejects_inactive_stored_auth_token(temp_db: Persistence):
 
         assert UserSession not in fresh_session.attachments
         assert AppUser not in fresh_session.attachments
+        assert fresh_session[UserSettings].auth_token == ""
 
     asyncio.run(scenario())
 
@@ -249,6 +250,7 @@ def test_session_start_attaches_nothing_when_atomic_renewal_fails(
         assert renewal_attempts == [(created_session.id, timedelta(days=7))]
         assert UserSession not in fresh_session.attachments
         assert AppUser not in fresh_session.attachments
+        assert fresh_session[UserSettings].auth_token == ""
 
     asyncio.run(scenario())
 

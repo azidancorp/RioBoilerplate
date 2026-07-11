@@ -18,7 +18,7 @@ from app.currency import (
 @dataclass
 class UserSettings(rio.UserSettings):
     """
-    Model for data stored client-side for each user.
+    Model for data persisted on the user's device by Rio.
     """
 
     # The (possibly expired) authentication token for this user. If this matches
@@ -27,7 +27,8 @@ class UserSettings(rio.UserSettings):
     #
     # This prevents users from having to log-in again each time the page is
     # accessed.
-    auth_token: str
+    # Keep the bearer credential out of JavaScript-readable local storage.
+    auth_token: rio.HttpOnly[str]
     
     # Whether 2FA is enabled for this user
     two_factor_enabled: bool = False

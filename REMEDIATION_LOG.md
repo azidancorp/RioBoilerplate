@@ -53,7 +53,7 @@ decision not to change it.
 | Session lifetime | API bearer authentication accepts a session beyond its absolute maximum lifetime. | done — `Enforce absolute session lifetime everywhere` |
 | Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | queued |
 | OAuth account deletion | An OAuth-only user cannot complete self-service account deletion. | queued |
-| Browser token storage | The bearer token is exposed to normal browser-side code instead of using Rio's HTTP-only storage marker. | queued |
+| Browser token storage | The bearer token is exposed to normal browser-side code instead of using Rio's HTTP-only storage marker. | done — `Store browser sessions in HTTP-only cookies` |
 | OAuth handoffs | A deactivation race can leave a handoff usable after an account is reactivated. | queued |
 | Verification tokens | Concurrent email-verification requests can leave more than one live token. | queued |
 | Transaction ownership | Some persistence helpers can accidentally commit a caller's unrelated pending work. | queued |
@@ -116,3 +116,18 @@ decision not to change it.
   mutation that must leave the target balance unchanged.
 - Verification: `pytest app/tests/test_live_session_revalidation.py
   app/tests/test_currency_api.py -q`.
+
+### 2026-07-11 — HTTP-only browser session token
+
+- Marked the persisted bearer token with Rio's `HttpOnly` annotation, which
+  moves it from JavaScript-readable local storage into an HTTP-only cookie.
+  The non-sensitive 2FA display preference remains ordinary local storage.
+- Invalid/expired stored tokens are now cleared and reattached immediately, so
+  the browser does not retry a bad cookie on every connection.
+- Because there is no production usage, no migration is included: an old
+  local-storage-only token is deliberately ignored and the user signs in once
+  to receive the new cookie.
+- Added framework-level tests proving cookie precedence, local-storage
+  rejection, and stale-token clearing. A live browser was not needed.
+- Verification: `pytest app/tests/test_user_settings_storage.py
+  app/tests/test_live_session_revalidation.py -q`.

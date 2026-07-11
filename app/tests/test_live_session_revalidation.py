@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import importlib.util
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -416,5 +417,60 @@ def test_session_renewal_rejects_elapsed_absolute_deadline(
         assert _session_row_count(temp_db, created_session.id) == 0
         with pytest.raises(KeyError):
             await temp_db.get_session_by_auth_token(created_session.id)
+
+    asyncio.run(scenario())
+
+
+def test_session_renewal_rejects_caller_owned_transaction(
+    temp_db: Persistence,
+):
+    async def scenario():
+        user, created_session = await _create_root_session(temp_db)
+        original_valid_until = created_session.valid_until
+        cursor = temp_db._get_cursor()
+
+        # Simulate an unrelated caller-owned transaction with a pending write.
+        temp_db.conn.execute("BEGIN")
+        cursor.execute(
+            "UPDATE users SET username = ? WHERE id = ?",
+            ("root-renamed", str(user.id)),
+        )
+
+        try:
+            with pytest.raises(
+                RuntimeError,
+                match="Session renewal cannot run inside an existing transaction",
+            ):
+                await temp_db.get_and_extend_valid_session_by_auth_token(
+                    created_session.id,
+                    valid_for=timedelta(days=7),
+                )
+
+            # The caller's transaction and its pending write must survive.
+            assert temp_db.conn.in_transaction
+            cursor.execute(
+                "SELECT username FROM users WHERE id = ?",
+                (str(user.id),),
+            )
+            assert cursor.fetchone()[0] == "root-renamed"
+
+            # A separate connection must still see the committed value, proving
+            # the caller's write was neither committed nor replaced.
+            with sqlite3.connect(temp_db.db_path) as verifier:
+                assert verifier.execute(
+                    "SELECT username FROM users WHERE id = ?",
+                    (str(user.id),),
+                ).fetchone() == ("root",)
+
+            # Check before the caller rolls back so an in-transaction renewal
+            # cannot be hidden by the cleanup below.
+            session, _ = temp_db.get_valid_session_by_auth_token(created_session.id)
+            assert session.valid_until == original_valid_until
+        finally:
+            temp_db.conn.rollback()
+
+        # The session itself must be untouched by the rejected renewal.
+        session, _ = temp_db.get_valid_session_by_auth_token(created_session.id)
+        assert session.valid_until == original_valid_until
 
     asyncio.run(scenario())

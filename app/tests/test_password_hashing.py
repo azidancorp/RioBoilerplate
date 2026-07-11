@@ -448,6 +448,71 @@ def test_legacy_pbkdf2_user_can_be_upgraded_after_successful_verification(tmp_pa
     asyncio.run(scenario())
 
 
+def test_password_hash_upgrade_rejects_caller_owned_transaction(tmp_path: Path):
+    async def scenario():
+        persistence = Persistence(db_path=tmp_path / "nested-upgrade.db")
+        try:
+            legacy_user = _legacy_user(
+                "nested-upgrade@example.com",
+                "LegacyPass!123",
+            )
+            legacy_user.username = "committed-user"
+            await persistence._create_user_unchecked(legacy_user)
+            auth_state_before = persistence.conn.execute(
+                """
+                SELECT password_hash, password_salt, password_scheme
+                FROM users
+                WHERE id = ?
+                """,
+                (str(legacy_user.id),),
+            ).fetchone()
+
+            persistence.conn.execute(
+                "UPDATE users SET username = ? WHERE id = ?",
+                ("caller-pending", str(legacy_user.id)),
+            )
+
+            try:
+                with pytest.raises(
+                    RuntimeError,
+                    match="Password hash upgrade cannot run inside an existing transaction",
+                ):
+                    await persistence.upgrade_user_password_hash(
+                        legacy_user.id,
+                        "LegacyPass!123",
+                    )
+
+                assert persistence.conn.in_transaction is True
+                assert persistence.conn.execute(
+                    "SELECT username FROM users WHERE id = ?",
+                    (str(legacy_user.id),),
+                ).fetchone() == ("caller-pending",)
+                with sqlite3.connect(persistence.db_path) as verifier:
+                    assert verifier.execute(
+                        "SELECT username FROM users WHERE id = ?",
+                        (str(legacy_user.id),),
+                    ).fetchone() == ("committed-user",)
+
+                assert persistence.conn.execute(
+                    """
+                    SELECT password_hash, password_salt, password_scheme
+                    FROM users
+                    WHERE id = ?
+                    """,
+                    (str(legacy_user.id),),
+                ).fetchone() == auth_state_before
+            finally:
+                persistence.conn.rollback()
+
+            stored = await persistence.get_user_by_id(legacy_user.id)
+            assert stored.password_scheme == password_utils.HASH_SCHEME_PBKDF2_SHA256
+            assert stored.verify_password_result("LegacyPass!123").needs_rehash
+        finally:
+            persistence.close()
+
+    asyncio.run(scenario())
+
+
 def test_legacy_pbkdf2_user_is_upgraded_after_successful_login(tmp_path: Path):
     async def scenario():
         persistence = Persistence(db_path=tmp_path / "login-upgrade.db")

@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,6 +82,64 @@ def test_email_verification_token_marks_user_verified(temp_db: Persistence):
 
         with pytest.raises(KeyError):
             await temp_db.consume_email_verification_token(token.token)
+
+    asyncio.run(scenario())
+
+
+def test_email_verification_rejects_caller_owned_transaction(
+    temp_db: Persistence,
+):
+    async def scenario():
+        user = await _create_user(temp_db, "nested-verification@example.com")
+        token = await temp_db.create_email_verification_token(user.id)
+        token_rows_before = temp_db.conn.execute(
+            """
+            SELECT token_hash, user_id, created_at, valid_until
+            FROM email_verification_tokens
+            WHERE user_id = ?
+            ORDER BY token_hash
+            """,
+            (str(user.id),),
+        ).fetchall()
+
+        temp_db.conn.execute(
+            "UPDATE users SET username = ? WHERE id = ?",
+            ("caller-pending", str(user.id)),
+        )
+
+        try:
+            with pytest.raises(
+                RuntimeError,
+                match="Email verification cannot run inside an existing transaction",
+            ):
+                await temp_db.consume_email_verification_token(token.token)
+
+            assert temp_db.conn.in_transaction is True
+            assert temp_db.conn.execute(
+                "SELECT username FROM users WHERE id = ?",
+                (str(user.id),),
+            ).fetchone() == ("caller-pending",)
+            with sqlite3.connect(temp_db.db_path) as verifier:
+                assert verifier.execute(
+                    "SELECT username FROM users WHERE id = ?",
+                    (str(user.id),),
+                ).fetchone() == (None,)
+
+            assert temp_db.conn.execute(
+                "SELECT is_verified FROM users WHERE id = ?",
+                (str(user.id),),
+            ).fetchone() == (0,)
+            assert temp_db.conn.execute(
+                """
+                SELECT token_hash, user_id, created_at, valid_until
+                FROM email_verification_tokens
+                WHERE user_id = ?
+                ORDER BY token_hash
+                """,
+                (str(user.id),),
+            ).fetchall() == token_rows_before
+        finally:
+            temp_db.conn.rollback()
 
     asyncio.run(scenario())
 

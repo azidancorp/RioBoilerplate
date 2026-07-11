@@ -189,6 +189,96 @@ def test_failed_reset_completion_rolls_back_password_session_and_reset_token(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("operation", "error_message"),
+    [
+        (
+            "update_password",
+            "Password update cannot run inside an existing transaction",
+        ),
+        (
+            "consume_reset_token_and_update_password",
+            "Password reset completion cannot run inside an existing transaction",
+        ),
+    ],
+)
+def test_password_mutations_reject_caller_owned_transaction(
+    tmp_path: Path,
+    operation: str,
+    error_message: str,
+):
+    async def scenario() -> None:
+        persistence = Persistence(db_path=tmp_path / f"{operation}.db")
+        try:
+            user = await _create_password_user(
+                persistence,
+                f"{operation}@example.com",
+            )
+            session = await persistence.create_session(user.id)
+            reset_token = await persistence.create_reset_token(user.id)
+            token_hash = persistence._hash_one_time_token(reset_token.token)
+            session_hash = persistence._hash_one_time_token(session.id)
+
+            auth_state_before = persistence.conn.execute(
+                """
+                SELECT password_hash, password_salt, password_scheme
+                FROM users
+                WHERE id = ?
+                """,
+                (str(user.id),),
+            ).fetchone()
+
+            persistence.conn.execute(
+                "UPDATE users SET username = ? WHERE id = ?",
+                ("caller-pending", str(user.id)),
+            )
+
+            try:
+                with pytest.raises(RuntimeError, match=error_message):
+                    if operation == "update_password":
+                        await persistence.update_password(user.id, NEW_PASSWORD)
+                    else:
+                        await persistence.consume_reset_token_and_update_password(
+                            reset_token.token,
+                            user.id,
+                            NEW_PASSWORD,
+                        )
+
+                assert persistence.conn.in_transaction is True
+                assert persistence.conn.execute(
+                    "SELECT username FROM users WHERE id = ?",
+                    (str(user.id),),
+                ).fetchone() == ("caller-pending",)
+                with sqlite3.connect(persistence.db_path) as verifier:
+                    assert verifier.execute(
+                        "SELECT username FROM users WHERE id = ?",
+                        (str(user.id),),
+                    ).fetchone() == (None,)
+
+                assert persistence.conn.execute(
+                    """
+                    SELECT password_hash, password_salt, password_scheme
+                    FROM users
+                    WHERE id = ?
+                    """,
+                    (str(user.id),),
+                ).fetchone() == auth_state_before
+                assert persistence.conn.execute(
+                    "SELECT 1 FROM user_sessions WHERE id = ?",
+                    (session_hash,),
+                ).fetchone() == (1,)
+                assert persistence.conn.execute(
+                    "SELECT 1 FROM password_reset_tokens WHERE token_hash = ?",
+                    (token_hash,),
+                ).fetchone() == (1,)
+            finally:
+                persistence.conn.rollback()
+        finally:
+            persistence.close()
+
+    asyncio.run(scenario())
+
+
 def test_new_reset_token_replaces_previous_token(tmp_path: Path):
     async def scenario() -> None:
         persistence = Persistence(db_path=tmp_path / "sequential-reset-tokens.db")

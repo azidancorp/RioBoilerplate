@@ -75,11 +75,15 @@ def _get_connection(persistence: AuthPersistence) -> sqlite3.Connection:
     return persistence.conn
 
 
-def _require_top_level_transaction(conn: sqlite3.Connection) -> None:
-    """Keep MFA lifecycle operations from owning a caller's open transaction."""
+def _require_top_level_transaction(
+    conn: sqlite3.Connection,
+    *,
+    operation: str = "MFA lifecycle operations",
+) -> None:
+    """Keep transaction-owning operations out of a caller's transaction."""
     if conn.in_transaction:
         raise RuntimeError(
-            "MFA lifecycle operations cannot run inside an existing transaction."
+            f"{operation} cannot run inside an existing transaction."
         )
 
 
@@ -609,6 +613,11 @@ async def get_and_extend_valid_session_by_auth_token(
         raise ValueError("Session extension duration must be positive")
 
     conn = _get_connection(persistence)
+    if conn.in_transaction:
+        raise RuntimeError(
+            "Session renewal cannot run inside an existing transaction."
+        )
+
     cursor = persistence._get_cursor()
 
     try:
@@ -961,10 +970,12 @@ async def update_password(
 
     `KeyError`: If the user does not exist
     """
+    conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="Password update")
+
     # Generate new password hash and salt using the current password scheme.
     # TODO: Enforce minimum password strength once QA convenience window closes.
     password_hash, password_salt, password_scheme = password_utils.hash_password(new_password)
-    conn = _get_connection(persistence)
     cursor = persistence._get_cursor()
 
     try:
@@ -1010,6 +1021,7 @@ async def upgrade_user_password_hash(
     if not result.needs_rehash:
         return current_user
 
+    _require_top_level_transaction(conn, operation="Password hash upgrade")
     password_hash, password_salt, password_scheme = password_utils.hash_password(password)
 
     try:
@@ -1058,10 +1070,12 @@ async def consume_reset_token_and_update_password(
     user_id: uuid.UUID,
     new_password: str,
 ) -> bool:
+    conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="Password reset completion")
+
     password_hash, password_salt, password_scheme = password_utils.hash_password(new_password)
     token_hash = _hash_one_time_token(token)
     now = datetime.now(timezone.utc)
-    conn = _get_connection(persistence)
     cursor = persistence._get_cursor()
 
     try:
@@ -1361,6 +1375,7 @@ async def consume_email_verification_token(
     Consume a verification token and mark the user as verified.
     """
     conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="Email verification")
     token_hash = _hash_one_time_token(token)
     cursor = persistence._get_cursor()
 

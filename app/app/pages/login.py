@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import typing as t
 import uuid
+from urllib.parse import urlencode
 
 import rio
 from fastapi import HTTPException
@@ -147,9 +148,16 @@ def _oauth_error_message(error_code: str) -> str:
 
 def _google_oauth_login_url(session: rio.Session) -> rio.URL | str:
     try:
-        return session.base_url.joinpath("auth", "google", "login")
+        base_url = str(session.base_url.joinpath("auth", "google", "login"))
     except Exception:
-        return "/auth/google/login"
+        base_url = "/auth/google/login"
+
+    active_page_url = getattr(session, "active_page_url", None)
+    query = getattr(active_page_url, "query", {})
+    return_to = get_registered_app_path(query.get("return_to"))
+    if return_to:
+        return f"{base_url}?{urlencode({'return_to': return_to})}"
+    return base_url
 
 
 def _navigate_to_google_oauth(session: rio.Session) -> None:

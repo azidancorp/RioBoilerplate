@@ -293,3 +293,20 @@ decision not to change it.
   all 16 page-smoke tests passed. A live Rio dev boot returned Settings and
   Admin as redirects to their corresponding allowlisted Login destinations,
   and the Login URL rendered successfully.
+
+### 2026-07-11 — Protected destinations survive Google login
+
+- Google sign-in now carries the same exact allowlisted `return_to` value from
+  Login through the provider round trip and back into the normal login
+  completion path.
+- The FastAPI start route validates the destination before putting it in the
+  signed OAuth session cookie. The callback reads and removes only that stored
+  value; a caller cannot inject a destination into the callback URL.
+- Provider errors preserve the safe destination so the user can retry without
+  losing context. The final session's live role is still checked before
+  navigation, so OAuth does not bypass the authorization fallback added in the
+  preceding change.
+- Added tests for the signed-cookie round trip, callback-query injection,
+  protocol-relative targets, and the Login button's hard-navigation URL.
+- Verification: 50 focused OAuth/navigation/live-session tests and all 16
+  page-smoke tests passed.

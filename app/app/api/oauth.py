@@ -11,6 +11,7 @@ from starlette.responses import RedirectResponse
 from app.api.auth_dependencies import get_persistence
 from app.config import config
 from app.data_models import AppUser
+from app.navigation import get_registered_app_path
 from app.oauth_clients import get_oauth_client
 from app.persistence import BootstrapRequiredError, Persistence
 from app.persistence_social import OAUTH_DELETE_CHALLENGE_PREFIX
@@ -20,6 +21,7 @@ from app.validation import SecuritySanitizer
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _OAUTH_DELETE_CHALLENGE_SESSION_KEY = "oauth_delete_account_challenge"
+_OAUTH_LOGIN_RETURN_TO_SESSION_KEY = "oauth_login_return_to"
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,27 @@ def _settings_delete_redirect(
     return RedirectResponse(f"/app/settings{suffix}")
 
 
+def _login_redirect(
+    *,
+    error: str | None = None,
+    social_login_token: str | None = None,
+    return_to: str | None = None,
+) -> RedirectResponse:
+    query = urlencode(
+        {
+            key: value
+            for key, value in {
+                "oauth_error": error,
+                "social_login_token": social_login_token,
+                "return_to": get_registered_app_path(return_to),
+            }.items()
+            if value
+        }
+    )
+    suffix = f"?{query}" if query else ""
+    return RedirectResponse(f"/login{suffix}")
+
+
 def _has_recent_auth_time(value: object) -> bool:
     if isinstance(value, bool):
         return False
@@ -64,13 +87,25 @@ def _has_recent_auth_time(value: object) -> bool:
 
 
 @router.get("/{provider}/login", name="oauth_login")
-async def oauth_login(provider: str, request: Request):
+async def oauth_login(
+    provider: str,
+    request: Request,
+    return_to: str = "",
+):
+    safe_return_to = get_registered_app_path(return_to)
     client = get_oauth_client(provider)
     if client is None:
         if provider == "google":
-            return RedirectResponse("/login?oauth_error=provider_not_configured")
+            return _login_redirect(
+                error="provider_not_configured",
+                return_to=safe_return_to,
+            )
         raise HTTPException(status_code=404, detail="Provider is not enabled")
 
+    if safe_return_to:
+        request.session[_OAUTH_LOGIN_RETURN_TO_SESSION_KEY] = safe_return_to
+    else:
+        request.session.pop(_OAUTH_LOGIN_RETURN_TO_SESSION_KEY, None)
     redirect_uri = request.url_for("oauth_callback", provider=provider)
     return await client.authorize_redirect(request, redirect_uri)
 
@@ -172,16 +207,23 @@ async def oauth_callback(
     client = get_oauth_client(provider)
     if client is None:
         if provider == "google":
-            return RedirectResponse("/login?oauth_error=provider_not_configured")
+            return _login_redirect(error="provider_not_configured")
         raise HTTPException(status_code=404, detail="Provider is not enabled")
+
+    return_to = get_registered_app_path(
+        request.session.pop(_OAUTH_LOGIN_RETURN_TO_SESSION_KEY, "")
+    )
 
     try:
         token = await client.authorize_access_token(request)
     except Exception:
-        return RedirectResponse("/login?oauth_error=provider_failed")
+        return _login_redirect(error="provider_failed", return_to=return_to)
 
     if provider != "google":
-        return RedirectResponse("/login?oauth_error=unsupported_provider")
+        return _login_redirect(
+            error="unsupported_provider",
+            return_to=return_to,
+        )
 
     userinfo = token.get("userinfo") or {}
     provider_user_id = str(userinfo.get("sub") or "")
@@ -189,15 +231,24 @@ async def oauth_callback(
     email_verified = bool(userinfo.get("email_verified"))
 
     if not provider_user_id:
-        return RedirectResponse("/login?oauth_error=missing_provider_id")
+        return _login_redirect(
+            error="missing_provider_id",
+            return_to=return_to,
+        )
 
     if not email or not email_verified:
-        return RedirectResponse("/login?oauth_error=unverified_email")
+        return _login_redirect(
+            error="unverified_email",
+            return_to=return_to,
+        )
 
     try:
         email = SecuritySanitizer.validate_email_format(email)
     except HTTPException:
-        return RedirectResponse("/login?oauth_error=unverified_email")
+        return _login_redirect(
+            error="unverified_email",
+            return_to=return_to,
+        )
 
     display_name = SecuritySanitizer.sanitize_string(userinfo.get("name"), 100)
     identity = SocialIdentity(
@@ -228,9 +279,15 @@ async def oauth_callback(
             try:
                 await pers.create_user(user)
             except BootstrapRequiredError:
-                return RedirectResponse("/login?oauth_error=bootstrap_required")
+                return _login_redirect(
+                    error="bootstrap_required",
+                    return_to=return_to,
+                )
         else:
-            return RedirectResponse("/login?oauth_error=account_exists")
+            return _login_redirect(
+                error="account_exists",
+                return_to=return_to,
+            )
 
     try:
         handoff = await pers.create_oauth_handoff(
@@ -238,6 +295,12 @@ async def oauth_callback(
             provider=identity.provider,
         )
     except ValueError:
-        return RedirectResponse("/login?oauth_error=account_inactive")
+        return _login_redirect(
+            error="account_inactive",
+            return_to=return_to,
+        )
 
-    return RedirectResponse(f"/login?social_login_token={handoff}")
+    return _login_redirect(
+        social_login_token=handoff,
+        return_to=return_to,
+    )

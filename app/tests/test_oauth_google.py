@@ -363,6 +363,80 @@ def test_unconfigured_google_login_redirects_to_safe_error(monkeypatch, temp_db:
     assert response.headers["location"] == "/login?oauth_error=provider_not_configured"
 
 
+def test_google_login_round_trips_an_allowlisted_return_destination(
+    monkeypatch,
+    temp_db: Persistence,
+):
+    asyncio.run(
+        _create_social_user(
+            temp_db,
+            "oauth-return-to@example.com",
+            provider_user_id="oauth-return-to-sub",
+        )
+    )
+    fake_client = _FakeOAuthClient(
+        {
+            "sub": "oauth-return-to-sub",
+            "email": "oauth-return-to@example.com",
+            "email_verified": True,
+        }
+    )
+    monkeypatch.setattr(oauth_module, "get_oauth_client", lambda provider: fake_client)
+    _patch_app_persistence(monkeypatch, temp_db)
+
+    with TestClient(app_module.fastapi_app, raise_server_exceptions=False) as client:
+        client.get(
+            "/auth/google/login",
+            params={"return_to": "/app/settings"},
+            follow_redirects=False,
+        )
+        callback = client.get(
+            "/auth/google/callback",
+            follow_redirects=False,
+        )
+
+    query = _redirect_query(callback)
+    assert query["return_to"] == ["/app/settings"]
+    assert "social_login_token" in query
+
+
+def test_google_login_ignores_unsafe_or_callback_injected_return_destinations(
+    monkeypatch,
+    temp_db: Persistence,
+):
+    asyncio.run(
+        _create_social_user(
+            temp_db,
+            "oauth-unsafe-return@example.com",
+            provider_user_id="oauth-unsafe-return-sub",
+        )
+    )
+    fake_client = _FakeOAuthClient(
+        {
+            "sub": "oauth-unsafe-return-sub",
+            "email": "oauth-unsafe-return@example.com",
+            "email_verified": True,
+        }
+    )
+    monkeypatch.setattr(oauth_module, "get_oauth_client", lambda provider: fake_client)
+    _patch_app_persistence(monkeypatch, temp_db)
+
+    with TestClient(app_module.fastapi_app, raise_server_exceptions=False) as client:
+        client.get(
+            "/auth/google/login",
+            params={"return_to": "//example.com/app/settings"},
+            follow_redirects=False,
+        )
+        callback = client.get(
+            "/auth/google/callback?return_to=/app/settings",
+            follow_redirects=False,
+        )
+
+    query = _redirect_query(callback)
+    assert "return_to" not in query
+    assert "social_login_token" in query
+
+
 def test_disabled_provider_returns_404(monkeypatch, temp_db: Persistence):
     _patch_app_persistence(monkeypatch, temp_db)
     with TestClient(app_module.fastapi_app, raise_server_exceptions=False) as client:

@@ -6,7 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.data_models import AppUser, UserSettings
-from app.pages.login import _complete_login_session, _login_destination
+from app.pages.login import (
+    _complete_login_session,
+    _google_oauth_login_url,
+    _login_destination,
+)
 from app.persistence import Persistence
 
 
@@ -123,3 +127,15 @@ def test_login_destination_rejects_every_non_exact_return_target(
 ):
     session = _FakeSession(temp_db, return_to)
     assert _login_destination(session, "root") == "/app/dashboard"
+
+
+def test_google_login_url_carries_only_an_allowlisted_return_destination(
+    temp_db: Persistence,
+):
+    safe_session = _FakeSession(temp_db, "/app/settings")
+    assert str(_google_oauth_login_url(safe_session)) == (
+        "/auth/google/login?return_to=%2Fapp%2Fsettings"
+    )
+
+    unsafe_session = _FakeSession(temp_db, "//example.com/app/settings")
+    assert str(_google_oauth_login_url(unsafe_session)) == "/auth/google/login"

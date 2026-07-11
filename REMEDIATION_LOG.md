@@ -247,3 +247,29 @@ decision not to change it.
   app/tests/test_currency_api.py app/tests/test_currency_persistence.py
   app/tests/test_currency_reconciliation.py -q`; the page-smoke suite and a
   live Rio dev boot of the playground/API surface also passed.
+
+### 2026-07-11 — OAuth-only self-service account deletion
+
+- Added a real deletion path for accounts that sign in only with Google. These
+  users no longer see an impossible app-password requirement: Settings asks
+  them to verify with Google, then shows the permanent-deletion confirmation.
+- Kept normal login and account deletion as two separate OAuth purposes. A
+  login handoff cannot approve deletion, and the deletion challenge/approval
+  tokens are rejected by the login consumer.
+- Bound the deletion challenge and final approval to the exact live app
+  session that initiated the action. Google must return the same stable account
+  identifier and a recent `auth_time`; revoked, expired, absolutely expired,
+  switched-account, or different-session attempts fail closed.
+- The final approval is consumed inside the same locked transaction as current
+  session revalidation, optional 2FA/recovery-code use, audit logging, and the
+  account delete. A later failure restores both the one-time approval and any
+  recovery code instead of leaving a half-finished deletion.
+- Used the existing current-schema OAuth handoff table and short expiry. This
+  did not add any migration, upgrade, backfill, or recovery logic.
+- Added persistence, HTTP callback, and mounted-Settings tests for purpose
+  separation, session binding, wrong Google accounts, missing/stale provider
+  authentication, rollback, and the successful no-password flow.
+- Verification: 63 focused OAuth/deletion/MFA/audit/mounted-session tests and
+  all 16 page-smoke tests passed. A live Rio dev boot returned the home page,
+  protected Settings redirect, and safe deletion-reauth error redirect as
+  expected.

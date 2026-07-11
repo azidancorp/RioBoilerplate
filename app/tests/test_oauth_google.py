@@ -1,4 +1,6 @@
 import asyncio
+import json
+import time
 from collections import defaultdict
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -122,15 +124,19 @@ class _FakeOAuthClient:
     def __init__(self, userinfo: dict | None = None, error: Exception | None = None):
         self.userinfo = userinfo or {}
         self.error = error
+        self.redirect_uri = None
+        self.redirect_kwargs: dict = {}
 
     async def authorize_access_token(self, request):
         if self.error is not None:
             raise self.error
         return {"userinfo": self.userinfo}
 
-    async def authorize_redirect(self, request, redirect_uri):
+    async def authorize_redirect(self, request, redirect_uri, **kwargs):
         from starlette.responses import RedirectResponse
 
+        self.redirect_uri = redirect_uri
+        self.redirect_kwargs = kwargs
         return RedirectResponse(f"https://accounts.google.test/auth?redirect_uri={redirect_uri}")
 
 
@@ -363,6 +369,145 @@ def test_disabled_provider_returns_404(monkeypatch, temp_db: Persistence):
         response = client.get("/auth/github/login", follow_redirects=False)
 
     assert response.status_code == 404
+
+
+def test_google_account_deletion_reauth_is_recent_and_session_bound(
+    monkeypatch,
+    temp_db: Persistence,
+):
+    async def setup():
+        user = await _create_social_user(
+            temp_db,
+            "delete-google@example.com",
+            provider_user_id="google-delete-sub",
+        )
+        user_session = await temp_db.create_session(user.id)
+        challenge = await temp_db.create_oauth_account_deletion_challenge(
+            user_id=user.id,
+            provider="google",
+            auth_token=user_session.id,
+        )
+        return user, user_session, challenge
+
+    user, user_session, challenge = asyncio.run(setup())
+    fake_client = _FakeOAuthClient(
+        {
+            "sub": "google-delete-sub",
+            "auth_time": time.time(),
+        }
+    )
+    monkeypatch.setattr(oauth_module, "get_oauth_client", lambda provider: fake_client)
+    _patch_app_persistence(monkeypatch, temp_db)
+
+    with TestClient(app_module.fastapi_app, raise_server_exceptions=False) as client:
+        start = client.get(
+            "/auth/google/delete-account",
+            params={"deletion_challenge": challenge},
+            follow_redirects=False,
+        )
+        callback = client.get(
+            "/auth/google/delete-account/callback",
+            follow_redirects=False,
+        )
+
+    assert start.status_code in {302, 307}
+    assert fake_client.redirect_kwargs["prompt"] == "select_account"
+    assert fake_client.redirect_kwargs["max_age"] == 0
+    assert json.loads(fake_client.redirect_kwargs["claims"])["id_token"][
+        "auth_time"
+    ]["essential"] is True
+    assert str(fake_client.redirect_uri).endswith(
+        "/auth/google/delete-account/callback"
+    )
+
+    query = _redirect_query(callback)
+    approval = query["delete_account_oauth_token"][0]
+    assert approval.startswith("DELETE-APPROVE-")
+    with pytest.raises(KeyError, match="wrong purpose"):
+        asyncio.run(temp_db.consume_oauth_handoff(approval))
+
+    async def finish_delete():
+        assert await temp_db.delete_user(
+            user.id,
+            password=None,
+            auth_token=user_session.id,
+            oauth_reauth_token=approval,
+        ) is True
+
+    asyncio.run(finish_delete())
+
+
+def test_google_account_deletion_reauth_rejects_stale_or_wrong_identity(
+    monkeypatch,
+    temp_db: Persistence,
+):
+    async def setup_challenge():
+        user = await _create_social_user(
+            temp_db,
+            "reject-delete-google@example.com",
+            provider_user_id="expected-delete-sub",
+        )
+        user_session = await temp_db.create_session(user.id)
+        challenge = await temp_db.create_oauth_account_deletion_challenge(
+            user_id=user.id,
+            provider="google",
+            auth_token=user_session.id,
+        )
+        return user, challenge
+
+    user, challenge = asyncio.run(setup_challenge())
+    fake_client = _FakeOAuthClient(
+        {
+            "sub": "expected-delete-sub",
+            "auth_time": time.time() - 3600,
+        }
+    )
+    monkeypatch.setattr(oauth_module, "get_oauth_client", lambda provider: fake_client)
+    _patch_app_persistence(monkeypatch, temp_db)
+
+    with TestClient(app_module.fastapi_app, raise_server_exceptions=False) as client:
+        missing_start = client.get(
+            "/auth/google/delete-account/callback",
+            follow_redirects=False,
+        )
+        client.get(
+            "/auth/google/delete-account",
+            params={"deletion_challenge": challenge},
+            follow_redirects=False,
+        )
+        stale = client.get(
+            "/auth/google/delete-account/callback",
+            follow_redirects=False,
+        )
+
+        fake_client.userinfo = {
+            "sub": "different-delete-sub",
+            "auth_time": time.time(),
+        }
+        client.get(
+            "/auth/google/delete-account",
+            params={"deletion_challenge": challenge},
+            follow_redirects=False,
+        )
+        wrong_identity = client.get(
+            "/auth/google/delete-account/callback",
+            follow_redirects=False,
+        )
+
+    assert _redirect_query(missing_start)["delete_account_oauth_error"] == [
+        "invalid_challenge"
+    ]
+    assert _redirect_query(stale)["delete_account_oauth_error"] == [
+        "reauth_stale"
+    ]
+    assert _redirect_query(wrong_identity)["delete_account_oauth_error"] == [
+        "identity_mismatch"
+    ]
+    assert asyncio.run(temp_db.get_user_by_id(user.id)).id == user.id
+    assert temp_db.conn.execute(
+        "SELECT COUNT(*) FROM oauth_login_handoffs WHERE user_id = ?",
+        (str(user.id),),
+    ).fetchone()[0] == 1
 
 
 def test_login_page_consumes_social_handoff_and_creates_session(temp_db: Persistence):

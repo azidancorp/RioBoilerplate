@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import timezone
+from urllib.parse import urlencode
 
 import rio
+from fastapi import HTTPException
 from app.config import config
 from app.password_policy import evaluate_new_password
 from app.persistence import Persistence
@@ -20,6 +23,52 @@ from app.scripts.utils import (
     get_password_strength_status,
 )
 from app.validation import SecuritySanitizer
+
+
+def _oauth_delete_error_message(error_code: str) -> str:
+    messages = {
+        "provider_failed": (
+            "Google verification failed. Your account has not been deleted."
+        ),
+        "provider_not_configured": (
+            "Google verification is not configured. Your account has not "
+            "been deleted."
+        ),
+        "unsupported_provider": "That sign-in provider is not supported.",
+        "invalid_challenge": (
+            "Google verification expired or your session changed. Verify with "
+            "Google again."
+        ),
+        "identity_mismatch": (
+            "That Google account does not match the account currently signed in."
+        ),
+        "reauth_stale": (
+            "Google did not confirm a recent sign-in. Verify with Google again."
+        ),
+    }
+    return messages.get(
+        error_code,
+        "Google verification failed. Your account has not been deleted.",
+    )
+
+
+def _navigate_to_google_delete_reauth(
+    session: rio.Session,
+    challenge: str,
+) -> None:
+    query = urlencode({"deletion_challenge": challenge})
+    try:
+        base_url = session.base_url.joinpath("auth", "google", "delete-account")
+        url = f"{base_url}?{query}"
+    except Exception:
+        url = f"/auth/google/delete-account?{query}"
+
+    async def worker() -> None:
+        await session._evaluate_javascript(
+            f"window.location.href = {json.dumps(url)};",
+        )
+
+    session.create_task(worker(), name="Verify account deletion with Google")
 
 
 @rio.page(
@@ -40,6 +89,7 @@ class Settings(ResponsiveComponent):
     profile_display_name: str = ""
     profile_bio: str = ""
     account_email: str = ""
+    account_auth_provider: str = "password"
 
     # Password change fields
     change_password_current_password: str = ""
@@ -57,6 +107,8 @@ class Settings(ResponsiveComponent):
     delete_account_2fa: str = ""
     delete_account_confirmation: str = ""
     delete_account_error: str = ""
+    delete_account_oauth_token: str = ""
+    delete_account_oauth_status: str = ""
 
     # Error/success messages
     error_message: str = ""
@@ -96,10 +148,46 @@ class Settings(ResponsiveComponent):
         self.email_notifications_enabled = user.email_notifications_enabled
         self.sms_notifications_enabled = user.sms_notifications_enabled
         self.account_email = user.email
+        self.account_auth_provider = user.auth_provider
         self.currency_overview = CurrencySnapshot(
             balance_minor=user.primary_currency_balance,
             updated_at=user.primary_currency_updated_at,
         )
+
+        active_page_url = getattr(self.session, "active_page_url", None)
+        query = getattr(active_page_url, "query", {})
+        oauth_error = str(query.get("delete_account_oauth_error", "")).strip()
+        oauth_token_raw = str(
+            query.get("delete_account_oauth_token", "")
+        ).strip()
+        self.delete_account_oauth_status = ""
+        if user.auth_provider == "google" and oauth_token_raw:
+            try:
+                oauth_token = SecuritySanitizer.sanitize_auth_code(
+                    oauth_token_raw,
+                    max_length=128,
+                )
+            except HTTPException:
+                oauth_token = None
+            if oauth_token and oauth_token.startswith("DELETE-APPROVE-"):
+                self.delete_account_oauth_token = oauth_token
+                self.delete_account_error = ""
+                self.delete_account_oauth_status = (
+                    "Google identity confirmed. This approval expires in "
+                    f"{config.OAUTH_HANDOFF_TTL_MINUTES} minutes and works only "
+                    "with this signed-in session."
+                )
+            else:
+                self.delete_account_oauth_token = ""
+                self.delete_account_error = _oauth_delete_error_message(
+                    "invalid_challenge"
+                )
+        elif user.auth_provider != "google":
+            self.delete_account_oauth_token = ""
+
+        if user.auth_provider == "google" and oauth_error:
+            self.delete_account_oauth_token = ""
+            self.delete_account_error = _oauth_delete_error_message(oauth_error)
 
         # Load profile data
         profile = await persistence.get_profile_by_user_id(str(user_session.user_id))
@@ -373,16 +461,78 @@ class Settings(ResponsiveComponent):
 
         success = await persistence.delete_user(
             user_id=user_session.user_id,
-            password=self.delete_account_password,
+            password=(
+                self.delete_account_password
+                if user.auth_provider == "password"
+                else None
+            ),
             two_factor_code=self.delete_account_2fa if two_factor_enabled else None,
             auth_token=user_session.id,
+            oauth_reauth_token=(
+                self.delete_account_oauth_token
+                if user.auth_provider == "google"
+                else None
+            ),
         )
 
         if success:
             print("Account deleted successfully")
             reject_stale_user_session(self.session)
         else:
-            self.delete_account_error = "Failed to delete account. Please check your password and 2FA code."
+            if user.auth_provider == "google":
+                self.delete_account_error = (
+                    "Google verification expired or your session changed. "
+                    "Verify with Google again, then check your 2FA code."
+                )
+                self.delete_account_oauth_token = ""
+                self.delete_account_oauth_status = ""
+            else:
+                self.delete_account_error = (
+                    "Failed to delete account. Please check your password and "
+                    "2FA code."
+                )
+
+    async def _on_verify_google_delete_account_pressed(self) -> None:
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, user = fresh_session
+        if user.auth_provider != "google":
+            self.delete_account_error = (
+                "This account does not use Google sign-in."
+            )
+            return
+
+        persistence = self.session[Persistence]
+        decision = self._sensitive_action_limited(
+            persistence,
+            "settings_delete_account",
+        )
+        if not decision.allowed:
+            self.delete_account_error = rate_limited_message(
+                "Too many account deletion attempts.",
+                decision.retry_after_seconds,
+            )
+            return
+
+        try:
+            challenge = await persistence.create_oauth_account_deletion_challenge(
+                user_id=user.id,
+                provider=user.auth_provider,
+                auth_token=user_session.id,
+            )
+        except KeyError:
+            reject_stale_user_session(self.session)
+            return
+        except ValueError:
+            self.delete_account_error = (
+                "Google verification is unavailable. Your account has not been "
+                "deleted."
+            )
+            return
+
+        self.delete_account_error = ""
+        _navigate_to_google_delete_reauth(self.session, challenge)
 
     async def _on_logout_all_devices_pressed(self) -> None:
         """Handle the logout all devices button click."""
@@ -398,6 +548,61 @@ class Settings(ResponsiveComponent):
         reject_stale_user_session(self.session)
 
     def build(self) -> rio.Component:
+        delete_account_inputs: list[rio.Component] = []
+        if self.account_auth_provider == "google":
+            delete_account_inputs.append(
+                rio.Text(
+                    "Your account uses Google sign-in. Verify your identity with "
+                    "Google before deleting it. No app password is required.",
+                    overflow="wrap",
+                )
+            )
+            if self.delete_account_oauth_token:
+                delete_account_inputs.append(
+                    rio.Banner(
+                        text=self.delete_account_oauth_status,
+                        style="success",
+                    )
+                )
+            else:
+                delete_account_inputs.append(
+                    rio.Button(
+                        "Verify with Google",
+                        on_press=self._on_verify_google_delete_account_pressed,
+                        shape="rounded",
+                    )
+                )
+        else:
+            delete_account_inputs.append(
+                rio.TextInput(
+                    label="Password",
+                    text=self.bind().delete_account_password,
+                    is_secret=True,
+                )
+            )
+
+        if self.account_auth_provider != "google" or self.delete_account_oauth_token:
+            if self.two_factor_enabled:
+                delete_account_inputs.append(
+                    rio.TextInput(
+                        label="2FA / Recovery Code",
+                        text=self.bind().delete_account_2fa,
+                    )
+                )
+            delete_account_inputs.extend(
+                [
+                    rio.TextInput(
+                        label='Type "DELETE MY ACCOUNT" to confirm',
+                        text=self.bind().delete_account_confirmation,
+                    ),
+                    rio.Button(
+                        "Permanently Delete My Account",
+                        on_press=self._on_delete_account_pressed,
+                        shape="rounded",
+                    ),
+                ]
+            )
+
         return CenterComponent(
             rio.Column(
                 rio.Text(
@@ -638,26 +843,16 @@ class Settings(ResponsiveComponent):
                             margin_bottom=1,
                         ),
 
+                        rio.Text(
+                            "Deleting your account permanently removes your "
+                            "profile, active sessions, recovery codes, and "
+                            "virtual-currency history.",
+                            overflow="wrap",
+                        ),
+
                         # Use FlowContainer for delete account form - auto-wraps on mobile
                         rio.FlowContainer(
-                            rio.TextInput(
-                                label="Password",
-                                text=self.bind().delete_account_password,
-                                is_secret=True,
-                            ),
-                            rio.TextInput(
-                                label="2FA / Recovery Code",
-                                text=self.bind().delete_account_2fa,
-                            ),
-                            rio.TextInput(
-                                label='Type "DELETE MY ACCOUNT" to confirm',
-                                text=self.bind().delete_account_confirmation,
-                            ),
-                            rio.Button(
-                                "Delete Account",
-                                on_press=self._on_delete_account_pressed,
-                                shape="rounded",
-                            ),
+                            *delete_account_inputs,
                             row_spacing=self.flow_spacing,
                             column_spacing=self.flow_spacing,
                         ),

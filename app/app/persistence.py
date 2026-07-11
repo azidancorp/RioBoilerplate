@@ -1062,6 +1062,38 @@ class Persistence:
     async def consume_oauth_handoff(self, token: str) -> AppUser:
         return await persistence_social.consume_oauth_handoff(self, token)
 
+    async def create_oauth_account_deletion_challenge(
+        self,
+        *,
+        user_id: uuid.UUID,
+        provider: str,
+        auth_token: str,
+        ttl_minutes: int | None = None,
+    ) -> str:
+        return await persistence_social.create_oauth_account_deletion_challenge(
+            self,
+            user_id=user_id,
+            provider=provider,
+            auth_token=auth_token,
+            ttl_minutes=ttl_minutes,
+        )
+
+    async def exchange_oauth_account_deletion_challenge(
+        self,
+        *,
+        challenge_token: str,
+        provider: str,
+        provider_user_id: str,
+        ttl_minutes: int | None = None,
+    ) -> str:
+        return await persistence_social.exchange_oauth_account_deletion_challenge(
+            self,
+            challenge_token=challenge_token,
+            provider=provider,
+            provider_user_id=provider_user_id,
+            ttl_minutes=ttl_minutes,
+        )
+
     async def list_users(self) -> list[AppUser]:
         return await persistence_users.list_users(self)
 
@@ -1499,10 +1531,11 @@ class Persistence:
     async def delete_user(
         self,
         user_id: uuid.UUID,
-        password: str,
+        password: str | None,
         two_factor_code: str | None = None,
         *,
         auth_token: str,
+        oauth_reauth_token: str | None = None,
     ) -> bool:
         self._ensure_connection()
         if self.conn is None:
@@ -1524,7 +1557,26 @@ class Persistence:
             if user_session.user_id != user_id or user.id != user_id:
                 conn.rollback()
                 return False
-            if user.auth_provider != "password" or not user.verify_password(password):
+            if user.auth_provider == "password":
+                if not password or not user.verify_password(password):
+                    conn.rollback()
+                    return False
+            elif user.auth_provider == "google":
+                if not oauth_reauth_token:
+                    conn.rollback()
+                    return False
+                try:
+                    persistence_social.consume_oauth_account_deletion_approval_in_transaction(
+                        self,
+                        approval_token=oauth_reauth_token,
+                        user_id=user_id,
+                        provider=user.auth_provider,
+                        auth_token=auth_token,
+                    )
+                except KeyError:
+                    conn.rollback()
+                    return False
+            else:
                 conn.rollback()
                 return False
             if user.two_factor_enabled:

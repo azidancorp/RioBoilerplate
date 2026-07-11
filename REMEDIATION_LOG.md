@@ -48,7 +48,7 @@ decision not to change it.
 | Area | Problem in simple terms | Status |
 | --- | --- | --- |
 | Profile privacy | A signed-in user can read another user's private profile fields. | done — `Restrict private profile reads` |
-| Profile mutations | Cross-user profile edits do not consistently enforce the live role hierarchy inside the write transaction. | queued |
+| Profile mutations | Cross-user profile edits do not consistently enforce the live role hierarchy inside the write transaction. | done — `Authorize profile writes atomically` |
 | Session lifetime | API bearer authentication accepts a session beyond its absolute maximum lifetime. | queued |
 | Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | queued |
 | OAuth account deletion | An OAuth-only user cannot complete self-service account deletion. | queued |
@@ -75,4 +75,20 @@ decision not to change it.
   own profile. Admin/root access remains available for account support.
 - Added API tests proving cross-user reads are rejected without leaking the
   private fields, while self and administrator reads still work.
+- Verification: `pytest app/tests/test_profiles_api.py -q`.
+
+### 2026-07-11 — Profile mutation authorization
+
+- Moved create, update, and delete authorization into persistence operations
+  that acquire SQLite's writer lock first, then reload the actor's live session,
+  current role, and the target's current role before writing.
+- Preserved self-service profile operations. Cross-user operations now require
+  current admin-page access and a strictly lower-privilege target, so an admin
+  cannot alter a root/peer account and a demoted admin cannot finish a stale
+  request.
+- Stopped returning raw internal exception text for unexpected profile API
+  failures.
+- Added API coverage for all three mutation routes, role hierarchy, demotion
+  between request authentication and persistence, lower-role administration,
+  and self-service delete/recreate behavior.
 - Verification: `pytest app/tests/test_profiles_api.py -q`.

@@ -128,3 +128,195 @@ def test_admin_can_read_a_users_private_profile(profile_api_setup):
 
     assert response.status_code == 200
     assert response.json()["user_id"] == str(target.id)
+
+
+def test_admin_can_update_a_lower_role_profile(profile_api_setup):
+    client, persistence = profile_api_setup
+
+    async def scenario():
+        _, admin_token = await _create_user_with_session(
+            persistence,
+            email="profile-editor@example.com",
+            role="admin",
+        )
+        target, _ = await _create_user_with_session(
+            persistence,
+            email="profile-edit-target@example.com",
+            role="user",
+        )
+        return admin_token, target
+
+    admin_token, target = asyncio.run(scenario())
+
+    response = client.put(
+        f"/api/profiles/{target.id}",
+        json={"full_name": "Managed User"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["full_name"] == "Managed User"
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "delete"])
+def test_admin_cannot_mutate_a_root_profile(profile_api_setup, operation):
+    client, persistence = profile_api_setup
+
+    async def scenario():
+        _, admin_token = await _create_user_with_session(
+            persistence,
+            email=f"blocked-profile-admin-{operation}@example.com",
+            role="admin",
+        )
+        target, _ = await _create_user_with_session(
+            persistence,
+            email=f"root-profile-{operation}@example.com",
+            role="root",
+        )
+        original_profile = await persistence.get_profile_by_user_id(str(target.id))
+        if operation == "create":
+            await persistence.delete_profile(str(target.id))
+        return admin_token, target, original_profile
+
+    admin_token, target, original_profile = asyncio.run(scenario())
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    if operation == "create":
+        response = client.post(
+            "/api/profiles",
+            json={
+                "user_id": str(target.id),
+                "full_name": "Unauthorized recreation",
+                "email": target.email,
+            },
+            headers=headers,
+        )
+    elif operation == "update":
+        response = client.put(
+            f"/api/profiles/{target.id}",
+            json={"full_name": "Unauthorized update"},
+            headers=headers,
+        )
+    else:
+        response = client.delete(
+            f"/api/profiles/{target.id}",
+            headers=headers,
+        )
+
+    assert response.status_code == 403
+    stored_profile = asyncio.run(
+        persistence.get_profile_by_user_id(str(target.id))
+    )
+    if operation == "create":
+        assert stored_profile is None
+    else:
+        assert stored_profile == original_profile
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "delete"])
+def test_profile_mutation_revalidates_a_demoted_actor(
+    profile_api_setup,
+    monkeypatch,
+    operation,
+):
+    client, persistence = profile_api_setup
+
+    async def scenario():
+        actor, actor_token = await _create_user_with_session(
+            persistence,
+            email="profile-demoted-admin@example.com",
+            role="admin",
+        )
+        target, _ = await _create_user_with_session(
+            persistence,
+            email=f"profile-demotion-{operation}-target@example.com",
+            role="user",
+        )
+        original_profile = await persistence.get_profile_by_user_id(str(target.id))
+        if operation == "create":
+            await persistence.delete_profile(str(target.id))
+        return actor, actor_token, target, original_profile
+
+    actor, actor_token, target, original_profile = asyncio.run(scenario())
+    method_name = {
+        "create": "create_profile_for_session",
+        "update": "update_profile_for_session",
+        "delete": "delete_profile_for_session",
+    }[operation]
+    original_mutation = getattr(Persistence, method_name)
+
+    async def demote_then_mutate(request_db, **kwargs):
+        request_db.conn.execute(
+            "UPDATE users SET role = 'user' WHERE id = ?",
+            (str(actor.id),),
+        )
+        request_db.conn.commit()
+        return await original_mutation(request_db, **kwargs)
+
+    monkeypatch.setattr(
+        Persistence,
+        method_name,
+        demote_then_mutate,
+    )
+
+    headers = {"Authorization": f"Bearer {actor_token}"}
+    if operation == "create":
+        response = client.post(
+            "/api/profiles",
+            json={
+                "user_id": str(target.id),
+                "full_name": "Stale authorization recreation",
+                "email": target.email,
+            },
+            headers=headers,
+        )
+    elif operation == "update":
+        response = client.put(
+            f"/api/profiles/{target.id}",
+            json={"full_name": "Stale authorization update"},
+            headers=headers,
+        )
+    else:
+        response = client.delete(
+            f"/api/profiles/{target.id}",
+            headers=headers,
+        )
+
+    assert response.status_code == 403
+    stored_profile = asyncio.run(
+        persistence.get_profile_by_user_id(str(target.id))
+    )
+    if operation == "create":
+        assert stored_profile is None
+    else:
+        assert stored_profile == original_profile
+
+
+def test_user_can_delete_and_recreate_own_profile(profile_api_setup):
+    client, persistence = profile_api_setup
+    user, token = asyncio.run(
+        _create_user_with_session(
+            persistence,
+            email="self-profile-mutation@example.com",
+            role="user",
+        )
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    delete_response = client.delete(
+        f"/api/profiles/{user.id}",
+        headers=headers,
+    )
+    assert delete_response.status_code == 204
+
+    create_response = client.post(
+        "/api/profiles",
+        json={
+            "user_id": str(user.id),
+            "full_name": "Recreated Self",
+            "email": user.email,
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    assert create_response.json()["full_name"] == "Recreated Self"

@@ -461,6 +461,45 @@ class Persistence:
             )
         return actor, target
 
+    def _require_live_profile_actor_can_manage(
+        self,
+        cursor: sqlite3.Cursor,
+        *,
+        auth_token: str,
+        target_user_id: str,
+        action: str,
+    ) -> tuple[AppUser, _AdminTargetSnapshot]:
+        """Authorize a self/admin profile write at its transaction boundary."""
+        if not auth_token:
+            raise AdminSessionInvalidError("Your session is no longer valid.")
+
+        try:
+            _, actor = self.get_valid_session_by_auth_token(auth_token)
+        except KeyError as exc:
+            raise AdminSessionInvalidError(
+                "Your session is no longer valid."
+            ) from exc
+
+        try:
+            target_id = uuid.UUID(target_user_id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise KeyError(target_user_id) from exc
+
+        target = self._load_admin_target(cursor, target_id)
+        if actor.id == target.id:
+            return actor, target
+
+        if not check_access("/app/admin", actor.role):
+            raise PermissionError(
+                "You do not have permission to modify another user's profile."
+            )
+        self._require_role_can_manage(
+            actor_role=actor.role,
+            target_role=target.role,
+            action=action,
+        )
+        return actor, target
+
     async def _create_user_transaction(
         self,
         user: AppUser,
@@ -1527,6 +1566,76 @@ class Persistence:
             phone=phone, address=address, bio=bio, avatar_url=avatar_url,
         )
 
+    async def create_profile_for_session(
+        self,
+        *,
+        auth_token: str,
+        user_id: str,
+        full_name: str,
+        email: str,
+        phone: str | None = None,
+        address: str | None = None,
+        bio: str | None = None,
+        avatar_url: str | None = None,
+    ) -> dict[str, t.Any]:
+        """Create a profile after live authorization under the writer lock."""
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="Profile creation")
+        cursor = conn.cursor()
+        now_ts = datetime.now(timezone.utc).timestamp()
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            _, target = self._require_live_profile_actor_can_manage(
+                cursor,
+                auth_token=auth_token,
+                target_user_id=user_id,
+                action="create profiles for",
+            )
+            canonical_user_id = str(target.id)
+            cursor.execute(
+                """
+                INSERT INTO profiles
+                (
+                    user_id,
+                    full_name,
+                    email,
+                    phone,
+                    address,
+                    bio,
+                    avatar_url,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    canonical_user_id,
+                    full_name,
+                    email,
+                    phone,
+                    address,
+                    bio,
+                    avatar_url,
+                    now_ts,
+                    now_ts,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+        profile = await self.get_profile_by_user_id(canonical_user_id)
+        if profile is None:
+            raise RuntimeError("Created profile could not be reloaded")
+        return profile
+
     async def get_profile(self, profile_id: int) -> dict[str, t.Any] | None:
         return await persistence_profiles.get_profile(self, profile_id)
 
@@ -1543,8 +1652,113 @@ class Persistence:
             phone=phone, address=address, bio=bio, avatar_url=avatar_url,
         )
 
+    async def update_profile_for_session(
+        self,
+        *,
+        auth_token: str,
+        user_id: str,
+        full_name: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+        address: str | None = None,
+        bio: str | None = None,
+        avatar_url: str | None = None,
+    ) -> dict[str, t.Any] | None:
+        """Update a profile after live authorization under the writer lock."""
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="Profile updates")
+        cursor = conn.cursor()
+        fields: list[str] = []
+        params: list[t.Any] = []
+        for column, value in (
+            ("full_name", full_name),
+            ("email", email),
+            ("phone", phone),
+            ("address", address),
+            ("bio", bio),
+            ("avatar_url", avatar_url),
+        ):
+            if value is not None:
+                fields.append(f"{column} = ?")
+                params.append(value)
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            _, target = self._require_live_profile_actor_can_manage(
+                cursor,
+                auth_token=auth_token,
+                target_user_id=user_id,
+                action="edit",
+            )
+            canonical_user_id = str(target.id)
+            if fields:
+                fields.append("updated_at = ?")
+                params.extend(
+                    [datetime.now(timezone.utc).timestamp(), canonical_user_id]
+                )
+                cursor.execute(
+                    f"UPDATE profiles SET {', '.join(fields)} WHERE user_id = ?",
+                    params,
+                )
+                profile_exists = cursor.rowcount == 1
+            else:
+                cursor.execute(
+                    "SELECT 1 FROM profiles WHERE user_id = ?",
+                    (canonical_user_id,),
+                )
+                profile_exists = cursor.fetchone() is not None
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+        if not profile_exists:
+            return None
+        return await self.get_profile_by_user_id(canonical_user_id)
+
     async def delete_profile(self, user_id: str) -> bool:
         return await persistence_profiles.delete_profile(self, user_id)
+
+    async def delete_profile_for_session(
+        self,
+        *,
+        auth_token: str,
+        user_id: str,
+    ) -> bool:
+        """Delete a profile after live authorization under the writer lock."""
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="Profile deletion")
+        cursor = conn.cursor()
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            _, target = self._require_live_profile_actor_can_manage(
+                cursor,
+                auth_token=auth_token,
+                target_user_id=user_id,
+                action="delete profiles for",
+            )
+            cursor.execute(
+                "DELETE FROM profiles WHERE user_id = ?",
+                (str(target.id),),
+            )
+            deleted = cursor.rowcount == 1
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+        return deleted
 
     async def get_profiles(self) -> list[dict[str, t.Any]]:
         return await persistence_profiles.get_profiles(self)

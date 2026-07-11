@@ -20,7 +20,7 @@ Extension Points:
 from fastapi import APIRouter, HTTPException, Depends, status
 from typing import Dict, List
 import sqlite3
-from app.persistence import Persistence
+from app.persistence import AdminSessionInvalidError, Persistence
 from app.validation import (
     ProfileCreateRequest,
     ProfileUpdateRequest,
@@ -29,11 +29,12 @@ from app.validation import (
 )
 from app.api.auth_dependencies import (
     get_current_user,
+    get_current_session,
     get_persistence,
     require_self_or_admin,
     is_admin_or_root,
 )
-from app.data_models import AppUser
+from app.data_models import AppUser, UserSession
 
 router = APIRouter()
 
@@ -107,7 +108,7 @@ async def get_profile(
 @router.post("/api/profiles", status_code=status.HTTP_201_CREATED, response_model=ProfileResponse)
 async def create_profile(
     profile_data: ProfileCreateRequest,
-    current_user: AppUser = Depends(get_current_user),
+    current_session: UserSession = Depends(get_current_session),
     db: Persistence = Depends(get_persistence)
 ) -> Dict:
     """
@@ -118,10 +119,9 @@ async def create_profile(
 
     Raises: 401 (auth fails), 403 (unauthorized), 400 (duplicate), 422 (validation), 500 (DB error).
     """
-    require_self_or_admin(profile_data.user_id, current_user)
-
     try:
-        return await db.create_profile(
+        return await db.create_profile_for_session(
+            auth_token=current_session.id,
             user_id=profile_data.user_id,
             full_name=profile_data.full_name,
             email=profile_data.email,
@@ -129,6 +129,22 @@ async def create_profile(
             address=profile_data.address,
             bio=profile_data.bio,
             avatar_url=profile_data.avatar_url
+        )
+    except AdminSessionInvalidError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {profile_data.user_id} does not exist",
         )
     except sqlite3.IntegrityError as e:
         if "UNIQUE constraint failed: profiles.user_id" in str(e):
@@ -150,17 +166,17 @@ async def create_profile(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while creating the profile"
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create profile: {str(e)}"
+            detail="Failed to create profile"
         )
 
 @router.put("/api/profiles/{user_id}", response_model=ProfileResponse)
 async def update_profile(
     user_id: str,
     profile_data: ProfileUpdateRequest,
-    current_user: AppUser = Depends(get_current_user),
+    current_session: UserSession = Depends(get_current_session),
     db: Persistence = Depends(get_persistence)
 ) -> Dict:
     """
@@ -187,10 +203,9 @@ async def update_profile(
             detail="Invalid user ID format"
         )
 
-    require_self_or_admin(sanitized_user_id, current_user)
-
     try:
-        updated_profile = await db.update_profile(
+        updated_profile = await db.update_profile_for_session(
+            auth_token=current_session.id,
             user_id=sanitized_user_id,
             full_name=profile_data.full_name,
             email=profile_data.email,
@@ -209,6 +224,22 @@ async def update_profile(
         return updated_profile
     except HTTPException:
         raise
+    except AdminSessionInvalidError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {sanitized_user_id} does not exist",
+        )
     except sqlite3.IntegrityError as e:
         if "UNIQUE constraint failed: profiles.email" in str(e):
             raise HTTPException(
@@ -219,16 +250,16 @@ async def update_profile(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while updating the profile"
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update profile: {str(e)}"
+            detail="Failed to update profile"
         )
 
 @router.delete("/api/profiles/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_profile(
     user_id: str,
-    current_user: AppUser = Depends(get_current_user),
+    current_session: UserSession = Depends(get_current_session),
     db: Persistence = Depends(get_persistence)
 ) -> None:
     """
@@ -256,9 +287,27 @@ async def delete_profile(
             detail="Invalid user ID format"
         )
 
-    require_self_or_admin(sanitized_user_id, current_user)
-
-    success = await db.delete_profile(sanitized_user_id)
+    try:
+        success = await db.delete_profile_for_session(
+            auth_token=current_session.id,
+            user_id=sanitized_user_id,
+        )
+    except AdminSessionInvalidError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {sanitized_user_id} does not exist",
+        )
 
     if not success:
         raise HTTPException(

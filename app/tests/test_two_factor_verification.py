@@ -108,14 +108,30 @@ def test_delete_user_requires_two_factor_when_enabled(temp_db: Persistence):
         secret = pyotp.random_base32()
         temp_db.set_2fa_secret(user.id, secret)
         totp = pyotp.TOTP(secret)
+        session = await temp_db.create_session(user.id)
 
-        assert await temp_db.delete_user(user.id, password="p@ssw0rd", two_factor_code=None) is False
-        assert await temp_db.delete_user(user.id, password="p@ssw0rd", two_factor_code="000000") is False
+        assert await temp_db.delete_user(
+            user.id,
+            password="p@ssw0rd",
+            two_factor_code=None,
+            auth_token=session.id,
+        ) is False
+        assert await temp_db.delete_user(
+            user.id,
+            password="p@ssw0rd",
+            two_factor_code="000000",
+            auth_token=session.id,
+        ) is False
 
         # Avoid rare flake at 30s boundary by retrying briefly.
         for _ in range(3):
             token = totp.now()
-            if await temp_db.delete_user(user.id, password="p@ssw0rd", two_factor_code=token):
+            if await temp_db.delete_user(
+                user.id,
+                password="p@ssw0rd",
+                two_factor_code=token,
+                auth_token=session.id,
+            ):
                 break
             time.sleep(1)
         else:
@@ -123,6 +139,103 @@ def test_delete_user_requires_two_factor_when_enabled(temp_db: Persistence):
 
         with pytest.raises(KeyError):
             await temp_db.get_user_by_id(user.id)
+
+    asyncio.run(scenario())
+
+
+def test_delete_user_requires_a_live_session_bound_to_the_target(
+    temp_db: Persistence,
+):
+    async def scenario():
+        user = await _create_user(
+            temp_db,
+            "session-bound-delete@example.com",
+            password="OldStrongPass!9",
+        )
+        other = await _create_user(
+            temp_db,
+            "other-delete-session@example.com",
+            password="OtherStrongPass!9",
+        )
+        user_session = await temp_db.create_session(user.id)
+        other_session = await temp_db.create_session(other.id)
+
+        assert await temp_db.delete_user(
+            user.id,
+            password="OldStrongPass!9",
+            auth_token=other_session.id,
+        ) is False
+
+        await temp_db.update_password(user.id, "NewStrongPass!9")
+        assert await temp_db.delete_user(
+            user.id,
+            password="NewStrongPass!9",
+            auth_token=user_session.id,
+        ) is False
+        assert (await temp_db.get_user_by_id(user.id)).id == user.id
+
+        fresh_session = await temp_db.create_session(user.id)
+        assert await temp_db.delete_user(
+            user.id,
+            password="NewStrongPass!9",
+            auth_token=fresh_session.id,
+        ) is True
+
+    asyncio.run(scenario())
+
+
+def test_delete_user_rolls_back_recovery_code_when_delete_fails(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        user = await _create_user(
+            temp_db,
+            "recovery-delete-rollback@example.com",
+            password="VeryStrongPass!9",
+        )
+        recovery_code = temp_db.enroll_two_factor(
+            user.id,
+            pyotp.random_base32(),
+            count=1,
+        )[0]
+        session = await temp_db.create_session(user.id)
+        original_record_admin_action = temp_db.record_admin_action
+
+        def fail_audit(**kwargs) -> None:
+            raise RuntimeError("forced delete audit failure")
+
+        monkeypatch.setattr(temp_db, "record_admin_action", fail_audit)
+        with pytest.raises(RuntimeError, match="forced delete audit failure"):
+            await temp_db.delete_user(
+                user.id,
+                password="VeryStrongPass!9",
+                two_factor_code=recovery_code,
+                auth_token=session.id,
+            )
+
+        assert (await temp_db.get_user_by_id(user.id)).id == user.id
+        unused = temp_db.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM two_factor_recovery_codes
+            WHERE user_id = ? AND used_at IS NULL
+            """,
+            (str(user.id),),
+        ).fetchone()[0]
+        assert unused == 1
+
+        monkeypatch.setattr(
+            temp_db,
+            "record_admin_action",
+            original_record_admin_action,
+        )
+        assert await temp_db.delete_user(
+            user.id,
+            password="VeryStrongPass!9",
+            two_factor_code=recovery_code,
+            auth_token=session.id,
+        ) is True
 
     asyncio.run(scenario())
 

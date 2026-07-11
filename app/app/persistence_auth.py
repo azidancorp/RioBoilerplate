@@ -255,6 +255,47 @@ def invalidate_recovery_codes(
         conn.commit()
 
 
+def _consume_recovery_code_in_transaction(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+    normalized_code: str,
+) -> bool:
+    """Consume a normalized recovery code inside the caller's transaction."""
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("Recovery-code consumption requires an open transaction.")
+    if not normalized_code:
+        return False
+
+    cursor = persistence._get_cursor()
+    now_ts = datetime.now(timezone.utc).timestamp()
+    cursor.execute(
+        """
+        SELECT id, code_hash
+        FROM two_factor_recovery_codes
+        WHERE user_id = ? AND used_at IS NULL AND valid_until > ?
+        """,
+        (str(user_id), now_ts),
+    )
+
+    candidate_hash = _hash_one_time_token(normalized_code)
+    for code_id, stored_hash in cursor.fetchall():
+        if not secrets.compare_digest(stored_hash, candidate_hash):
+            continue
+
+        cursor.execute(
+            """
+            UPDATE two_factor_recovery_codes
+            SET used_at = ?
+            WHERE id = ? AND used_at IS NULL AND valid_until > ?
+            """,
+            (now_ts, code_id, now_ts),
+        )
+        return cursor.rowcount == 1
+
+    return False
+
+
 def consume_recovery_code(
     persistence: AuthPersistence,
     user_id: uuid.UUID,
@@ -269,52 +310,25 @@ def consume_recovery_code(
         return False
 
     conn = _get_connection(persistence)
-    cursor = persistence._get_cursor()
-
-    # Begin immediate transaction to acquire exclusive lock and prevent race conditions
-    conn.execute("BEGIN IMMEDIATE")
+    _require_top_level_transaction(conn)
 
     try:
-        # Only fetch unused, non-expired codes.
-        now_ts = datetime.now(timezone.utc).timestamp()
-        cursor.execute(
-            """
-            SELECT id, code_hash
-            FROM two_factor_recovery_codes
-            WHERE user_id = ? AND used_at IS NULL AND valid_until > ?
-            """,
-            (str(user_id), now_ts),
+        conn.execute("BEGIN IMMEDIATE")
+        consumed = _consume_recovery_code_in_transaction(
+            persistence,
+            user_id,
+            normalized_code,
         )
-
-        rows = cursor.fetchall()
-        candidate_hash = _hash_one_time_token(normalized_code)
-        for code_id, stored_hash in rows:
-            if secrets.compare_digest(stored_hash, candidate_hash):
-                # Atomic update with WHERE clause to ensure code is still unused
-                cursor.execute(
-                    """
-                    UPDATE two_factor_recovery_codes
-                    SET used_at = ?
-                    WHERE id = ? AND used_at IS NULL
-                    """,
-                    (datetime.now(timezone.utc).timestamp(), code_id),
-                )
-
-                # Verify the update actually modified a row (prevents double-spend)
-                if cursor.rowcount == 1:
-                    conn.commit()
-                    # TODO: Send notification email once email infrastructure supports recovery code events.
-                    return True
-
-                # Another request consumed this code between our SELECT and UPDATE
-                conn.rollback()
-                return False
+        if consumed:
+            conn.commit()
+            # TODO: Send notification email once email infrastructure supports recovery code events.
+            return True
 
         conn.rollback()
         return False
-
     except Exception:
-        conn.rollback()
+        if conn.in_transaction:
+            conn.rollback()
         raise
 
 
@@ -664,23 +678,13 @@ def _get_two_factor_secret(
     return t.cast(str | None, row[0])
 
 
-def verify_two_factor_challenge(
+def _verify_two_factor_challenge(
     persistence: AuthPersistence,
     user_id: uuid.UUID,
     code: str | None,
     *,
-    consume_recovery_code: bool = True,
+    recovery_code_consumer: t.Callable[[uuid.UUID, str], bool] | None,
 ) -> TwoFactorChallengeResult:
-    """
-    Verify a user-supplied 2FA input against either TOTP or a recovery code.
-
-    This is the centralized 2FA verification entrypoint used by UI flows.
-    It owns:
-    - input sanitization (`SecuritySanitizer.sanitize_auth_code`)
-    - token normalization (strip hyphens)
-    - branching between TOTP vs. recovery-code verification
-    - recovery-code consumption (single-use semantics)
-    """
     secret = _get_two_factor_secret(persistence, user_id)
     if not secret:
         return TwoFactorChallengeResult(ok=True, method=TwoFactorMethod.NOT_REQUIRED)
@@ -708,8 +712,9 @@ def verify_two_factor_challenge(
         if totp.verify(normalized):
             return TwoFactorChallengeResult(ok=True, method=TwoFactorMethod.TOTP)
 
-    if consume_recovery_code and consume_recovery_code_token(
-        persistence, user_id, sanitized_code
+    if recovery_code_consumer is not None and recovery_code_consumer(
+        user_id,
+        sanitized_code,
     ):
         return TwoFactorChallengeResult(
             ok=True,
@@ -721,6 +726,65 @@ def verify_two_factor_challenge(
         ok=False,
         failure=TwoFactorFailure.INVALID_CODE,
         failure_detail="Invalid verification or recovery code.",
+    )
+
+
+def verify_two_factor_challenge(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+    code: str | None,
+    *,
+    consume_recovery_code: bool = True,
+) -> TwoFactorChallengeResult:
+    """
+    Verify a user-supplied 2FA input against either TOTP or a recovery code.
+
+    This is the centralized 2FA verification entrypoint used by UI flows.
+    It owns:
+    - input sanitization (`SecuritySanitizer.sanitize_auth_code`)
+    - token normalization (strip hyphens)
+    - branching between TOTP vs. recovery-code verification
+    - recovery-code consumption (single-use semantics)
+    """
+    recovery_code_consumer: t.Callable[[uuid.UUID, str], bool] | None = None
+    if consume_recovery_code:
+        def consume_for_challenge(uid: uuid.UUID, value: str) -> bool:
+            return consume_recovery_code_token(
+                persistence,
+                uid,
+                value,
+            )
+
+        recovery_code_consumer = consume_for_challenge
+    return _verify_two_factor_challenge(
+        persistence,
+        user_id,
+        code,
+        recovery_code_consumer=recovery_code_consumer,
+    )
+
+
+def verify_two_factor_challenge_in_transaction(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+    code: str | None,
+) -> TwoFactorChallengeResult:
+    """Verify MFA and consume recovery codes inside the caller's transaction."""
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("Two-factor verification requires an open transaction.")
+
+    return _verify_two_factor_challenge(
+        persistence,
+        user_id,
+        code,
+        recovery_code_consumer=lambda uid, value: (
+            _consume_recovery_code_in_transaction(
+                persistence,
+                uid,
+                _normalize_recovery_code(value),
+            )
+        ),
     )
 
 

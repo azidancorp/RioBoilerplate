@@ -1393,24 +1393,9 @@ class Persistence:
         user_id: uuid.UUID,
         password: str,
         two_factor_code: str | None = None,
+        *,
+        auth_token: str,
     ) -> bool:
-        try:
-            user = await self.get_user_by_id(user_id)
-        except KeyError:
-            return False
-
-        user_password_valid = False
-        if user.auth_provider == "password":
-            user_password_valid = user.verify_password(password)
-
-        if not user_password_valid:
-            return False
-
-        if user.two_factor_enabled:
-            result = self.verify_two_factor_challenge(user_id, two_factor_code)
-            if not result.ok:
-                return False
-
         self._ensure_connection()
         if self.conn is None:
             raise RuntimeError("Database connection is not initialized")
@@ -1423,10 +1408,26 @@ class Persistence:
         try:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                user_session, user = self.get_valid_session_by_auth_token(auth_token)
                 target = self._load_admin_target(cursor, user_id)
             except KeyError:
                 conn.rollback()
                 return False
+            if user_session.user_id != user_id or user.id != user_id:
+                conn.rollback()
+                return False
+            if user.auth_provider != "password" or not user.verify_password(password):
+                conn.rollback()
+                return False
+            if user.two_factor_enabled:
+                result = persistence_auth.verify_two_factor_challenge_in_transaction(
+                    self,
+                    user_id,
+                    two_factor_code,
+                )
+                if not result.ok:
+                    conn.rollback()
+                    return False
             self._delete_user_in_transaction(
                 cursor,
                 target=target,

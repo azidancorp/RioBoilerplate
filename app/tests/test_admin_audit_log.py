@@ -327,8 +327,13 @@ def test_admin_delete_user_enforces_actor_hierarchy(temp_db: Persistence):
 def test_self_service_deletion_is_tagged(temp_db: Persistence):
     async def scenario():
         user = await _create_user(temp_db, "selfie@example.com", role="user")
+        session = await temp_db.create_session(user.id)
 
-        deleted = await temp_db.delete_user(user.id, password=PASSWORD)
+        deleted = await temp_db.delete_user(
+            user.id,
+            password=PASSWORD,
+            auth_token=session.id,
+        )
         assert deleted is True
 
         rows = temp_db.list_admin_actions(target_user_id=user.id, action="user_delete")

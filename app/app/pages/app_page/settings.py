@@ -355,7 +355,8 @@ class Settings(ResponsiveComponent):
         success = await persistence.delete_user(
             user_id=user_session.user_id,
             password=self.delete_account_password,
-            two_factor_code=self.delete_account_2fa if two_factor_enabled else None
+            two_factor_code=self.delete_account_2fa if two_factor_enabled else None,
+            auth_token=user_session.id,
         )
 
         if success:

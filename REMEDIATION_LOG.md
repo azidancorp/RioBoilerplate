@@ -52,7 +52,7 @@ decision not to change it.
 | Profile mutations | Cross-user profile edits do not consistently enforce the live role hierarchy inside the write transaction. | done — `Authorize profile writes atomically` |
 | Session lifetime | API bearer authentication accepts a session beyond its absolute maximum lifetime. | done — `Enforce absolute session lifetime everywhere` |
 | Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | done — `Apply one password policy to every flow` |
-| OAuth account deletion | An OAuth-only user cannot complete self-service account deletion. | queued |
+| OAuth account deletion | An OAuth-only user cannot complete self-service account deletion. | done — `Enable safe OAuth account deletion` |
 | Browser token storage | The bearer token is exposed to normal browser-side code instead of using Rio's HTTP-only storage marker. | done — `Store browser sessions in HTTP-only cookies` |
 | OAuth handoffs | A deactivation race can leave a handoff usable after an account is reactivated. | done — `Serialize OAuth handoffs with account status` |
 | Verification tokens | Concurrent email-verification requests can leave more than one live token. | done — `Replace verification tokens atomically` |
@@ -60,13 +60,13 @@ decision not to change it.
 | Expired auth data | Expired sessions and completed/expired OAuth handoffs accumulate indefinitely. | done — `Bound stale authentication data` |
 | Currency rounding | A positive display amount can round to a zero-unit ledger adjustment. | done — `Reject zero-unit currency adjustments` |
 | Currency idempotency | Retrying the same adjustment can apply it twice. | done — `Make currency API mutations idempotent` |
-| Protected deep links | Logged-out users lose the protected destination they originally requested. | queued |
-| HTTP route semantics | Unknown/API/documentation routes can return the Rio app shell with HTTP 200, and crawler metadata lists unsuitable routes. | queued |
-| Responsive refresh | The first mobile/desktop breakpoint crossing can be missed. | queued |
-| Admin experience | Stale authorization, misleading mail feedback, and unbounded user-table loading need focused corrections. | queued |
-| Source quality | Ruff errors remain and CI does not enforce the source checks used locally. | queued |
+| Protected deep links | Logged-out users lose the protected destination they originally requested. | done — `Resume protected destinations after login`; `Carry deep links through Google login` |
+| HTTP route semantics | Unknown/API/documentation routes can return the Rio app shell with HTTP 200, and crawler metadata lists unsuitable routes. | done — `Return real HTTP 404 responses`; `Publish a public-only sitemap` |
+| Responsive refresh | The first mobile/desktop breakpoint crossing can be missed. | done — `Refresh on the first breakpoint crossing` |
+| Admin experience | Stale authorization, misleading mail feedback, and unbounded user-table loading need focused corrections. | done — `Refresh admin state after denied writes`; `Describe reset delivery truthfully`; `Paginate the admin user table` |
+| Source quality | Ruff errors remain and CI does not enforce the source checks used locally. | done — `Make the repository Ruff clean`; `Enforce Ruff in CI` |
 | Deployment guide | Non-Railway Linux guidance targets an obsolete release and an unnecessarily privileged service. | done — `Harden the supported VPS deployment guide` |
-| Final verification | Focused tests, full pytest, Ruff, and dev/release boot evidence must all be reconciled here. | queued |
+| Final verification | Focused tests, full pytest, Ruff, and dev/release boot evidence must all be reconciled here. | done — `Record final remediation verification` |
 
 ## Completed work
 
@@ -453,3 +453,24 @@ decision not to change it.
   substituting local test paths; all placeholders are declared; obsolete
   release, path, runtime, and ownership instructions are absent; and
   `git diff --check` passed.
+
+### 2026-07-11 — Final repository verification
+
+- Ran the complete suite from the repository root without writing bytecode or
+  pytest cache artifacts: **421 tests passed in 107.23 seconds**.
+- Ran the repository-wide pinned Ruff check: **all checks passed**. For context,
+  Ruff reported 19 errors at the original `8b506f0` baseline and 17 immediately
+  before the dedicated cleanup commit.
+- Ran `pip check` against the existing project virtual environment: **no broken
+  requirements found**. No dependency was installed, removed, or changed during
+  this final verification.
+- Created two isolated copies from committed `HEAD` with `git archive`, then
+  booted one in development mode and one with `--release`. Both boots returned:
+  public home `200`, protected Settings `307` to
+  `/login?return_to=/app/settings`, docs/OpenAPI/health `200`, unknown browser
+  and API paths `404`, robots and sitemap `200`, a 14-path OpenAPI document
+  containing only `/api/*` and `/auth/*`, and no private route in the sitemap.
+- Stopped both smoke-test servers and removed their temporary copies and caches.
+  The tracked worktree is clean. The explicitly excluded, pre-existing untracked
+  crawler investigation remains untouched, and no excluded area was added to a
+  commit.

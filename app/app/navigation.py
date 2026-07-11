@@ -115,6 +115,19 @@ def get_page_role_mapping(routes: tuple[AppRoute, ...] = APP_ROUTES) -> dict[str
     return {route.path: list(route.allowed_roles) for route in routes}
 
 
+def get_registered_app_path(
+    value: object,
+    routes: tuple[AppRoute, ...] = APP_ROUTES,
+) -> str | None:
+    """Return an exact registered app path, never a normalized URL."""
+    if not isinstance(value, str):
+        return None
+    for route in routes:
+        if value == route.path:
+            return route.path
+    return None
+
+
 def get_sidebar_links(routes: tuple[AppRoute, ...] = APP_ROUTES) -> list[tuple[str, str, str]]:
     links: list[tuple[str, str, str]] = []
     for route in routes:

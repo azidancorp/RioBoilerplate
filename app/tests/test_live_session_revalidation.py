@@ -108,7 +108,10 @@ def _session_row_count(persistence: Persistence, auth_token: str) -> int:
 def _guard_event(persistence: Persistence, session: UserSession, url_segment: str):
     return SimpleNamespace(
         session=FakeRioSession(persistence, session),
-        active_pages=[SimpleNamespace(url_segment=url_segment)],
+        active_pages=[
+            SimpleNamespace(url_segment="app"),
+            SimpleNamespace(url_segment=url_segment),
+        ],
     )
 
 
@@ -120,7 +123,9 @@ def test_guard_rejects_live_session_after_database_revocation(temp_db: Persisten
         await temp_db.invalidate_all_sessions(user.id)
 
         assert cached_session.valid_until > datetime.now(timezone.utc)
-        assert _load_app_page_guard()(event) == "/"
+        assert _load_app_page_guard()(event) == (
+            "/login?return_to=%2Fapp%2Fadmin"
+        )
         assert UserSession not in event.session.attachments
         assert AppUser not in event.session.attachments
         assert event.session[UserSettings].auth_token == ""
@@ -156,7 +161,9 @@ def test_guard_rejects_live_session_after_database_expiry(temp_db: Persistence):
         )
         temp_db.conn.commit()
 
-        assert _load_app_page_guard()(event) == "/"
+        assert _load_app_page_guard()(event) == (
+            "/login?return_to=%2Fapp%2Fadmin"
+        )
         assert UserSession not in event.session.attachments
         assert AppUser not in event.session.attachments
         assert event.session[UserSettings].auth_token == ""

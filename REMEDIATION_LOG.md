@@ -273,3 +273,23 @@ decision not to change it.
   all 16 page-smoke tests passed. A live Rio dev boot returned the home page,
   protected Settings redirect, and safe deletion-reauth error redirect as
   expected.
+
+### 2026-07-11 — Protected destinations survive password login
+
+- Protected-page guards now send signed-out visitors to Login with the exact
+  registered app path they originally requested, rather than dropping them on
+  the public home page.
+- After password/MFA completion, Login resumes that destination only when it is
+  an exact `APP_ROUTES` entry and the role on the newly created live session can
+  access it. Otherwise it safely falls back to the dashboard.
+- The allowlist deliberately performs no URL normalization. External URLs,
+  protocol-relative URLs, unknown pages, queries, fragments, and trailing-slash
+  variants are not accepted as return destinations, removing open-redirect and
+  path-confusion behavior.
+- A still-authenticated user whose role no longer permits the requested page is
+  sent home rather than through Login. A revoked or expired session is cleared
+  and gets the same safe Login return path as a signed-out visitor.
+- Verification: 65 focused navigation/login/session/OAuth/password tests and
+  all 16 page-smoke tests passed. A live Rio dev boot returned Settings and
+  Admin as redirects to their corresponding allowlisted Login destinations,
+  and the Login URL rendered successfully.

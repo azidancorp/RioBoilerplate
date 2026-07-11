@@ -3,6 +3,7 @@ from app.navigation import (
     get_public_desktop_links,
     get_public_login_link,
     get_public_mobile_drawer_links,
+    get_registered_app_path,
     get_sidebar_links,
 )
 from app.permissions import PAGE_ROLE_MAPPING, get_all_roles
@@ -43,3 +44,18 @@ def test_public_login_link_is_defined_in_mobile_nav():
 
     assert login_path == "/login"
     assert mobile_links.get(login_title) == login_path
+
+
+def test_registered_app_path_requires_an_exact_allowlisted_path():
+    assert get_registered_app_path("/app/settings") == "/app/settings"
+
+    for unsafe_or_unknown in (
+        "https://example.com/app/settings",
+        "//example.com/app/settings",
+        "/app/settings?next=https://example.com",
+        "/app/settings#fragment",
+        "/app/settings/",
+        "/app/not-registered",
+        None,
+    ):
+        assert get_registered_app_path(unsafe_or_unknown) is None

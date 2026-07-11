@@ -9,6 +9,8 @@ from fastapi import HTTPException
 
 from app.persistence import BootstrapRequiredError, Persistence
 from app.data_models import AppUser, UserSettings, RecoveryCodeUsage
+from app.navigation import get_registered_app_path
+from app.permissions import check_access
 from app.components.center_component import CenterComponent
 from app.components.responsive import WIDTH_NARROW
 from app.scripts.utils import (
@@ -110,8 +112,17 @@ async def _complete_login_session(
             session.attach(usage)
         usage.used_at_login = True
 
-    session.navigate_to("/app/dashboard")
+    session.navigate_to(_login_destination(session, user_session.role))
     return True
+
+
+def _login_destination(session: rio.Session, user_role: str) -> str:
+    active_page_url = getattr(session, "active_page_url", None)
+    query = getattr(active_page_url, "query", {})
+    requested_path = get_registered_app_path(query.get("return_to"))
+    if requested_path and check_access(requested_path, user_role):
+        return requested_path
+    return "/app/dashboard"
 
 
 def _oauth_error_message(error_code: str) -> str:

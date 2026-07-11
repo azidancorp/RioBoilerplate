@@ -492,10 +492,13 @@ def test_reconciliation_across_many_transactions(temp_db: Persistence):
     async def scenario():
         user = await _create_user(temp_db, "many@example.com")
 
-        # Perform 100 small adjustments
+        # Perform many small non-zero adjustments. A zero delta is not a
+        # currency event and is rejected before it can enter the ledger.
         expected_total = 0
         for i in range(100):
             delta = (i % 10) - 5  # Mix of positive and negative
+            if delta == 0:
+                continue
             await temp_db.adjust_currency_balance(user.id, delta, reason=f"Transaction {i}")
             expected_total += delta
 

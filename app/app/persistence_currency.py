@@ -186,6 +186,8 @@ def adjust_currency_balance_in_transaction(
     conn = _get_connection(persistence)
     if not conn.in_transaction:
         raise RuntimeError("Currency adjustment requires an open transaction.")
+    if int(delta_minor) == 0:
+        raise ValueError("Currency adjustment must be non-zero in minor units")
     cfg = get_currency_config()
     cursor = persistence._get_cursor()
 

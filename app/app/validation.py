@@ -15,6 +15,7 @@ from pydantic import BaseModel, field_validator, Field, model_validator
 from fastapi import HTTPException, status
 
 from app.config import config
+from app.currency import major_to_minor
 
 
 # Validation Constants
@@ -475,8 +476,10 @@ class CurrencyAdjustmentRequest(BaseModel):
 
     @field_validator("amount")
     def _validate_amount(cls, value: Decimal) -> Decimal:
-        if value == 0:
-            raise ValueError("Amount must be non-zero")
+        if major_to_minor(value) == 0:
+            raise ValueError(
+                "Amount must equal at least one stored minor currency unit"
+            )
         return value
 
 

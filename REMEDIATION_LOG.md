@@ -58,7 +58,7 @@ decision not to change it.
 | Verification tokens | Concurrent email-verification requests can leave more than one live token. | done — `Replace verification tokens atomically` |
 | Transaction ownership | Some persistence helpers can accidentally commit a caller's unrelated pending work. | done — `Protect caller-owned auth transactions` |
 | Expired auth data | Expired sessions and completed/expired OAuth handoffs accumulate indefinitely. | done — `Bound stale authentication data` |
-| Currency rounding | A positive display amount can round to a zero-unit ledger adjustment. | queued |
+| Currency rounding | A positive display amount can round to a zero-unit ledger adjustment. | done — `Reject zero-unit currency adjustments` |
 | Currency idempotency | Retrying the same adjustment can apply it twice. | queued |
 | Protected deep links | Logged-out users lose the protected destination they originally requested. | queued |
 | HTTP route semantics | Unknown/API/documentation routes can return the Rio app shell with HTTP 200, and crawler metadata lists unsuitable routes. | queued |
@@ -210,3 +210,16 @@ decision not to change it.
 - Verification: `pytest app/tests/test_auth_state_cleanup.py
   app/tests/test_live_session_revalidation.py app/tests/test_oauth_google.py
   app/tests/test_oauth_handoff_atomicity.py -q`.
+
+### 2026-07-11 — Zero-unit currency adjustments
+
+- API validation now converts a proposed major-unit adjustment using the active
+  currency precision and rejects it if it would store as zero minor units. This
+  catches values such as `0.4` when the currency has no decimal places.
+- Persistence independently rejects a zero minor-unit delta before reading or
+  updating the account, so trusted/internal callers cannot create meaningless
+  ledger and audit entries either.
+- Added tests proving the balance, update timestamp, ledger, and admin audit all
+  remain unchanged at both boundaries.
+- Verification: `pytest app/tests/test_currency_api.py
+  app/tests/test_currency_persistence.py app/tests/test_currency_reconciliation.py -q`.

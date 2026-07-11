@@ -44,6 +44,7 @@ def restore_currency_config():
     original = {
         "PRIMARY_CURRENCY_INITIAL_BALANCE": config.PRIMARY_CURRENCY_INITIAL_BALANCE,
         "PRIMARY_CURRENCY_ALLOW_NEGATIVE": config.PRIMARY_CURRENCY_ALLOW_NEGATIVE,
+        "PRIMARY_CURRENCY_DECIMAL_PLACES": config.PRIMARY_CURRENCY_DECIMAL_PLACES,
     }
     yield
     for key, value in original.items():
@@ -155,6 +156,47 @@ def test_api_rejects_session_past_its_absolute_lifetime(
     assert asyncio.run(
         persistence.get_user_by_id(user.id)
     ).primary_currency_balance == 0
+
+
+def test_adjust_endpoint_rejects_amount_that_rounds_to_zero(api_test_setup):
+    client, persistence = api_test_setup
+    config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
+    config.PRIMARY_CURRENCY_DECIMAL_PLACES = 0
+    user, token = asyncio.run(
+        _create_user_with_session(persistence, "zero-rounding-api@example.com")
+    )
+    before_timestamp = persistence.conn.execute(
+        "SELECT primary_currency_updated_at FROM users WHERE id = ?",
+        (str(user.id),),
+    ).fetchone()[0]
+
+    response = client.post(
+        "/api/currency/adjust",
+        json={
+            "target_user_id": str(user.id),
+            "amount": "0.4",
+            "reason": "would round to zero",
+            "step_up": {"password": "secret"},
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 422
+    assert "minor currency unit" in response.text
+    refreshed = asyncio.run(persistence.get_user_by_id(user.id))
+    assert refreshed.primary_currency_balance == 0
+    assert persistence.conn.execute(
+        "SELECT primary_currency_updated_at FROM users WHERE id = ?",
+        (str(user.id),),
+    ).fetchone()[0] == before_timestamp
+    assert persistence.conn.execute(
+        "SELECT COUNT(*) FROM user_currency_ledger WHERE user_id = ?",
+        (str(user.id),),
+    ).fetchone()[0] == 0
+    assert persistence.conn.execute(
+        "SELECT COUNT(*) FROM admin_audit_log WHERE target_user_id = ?",
+        (str(user.id),),
+    ).fetchone()[0] == 0
 
 
 def test_adjust_endpoint_requires_actor_step_up(api_test_setup):

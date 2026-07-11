@@ -23,6 +23,7 @@ def reset_currency_config():
     original = {
         "PRIMARY_CURRENCY_INITIAL_BALANCE": config.PRIMARY_CURRENCY_INITIAL_BALANCE,
         "PRIMARY_CURRENCY_ALLOW_NEGATIVE": config.PRIMARY_CURRENCY_ALLOW_NEGATIVE,
+        "PRIMARY_CURRENCY_DECIMAL_PLACES": config.PRIMARY_CURRENCY_DECIMAL_PLACES,
     }
     yield
     for key, value in original.items():
@@ -61,6 +62,43 @@ def test_adjust_currency_balance_records_ledger(temp_db: Persistence):
         assert entry.delta == 150
         ledger = await temp_db.list_currency_ledger(user.id)
         assert ledger[0].reason == "signup bonus"
+
+    asyncio.run(scenario())
+
+
+def test_zero_minor_adjustment_has_no_balance_ledger_audit_or_timestamp_effect(
+    temp_db: Persistence,
+):
+    config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
+
+    async def scenario():
+        user = await _create_user(temp_db, "zero-minor-persistence@example.com")
+        before_timestamp = temp_db.conn.execute(
+            "SELECT primary_currency_updated_at FROM users WHERE id = ?",
+            (str(user.id),),
+        ).fetchone()[0]
+
+        with pytest.raises(ValueError, match="non-zero in minor units"):
+            await temp_db.adjust_currency_balance(
+                user.id,
+                delta_minor=0,
+                reason="must not create a zero ledger row",
+            )
+
+        refreshed = await temp_db.get_user_by_id(user.id)
+        assert refreshed.primary_currency_balance == 0
+        assert temp_db.conn.execute(
+            "SELECT primary_currency_updated_at FROM users WHERE id = ?",
+            (str(user.id),),
+        ).fetchone()[0] == before_timestamp
+        assert temp_db.conn.execute(
+            "SELECT COUNT(*) FROM user_currency_ledger WHERE user_id = ?",
+            (str(user.id),),
+        ).fetchone()[0] == 0
+        assert temp_db.conn.execute(
+            "SELECT COUNT(*) FROM admin_audit_log WHERE target_user_id = ?",
+            (str(user.id),),
+        ).fetchone()[0] == 0
 
     asyncio.run(scenario())
 

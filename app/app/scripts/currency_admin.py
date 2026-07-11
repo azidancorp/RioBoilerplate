@@ -116,7 +116,6 @@ async def cmd_adjust(args: argparse.Namespace, *, set_mode: bool = False) -> Non
                 new_balance_minor=minor_amount,
                 reason=args.reason,
                 metadata={"source": "currency_admin_cli"},
-                actor_user_id=None,
             )
         else:
             entry = await pers.adjust_currency_balance(
@@ -124,7 +123,6 @@ async def cmd_adjust(args: argparse.Namespace, *, set_mode: bool = False) -> Non
                 delta_minor=minor_amount,
                 reason=args.reason,
                 metadata={"source": "currency_admin_cli"},
-                actor_user_id=None,
             )
     finally:
         pers.close()

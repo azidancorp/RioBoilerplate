@@ -2,6 +2,7 @@ import sqlite3
 import threading
 import uuid
 import typing as t
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from app.validation import SecuritySanitizer
 from app.config import config
 from app.permissions import (
     can_manage_role,
+    check_access,
     get_default_role,
     get_highest_privilege_role,
     validate_role,
@@ -37,6 +39,38 @@ TwoFactorStateConflict = persistence_auth.TwoFactorStateConflict
 
 class BootstrapRequiredError(RuntimeError):
     """Raised when public registration is attempted before operator bootstrap."""
+
+
+class AdminSessionInvalidError(PermissionError):
+    """Raised when an admin mutation no longer has a live bearer session."""
+
+
+@dataclass(frozen=True, slots=True)
+class AdminMutationContext:
+    """Live session context required by every web-admin persistence mutation."""
+
+    auth_token: str
+    client_ip: str | None = None
+
+
+@dataclass
+class AdminPasswordResetIssuance(ExpirableVerificationToken):
+    """Reset token and recipient captured at the transaction linearization point."""
+
+    recipient_email: str
+
+
+@dataclass(frozen=True, slots=True)
+class _AdminTargetSnapshot:
+    """Target fields read while the admin mutation owns the SQLite writer lock."""
+
+    id: uuid.UUID
+    email: str
+    username: str | None
+    role: str
+    is_active: bool
+    auth_provider: str
+    primary_currency_balance: int
 
 
 # Schema setup is idempotent but does ~29 DDL statements, so we only run it once
@@ -336,16 +370,96 @@ class Persistence:
             )
 
     @staticmethod
-    def _require_admin_actor_can_manage(
+    def _require_role_can_manage(
         *,
-        actor: AppUser,
+        actor_role: str,
         target_role: str,
         action: str,
     ) -> None:
-        if not can_manage_role(actor.role, target_role):
+        if not can_manage_role(actor_role, target_role):
             raise PermissionError(
-                f"User with role {actor.role} cannot {action} users with role {target_role}."
+                f"User with role {actor_role} cannot {action} users with role {target_role}."
             )
+
+    @staticmethod
+    def _require_top_level_transaction(
+        conn: sqlite3.Connection,
+        *,
+        action: str,
+    ) -> None:
+        if conn.in_transaction:
+            raise RuntimeError(f"{action} cannot run inside an existing transaction.")
+
+    def _require_live_admin_actor(
+        self,
+        admin_context: AdminMutationContext,
+    ) -> AppUser:
+        """Resolve the actor from a live session inside an open write transaction."""
+        if not admin_context.auth_token:
+            raise AdminSessionInvalidError("Your admin session is no longer valid.")
+
+        try:
+            _, actor = self.get_valid_session_by_auth_token(admin_context.auth_token)
+        except KeyError as exc:
+            raise AdminSessionInvalidError(
+                "Your admin session is no longer valid."
+            ) from exc
+
+        if not check_access("/app/admin", actor.role):
+            raise PermissionError(
+                f"User with role {actor.role} is not authorized for admin actions."
+            )
+        return actor
+
+    @staticmethod
+    def _load_admin_target(
+        cursor: sqlite3.Cursor,
+        user_id: uuid.UUID,
+    ) -> _AdminTargetSnapshot:
+        cursor.execute(
+            """
+            SELECT email, username, role, is_active, auth_provider,
+                   primary_currency_balance
+            FROM users
+            WHERE id = ?
+            """,
+            (str(user_id),),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise KeyError(user_id)
+        return _AdminTargetSnapshot(
+            id=user_id,
+            email=t.cast(str, row[0]),
+            username=t.cast(str | None, row[1]),
+            role=t.cast(str, row[2]),
+            is_active=bool(row[3]),
+            auth_provider=t.cast(str, row[4]),
+            primary_currency_balance=int(row[5] or 0),
+        )
+
+    def _require_live_admin_actor_can_manage(
+        self,
+        cursor: sqlite3.Cursor,
+        *,
+        admin_context: AdminMutationContext,
+        target_user_id: uuid.UUID,
+        action: str,
+        allow_self: bool = False,
+    ) -> tuple[AppUser, _AdminTargetSnapshot]:
+        actor = self._require_live_admin_actor(admin_context)
+        target = self._load_admin_target(cursor, target_user_id)
+        if actor.id != target.id:
+            self._require_role_can_manage(
+                actor_role=actor.role,
+                target_role=target.role,
+                action=action,
+            )
+        elif not allow_self:
+            raise PermissionError(
+                f"User with role {actor.role} cannot {action} their own account."
+            )
+        return actor, target
 
     async def _create_user_transaction(
         self,
@@ -367,6 +481,7 @@ class Persistence:
             raise RuntimeError("Database connection is not initialized")
 
         conn = self.conn
+        self._require_top_level_transaction(conn, action="User creation")
         cursor = conn.cursor()
         now_ts = datetime.now(timezone.utc).timestamp()
 
@@ -417,22 +532,16 @@ class Persistence:
         email: str,
         password: str,
         role: str,
-        actor: AppUser,
+        admin_context: AdminMutationContext,
         username: str | None = None,
         full_name: str | None = None,
         is_verified: bool = False,
-        client_ip: str | None = None,
     ) -> AppUser:
         """Create a user from the authenticated admin surface."""
         if not validate_role(role):
             raise ValueError(
                 f"Invalid role: {role}. Must be one of: {', '.join(get_all_roles())}"
             )
-        self._require_admin_actor_can_manage(
-            actor=actor,
-            target_role=role,
-            action="create",
-        )
 
         if len((password or "").strip()) < 8:
             raise ValueError("Password must be at least 8 characters.")
@@ -466,11 +575,18 @@ class Persistence:
             raise RuntimeError("Database connection is not initialized")
 
         conn = self.conn
+        self._require_top_level_transaction(conn, action="Admin user creation")
         cursor = conn.cursor()
-        now_ts = datetime.now(timezone.utc).timestamp()
 
         try:
             conn.execute("BEGIN IMMEDIATE")
+            actor = self._require_live_admin_actor(admin_context)
+            self._require_role_can_manage(
+                actor_role=actor.role,
+                target_role=role,
+                action="create",
+            )
+            now_ts = datetime.now(timezone.utc).timestamp()
             self._insert_user_records(
                 cursor,
                 user=user,
@@ -486,13 +602,14 @@ class Persistence:
                 target_label=user.email,
                 before=None,
                 after={"email": user.email, "role": role},
-                client_ip=client_ip,
+                client_ip=admin_context.client_ip,
                 created_at=now_ts,
                 commit=False,
             )
             conn.commit()
         except Exception:
-            conn.rollback()
+            if conn.in_transaction:
+                conn.rollback()
             raise
 
         return await self.get_user_by_id(user.id)
@@ -501,19 +618,13 @@ class Persistence:
         self,
         user_id: uuid.UUID,
         *,
-        actor: AppUser,
+        admin_context: AdminMutationContext,
         email: str | None = None,
+        expected_email: str | None = None,
         username: str | None = None,
         full_name: str | None = None,
-        client_ip: str | None = None,
     ) -> AppUser:
         """Update admin-managed identity fields and the matching profile row."""
-        current_user = await self.get_user_by_id(user_id)
-        self._require_admin_actor_can_manage(
-            actor=actor,
-            target_role=current_user.role,
-            action="edit",
-        )
         normalized_email = (
             SecuritySanitizer.validate_email_format(
                 email,
@@ -522,6 +633,16 @@ class Persistence:
             if email is not None
             else None
         )
+        normalized_expected_email = (
+            SecuritySanitizer.validate_email_format(
+                expected_email,
+                require_valid=config.REQUIRE_VALID_EMAIL,
+            )
+            if expected_email is not None
+            else None
+        )
+        if normalized_email is not None and normalized_expected_email is None:
+            raise ValueError("The current email is required when changing an email address.")
         sanitized_username = (
             SecuritySanitizer.sanitize_string(username, 100)
             if username is not None and username.strip()
@@ -532,25 +653,38 @@ class Persistence:
             if full_name is not None and full_name.strip()
             else ("" if full_name is not None else None)
         )
-        email_changed = (
-            normalized_email is not None
-            and normalized_email != current_user.email
-        )
-
         if normalized_email is None and username is None and full_name is None:
-            return current_user
+            return await self.get_user_by_id(user_id)
 
         self._ensure_connection()
         if self.conn is None:
             raise RuntimeError("Database connection is not initialized")
 
         conn = self.conn
+        self._require_top_level_transaction(conn, action="Admin profile updates")
         cursor = conn.cursor()
-        now_ts = datetime.now(timezone.utc).timestamp()
         uid = str(user_id)
 
         try:
             conn.execute("BEGIN IMMEDIATE")
+            actor, target = self._require_live_admin_actor_can_manage(
+                cursor,
+                admin_context=admin_context,
+                target_user_id=user_id,
+                action="edit",
+            )
+            if (
+                normalized_email is not None
+                and normalized_expected_email != target.email
+            ):
+                raise ValueError(
+                    "The user's email changed while this edit was pending. Reload and try again."
+                )
+            email_changed = (
+                normalized_email is not None
+                and normalized_email != target.email
+            )
+            now_ts = datetime.now(timezone.utc).timestamp()
             user_fields: list[str] = []
             user_params: list[t.Any] = []
             if normalized_email is not None:
@@ -633,17 +767,17 @@ class Persistence:
                         (
                             uid,
                             sanitized_full_name or sanitized_username or "",
-                            normalized_email or current_user.email,
+                            normalized_email or target.email,
                             now_ts,
                             now_ts,
                         ),
                     )
 
             after_email = (
-                normalized_email if normalized_email is not None else current_user.email
+                normalized_email if normalized_email is not None else target.email
             )
             after_username = (
-                sanitized_username if username is not None else current_user.username
+                sanitized_username if username is not None else target.username
             )
             self.record_admin_action(
                 actor_user_id=actor.id,
@@ -652,18 +786,19 @@ class Persistence:
                 target_user_id=user_id,
                 target_label=after_email,
                 before={
-                    "email": current_user.email,
-                    "username": current_user.username,
+                    "email": target.email,
+                    "username": target.username,
                 },
                 after={"email": after_email, "username": after_username},
-                client_ip=client_ip,
+                client_ip=admin_context.client_ip,
                 created_at=now_ts,
                 commit=False,
             )
 
             conn.commit()
         except Exception:
-            conn.rollback()
+            if conn.in_transaction:
+                conn.rollback()
             raise
 
         return await self.get_user_by_id(user_id)
@@ -673,34 +808,27 @@ class Persistence:
         user_id: uuid.UUID,
         is_active: bool,
         *,
-        actor: AppUser,
-        client_ip: str | None = None,
+        admin_context: AdminMutationContext,
     ) -> AppUser:
         """Activate or deactivate a user, invalidating sessions on deactivation."""
-        current_user = await self.get_user_by_id(user_id)
-        self._require_admin_actor_can_manage(
-            actor=actor,
-            target_role=current_user.role,
-            action="update account status for",
-        )
         self._ensure_connection()
         if self.conn is None:
             raise RuntimeError("Database connection is not initialized")
 
         conn = self.conn
+        self._require_top_level_transaction(conn, action="Admin status updates")
         cursor = conn.cursor()
         uid = str(user_id)
 
         try:
             conn.execute("BEGIN IMMEDIATE")
-            cursor.execute(
-                "SELECT is_active FROM users WHERE id = ?",
-                (uid,),
+            actor, target = self._require_live_admin_actor_can_manage(
+                cursor,
+                admin_context=admin_context,
+                target_user_id=user_id,
+                action="update account status for",
             )
-            row = cursor.fetchone()
-            if row is None:
-                raise KeyError(user_id)
-            was_active = bool(row[0])
+            was_active = target.is_active
 
             cursor.execute(
                 "UPDATE users SET is_active = ? WHERE id = ?",
@@ -736,16 +864,17 @@ class Persistence:
                 actor_role=actor.role,
                 action="user_reactivate" if is_active else "user_deactivate",
                 target_user_id=user_id,
-                target_label=current_user.email,
+                target_label=target.email,
                 before={"is_active": was_active},
                 after={"is_active": is_active},
-                client_ip=client_ip,
+                client_ip=admin_context.client_ip,
                 commit=False,
             )
 
             conn.commit()
         except Exception:
-            conn.rollback()
+            if conn.in_transaction:
+                conn.rollback()
             raise
 
         return await self.get_user_by_id(user_id)
@@ -754,39 +883,60 @@ class Persistence:
         self,
         user_id: uuid.UUID,
         *,
-        actor: AppUser,
-        client_ip: str | None = None,
-    ) -> ExpirableVerificationToken:
+        admin_context: AdminMutationContext,
+    ) -> AdminPasswordResetIssuance:
         """Create a reset token for an active password-authenticated user."""
-        user = await self.get_user_by_id(user_id)
-        self._require_admin_actor_can_manage(
-            actor=actor,
-            target_role=user.role,
-            action="reset password for",
-        )
-        if not user.is_active:
-            raise ValueError("Cannot issue a password reset for an inactive user.")
-        if user.auth_provider != "password":
-            raise ValueError("Cannot issue a password reset for an external-auth user.")
-        reset_token = await self.create_reset_token(user_id)
-        # create_reset_token owns and commits its atomic token-replacement
-        # transaction, so this audit row cannot share that transaction without
-        # refactoring the reset-token flow. For v1 accept best-effort ordering:
-        # write the row right after the token is created.
-        # The raw token is never stored — only the issuance fact + expiry.
-        self.record_admin_action(
-            actor_user_id=actor.id,
-            actor_role=actor.role,
-            action="password_reset_sent",
-            target_user_id=user_id,
-            target_label=user.email,
-            before=None,
-            after=None,
-            metadata={"valid_until": reset_token.valid_until.timestamp()},
-            client_ip=client_ip,
-            commit=True,
-        )
-        return reset_token
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="Admin reset issuance")
+        cursor = conn.cursor()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            actor, target = self._require_live_admin_actor_can_manage(
+                cursor,
+                admin_context=admin_context,
+                target_user_id=user_id,
+                action="reset password for",
+            )
+            if not target.is_active:
+                raise ValueError("Cannot issue a password reset for an inactive user.")
+            if target.auth_provider != "password":
+                raise ValueError(
+                    "Cannot issue a password reset for an external-auth user."
+                )
+
+            reset_token = persistence_auth.create_reset_token_in_transaction(
+                self,
+                user_id,
+            )
+            # The raw token is never stored — only the issuance fact + expiry.
+            self.record_admin_action(
+                actor_user_id=actor.id,
+                actor_role=actor.role,
+                action="password_reset_issued",
+                target_user_id=user_id,
+                target_label=target.email,
+                before=None,
+                after=None,
+                metadata={"valid_until": reset_token.valid_until.timestamp()},
+                client_ip=admin_context.client_ip,
+                commit=False,
+            )
+            conn.commit()
+            return AdminPasswordResetIssuance(
+                token=reset_token.token,
+                user_id=reset_token.user_id,
+                created_at=reset_token.created_at,
+                valid_until=reset_token.valid_until,
+                recipient_email=target.email,
+            )
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
 
     async def create_verified_root_user_if_empty(self, user: AppUser) -> bool:
         """Create a verified root user only if the users table is still empty."""
@@ -800,6 +950,7 @@ class Persistence:
             raise RuntimeError("Database connection is not initialized")
 
         conn = self.conn
+        self._require_top_level_transaction(conn, action="Root bootstrap")
         cursor = conn.cursor()
         now_ts = datetime.now(timezone.utc).timestamp()
         root_role = get_highest_privilege_role()
@@ -881,15 +1032,54 @@ class Persistence:
         *,
         reason: str | None = None,
         metadata: dict[str, t.Any] | None = None,
-        actor_user_id: uuid.UUID | None = None,
-        actor_role: str | None = None,
-        client_ip: str | None = None,
     ) -> CurrencyLedgerEntry:
         return await persistence_currency.adjust_currency_balance(
             self, user_id, delta_minor,
-            reason=reason, metadata=metadata, actor_user_id=actor_user_id,
-            actor_role=actor_role, client_ip=client_ip,
+            reason=reason, metadata=metadata,
         )
+
+    async def admin_adjust_currency_balance(
+        self,
+        user_id: uuid.UUID,
+        delta_minor: int,
+        *,
+        admin_context: AdminMutationContext,
+        reason: str | None = None,
+        metadata: dict[str, t.Any] | None = None,
+    ) -> CurrencyLedgerEntry:
+        """Admin balance adjustment authorized at the write linearization point."""
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="Admin currency adjustments")
+        cursor = conn.cursor()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            actor, _ = self._require_live_admin_actor_can_manage(
+                cursor,
+                admin_context=admin_context,
+                target_user_id=user_id,
+                action="update balances for",
+                allow_self=True,
+            )
+            entry = persistence_currency.adjust_currency_balance_in_transaction(
+                self,
+                user_id,
+                delta_minor,
+                actor_user_id=actor.id,
+                actor_role=actor.role,
+                client_ip=admin_context.client_ip,
+                reason=reason,
+                metadata=metadata,
+            )
+            conn.commit()
+            return entry
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
 
     async def set_currency_balance(
         self,
@@ -898,15 +1088,54 @@ class Persistence:
         *,
         reason: str | None = None,
         metadata: dict[str, t.Any] | None = None,
-        actor_user_id: uuid.UUID | None = None,
-        actor_role: str | None = None,
-        client_ip: str | None = None,
     ) -> CurrencyLedgerEntry:
         return await persistence_currency.set_currency_balance(
             self, user_id, new_balance_minor,
-            reason=reason, metadata=metadata, actor_user_id=actor_user_id,
-            actor_role=actor_role, client_ip=client_ip,
+            reason=reason, metadata=metadata,
         )
+
+    async def admin_set_currency_balance(
+        self,
+        user_id: uuid.UUID,
+        new_balance_minor: int,
+        *,
+        admin_context: AdminMutationContext,
+        reason: str | None = None,
+        metadata: dict[str, t.Any] | None = None,
+    ) -> CurrencyLedgerEntry:
+        """Admin balance replacement authorized at the write linearization point."""
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="Admin currency replacements")
+        cursor = conn.cursor()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            actor, _ = self._require_live_admin_actor_can_manage(
+                cursor,
+                admin_context=admin_context,
+                target_user_id=user_id,
+                action="update balances for",
+                allow_self=True,
+            )
+            entry = persistence_currency.set_currency_balance_in_transaction(
+                self,
+                user_id,
+                new_balance_minor,
+                actor_user_id=actor.id,
+                actor_role=actor.role,
+                client_ip=admin_context.client_ip,
+                reason=reason,
+                metadata=metadata,
+            )
+            conn.commit()
+            return entry
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
 
     async def list_currency_ledger(
         self,
@@ -942,14 +1171,44 @@ class Persistence:
     async def get_user_by_email_or_username(self, identifier: str) -> AppUser:
         return await persistence_users.get_user_by_email_or_username(self, identifier)
 
-    # Updates users + sessions; cross-table write stays on façade.
+    def _update_user_role_in_transaction(
+        self,
+        cursor: sqlite3.Cursor,
+        *,
+        target: _AdminTargetSnapshot,
+        new_role: str,
+        actor_user_id: uuid.UUID | None,
+        actor_role: str | None,
+        client_ip: str | None,
+    ) -> None:
+        uid = str(target.id)
+        cursor.execute(
+            "UPDATE users SET role = ? WHERE id = ?",
+            (new_role, uid),
+        )
+        if cursor.rowcount == 0:
+            raise KeyError(target.id)
+        cursor.execute(
+            "UPDATE user_sessions SET role = ? WHERE user_id = ?",
+            (new_role, uid),
+        )
+        self.record_admin_action(
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            action="role_change",
+            target_user_id=target.id,
+            target_label=target.email,
+            before={"role": target.role},
+            after={"role": new_role},
+            client_ip=client_ip,
+            commit=False,
+        )
+
+    # Trusted/operator role update. Web-admin callers must use admin_update_user_role.
     async def update_user_role(
         self,
         user_id: uuid.UUID,
         new_role: str,
-        *,
-        actor: AppUser | None = None,
-        client_ip: str | None = None,
     ) -> None:
         if not validate_role(new_role):
             raise ValueError(f"Invalid role: {new_role}. Must be one of: {', '.join(get_all_roles())}")
@@ -964,48 +1223,70 @@ class Persistence:
                 "Role changes cannot run inside an existing transaction."
             )
         cursor = conn.cursor()
-        uid = str(user_id)
 
         try:
             # Acquire the writer lock before reading the old role so concurrent
             # role changes cannot record a stale "before" value in the audit log.
             conn.execute("BEGIN IMMEDIATE")
-            cursor.execute(
-                "SELECT email, role FROM users WHERE id = ?",
-                (uid,),
+            target = self._load_admin_target(cursor, user_id)
+            self._update_user_role_in_transaction(
+                cursor,
+                target=target,
+                new_role=new_role,
+                actor_user_id=None,
+                actor_role=None,
+                client_ip=None,
             )
-            target_row = cursor.fetchone()
-            if target_row is None:
-                raise KeyError(user_id)
-            target_email, old_role = target_row
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
 
-            cursor.execute(
-                "UPDATE users SET role = ? WHERE id = ?",
-                (new_role, uid),
+    async def admin_update_user_role(
+        self,
+        user_id: uuid.UUID,
+        new_role: str,
+        *,
+        admin_context: AdminMutationContext,
+    ) -> None:
+        """Role update authorized against live actor and target state."""
+        if not validate_role(new_role):
+            raise ValueError(
+                f"Invalid role: {new_role}. Must be one of: {', '.join(get_all_roles())}"
             )
 
-            if cursor.rowcount == 0:
-                raise KeyError(user_id)
-
-            cursor.execute(
-                "UPDATE user_sessions SET role = ? WHERE user_id = ?",
-                (new_role, uid),
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+        conn = self.conn
+        if conn.in_transaction:
+            raise RuntimeError(
+                "Role changes cannot run inside an existing transaction."
             )
+        cursor = conn.cursor()
 
-            # actor is optional (this method has no persistence-layer authz; it is
-            # gated in the UI handler). Guard every actor.* read behind a None check.
-            self.record_admin_action(
-                actor_user_id=actor.id if actor is not None else None,
-                actor_role=actor.role if actor is not None else None,
-                action="role_change",
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            actor, target = self._require_live_admin_actor_can_manage(
+                cursor,
+                admin_context=admin_context,
                 target_user_id=user_id,
-                target_label=target_email,
-                before={"role": old_role},
-                after={"role": new_role},
-                client_ip=client_ip,
-                commit=False,
+                action="change roles for",
             )
-
+            self._require_role_can_manage(
+                actor_role=actor.role,
+                target_role=new_role,
+                action="assign roles to",
+            )
+            self._update_user_role_in_transaction(
+                cursor,
+                target=target,
+                new_role=new_role,
+                actor_user_id=actor.id,
+                actor_role=actor.role,
+                client_ip=admin_context.client_ip,
+            )
             conn.commit()
         except Exception:
             if conn.in_transaction:
@@ -1112,9 +1393,6 @@ class Persistence:
         user_id: uuid.UUID,
         password: str,
         two_factor_code: str | None = None,
-        *,
-        actor: AppUser | None = None,
-        client_ip: str | None = None,
     ) -> bool:
         try:
             user = await self.get_user_by_id(user_id)
@@ -1133,96 +1411,112 @@ class Persistence:
             if not result.ok:
                 return False
 
-        return await self._delete_user_authorized(
-            user,
-            actor=actor,
-            client_ip=client_ip,
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+        conn = self.conn
+        self._require_top_level_transaction(
+            conn,
+            action="Self-service user deletion",
         )
+        cursor = conn.cursor()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                target = self._load_admin_target(cursor, user_id)
+            except KeyError:
+                conn.rollback()
+                return False
+            self._delete_user_in_transaction(
+                cursor,
+                target=target,
+                actor_user_id=user_id,
+                actor_role=target.role,
+                client_ip=None,
+                metadata={"self_service": True},
+            )
+            conn.commit()
+            return True
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
 
     async def admin_delete_user(
         self,
         user_id: uuid.UUID,
         *,
-        actor: AppUser,
-        client_ip: str | None = None,
+        admin_context: AdminMutationContext,
     ) -> bool:
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="Admin user deletion")
+        cursor = conn.cursor()
         try:
-            user = await self.get_user_by_id(user_id)
-        except KeyError:
-            return False
-
-        self._require_admin_actor_can_manage(
-            actor=actor,
-            target_role=user.role,
-            action="delete",
-        )
-
-        return await self._delete_user_authorized(
-            user,
-            actor=actor,
-            client_ip=client_ip,
-        )
-
-    async def _delete_user_authorized(
-        self,
-        user: AppUser,
-        *,
-        actor: AppUser | None,
-        client_ip: str | None,
-    ) -> bool:
-        user_id = user.id
-        cursor = self._get_cursor()
-        uid = str(user_id)
-
-        # Self-service deletion has no admin actor (settings.py calls this without
-        # one); the admin path always passes actor != target. Attribute a
-        # self-deletion to the user themselves so actor == target reads correctly,
-        # and tag it so it is distinguishable from an admin removal. Guard every
-        # actor.* read behind an actor-is-not-None check.
-        is_self_service = actor is None or actor.id == user_id
-        if is_self_service:
-            audit_actor_id: uuid.UUID | None = user_id
-            audit_actor_role = user.role
-            audit_metadata: dict[str, t.Any] | None = {"self_service": True}
-        else:
-            audit_actor_id = actor.id
-            audit_actor_role = actor.role
-            audit_metadata = None
-
-        try:
-            self.conn.execute("BEGIN IMMEDIATE")
-
-            # Write the audit row before the cascade deletes so the target's
-            # email/role are snapshotted. The audit table has no FK cascade, so this
-            # row persists after the user is gone.
-            self.record_admin_action(
-                actor_user_id=audit_actor_id,
-                actor_role=audit_actor_role,
-                action="user_delete",
-                target_user_id=user_id,
-                target_label=user.email,
-                before={"email": user.email, "role": user.role},
-                after=None,
-                metadata=audit_metadata,
-                client_ip=client_ip,
-                commit=False,
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                actor, target = self._require_live_admin_actor_can_manage(
+                    cursor,
+                    admin_context=admin_context,
+                    target_user_id=user_id,
+                    action="delete",
+                )
+            except KeyError:
+                conn.rollback()
+                return False
+            self._delete_user_in_transaction(
+                cursor,
+                target=target,
+                actor_user_id=actor.id,
+                actor_role=actor.role,
+                client_ip=admin_context.client_ip,
+                metadata=None,
             )
-
-            for table in (
-                "user_sessions",
-                "password_reset_tokens",
-                "oauth_login_handoffs",
-                "two_factor_recovery_codes",
-                "profiles",
-            ):
-                cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
-            # email_verification_tokens is cleaned up by ON DELETE CASCADE.
-            cursor.execute("DELETE FROM users WHERE id = ?", (uid,))
-            self.conn.commit()
+            conn.commit()
+            return True
         except Exception:
-            self.conn.rollback()
+            if conn.in_transaction:
+                conn.rollback()
             raise
-        return True
+
+    def _delete_user_in_transaction(
+        self,
+        cursor: sqlite3.Cursor,
+        *,
+        target: _AdminTargetSnapshot,
+        actor_user_id: uuid.UUID,
+        actor_role: str,
+        client_ip: str | None,
+        metadata: dict[str, t.Any] | None,
+    ) -> None:
+        uid = str(target.id)
+        # Write before the cascade so the target snapshot survives deletion.
+        self.record_admin_action(
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            action="user_delete",
+            target_user_id=target.id,
+            target_label=target.email,
+            before={"email": target.email, "role": target.role},
+            after=None,
+            metadata=metadata,
+            client_ip=client_ip,
+            commit=False,
+        )
+        for table in (
+            "user_sessions",
+            "password_reset_tokens",
+            "oauth_login_handoffs",
+            "two_factor_recovery_codes",
+            "profiles",
+        ):
+            cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))
+        # email_verification_tokens is cleaned up by ON DELETE CASCADE.
+        cursor.execute("DELETE FROM users WHERE id = ?", (uid,))
+        if cursor.rowcount != 1:
+            raise KeyError(target.id)
 
     async def create_profile(self, user_id: str, full_name: str, email: str,
                            phone: str = None, address: str = None,

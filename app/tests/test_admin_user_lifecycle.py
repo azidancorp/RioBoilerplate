@@ -14,13 +14,20 @@ from app.data_models import AppUser, UserSettings, UserSession
 from app.pages.app_page import admin as admin_page_module
 from app.pages.app_page.admin import AdminPage
 from app.pages.login import LoginForm
-from app.persistence import Persistence
+from app.persistence import AdminMutationContext, Persistence
 from app.rate_limits import rate_limit_key, sensitive_action_policy
 from app.scripts import message_utils
 from app.session_validation import StepUpResult
 
 
 PASSWORD = "VeryStrongPass!9"
+
+
+def _admin_context(user_session: UserSession) -> AdminMutationContext:
+    return AdminMutationContext(
+        auth_token=user_session.id,
+        client_ip="198.51.100.40",
+    )
 
 
 @pytest.fixture
@@ -193,6 +200,7 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.step_up_2fa = ""
     component.step_up_error = ""
     component.step_up_pending_identifier = ""
+    component.step_up_pending_user_id = ""
     component.step_up_pending_new_role = ""
     for key, value in attributes.items():
         setattr(component, key, value)
@@ -243,16 +251,57 @@ def _session_count(persistence: Persistence, user_id) -> int:
     ).fetchone()[0]
 
 
+def _admin_action_count(
+    persistence: Persistence,
+    *,
+    action: str,
+    target_user_id,
+) -> int:
+    return persistence.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM admin_audit_log
+        WHERE action = ? AND target_user_id = ?
+        """,
+        (action, str(target_user_id)),
+    ).fetchone()[0]
+
+
+def _race_admin_authorization(
+    persistence: Persistence,
+    *,
+    actor_user_id,
+    authorization_change: str,
+) -> None:
+    if authorization_change == "demote":
+        persistence.conn.execute(
+            "UPDATE users SET role = 'user' WHERE id = ?",
+            (str(actor_user_id),),
+        )
+        persistence.conn.execute(
+            "UPDATE user_sessions SET role = 'user' WHERE user_id = ?",
+            (str(actor_user_id),),
+        )
+    elif authorization_change == "revoke":
+        persistence.conn.execute(
+            "DELETE FROM user_sessions WHERE user_id = ?",
+            (str(actor_user_id),),
+        )
+    else:
+        raise AssertionError(f"Unexpected authorization change: {authorization_change}")
+    persistence.conn.commit()
+
+
 def test_admin_create_user_does_not_public_root_bootstrap(
     temp_db: Persistence,
 ):
     async def scenario():
-        root, _ = await _create_root_session(temp_db)
+        root, root_session = await _create_root_session(temp_db)
         created = await temp_db.admin_create_user(
             email="created-on-empty@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
             full_name="Created User",
             is_verified=True,
         )
@@ -369,7 +418,7 @@ def test_new_admin_step_up_actions_warn_when_recovery_codes_are_used(
             email="recovery-warning-target@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
 
         create_page = _mount_admin(
@@ -529,12 +578,12 @@ def test_admin_page_duplicate_email_uses_friendly_error(temp_db: Persistence):
 
 def test_admin_page_rejects_equal_or_higher_role_creation(temp_db: Persistence):
     async def scenario():
-        root, _ = await _create_root_session(temp_db)
+        root, root_session = await _create_root_session(temp_db)
         admin = await temp_db.admin_create_user(
             email="admin-peer@example.com",
             password=PASSWORD,
             role="admin",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         admin_session = await temp_db.create_session(admin.id)
         session = _FakeSession(temp_db, admin_session, admin)
@@ -557,39 +606,51 @@ def test_admin_page_rejects_equal_or_higher_role_creation(temp_db: Persistence):
 
 def test_persistence_admin_methods_enforce_actor_hierarchy(temp_db: Persistence):
     async def scenario():
-        root, _ = await _create_root_session(temp_db)
+        root, root_session = await _create_root_session(temp_db)
         admin = await temp_db.admin_create_user(
             email="actor-admin@example.com",
             password=PASSWORD,
             role="admin",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         target = await temp_db.admin_create_user(
             email="actor-user@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
+        admin_session = await temp_db.create_session(admin.id)
 
         with pytest.raises(PermissionError):
             await temp_db.admin_create_user(
                 email="actor-peer-admin@example.com",
                 password=PASSWORD,
                 role="admin",
-                actor=admin,
+                admin_context=_admin_context(admin_session),
             )
         with pytest.raises(PermissionError):
             await temp_db.admin_update_user_profile(
                 root.id,
-                actor=admin,
+                admin_context=_admin_context(admin_session),
                 username="blocked",
             )
         with pytest.raises(PermissionError):
-            await temp_db.admin_set_user_active(root.id, False, actor=admin)
+            await temp_db.admin_set_user_active(
+                root.id,
+                False,
+                admin_context=_admin_context(admin_session),
+            )
         with pytest.raises(PermissionError):
-            await temp_db.admin_issue_password_reset(root.id, actor=admin)
+            await temp_db.admin_issue_password_reset(
+                root.id,
+                admin_context=_admin_context(admin_session),
+            )
 
-        await temp_db.admin_set_user_active(target.id, False, actor=admin)
+        await temp_db.admin_set_user_active(
+            target.id,
+            False,
+            admin_context=_admin_context(admin_session),
+        )
         assert (await temp_db.get_user_by_id(target.id)).is_active is False
 
     asyncio.run(scenario())
@@ -602,7 +663,7 @@ def test_authenticated_admin_page_builds_lifecycle_controls(temp_db: Persistence
             email="build-visible-user@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
             username="builduser",
         )
         session = _FakeSession(temp_db, root_session, root)
@@ -642,12 +703,12 @@ def test_admin_page_rejects_higher_role_edit_status_and_reset(
     )
 
     async def scenario():
-        root, _ = await _create_root_session(temp_db)
+        root, root_session = await _create_root_session(temp_db)
         admin = await temp_db.admin_create_user(
             email="limited-admin@example.com",
             password=PASSWORD,
             role="admin",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         admin_session = await temp_db.create_session(admin.id)
         session = _FakeSession(temp_db, admin_session, admin)
@@ -691,7 +752,7 @@ def test_admin_email_edit_requires_actor_step_up(temp_db: Persistence):
             email="email-stepup-target@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         session = _FakeSession(temp_db, root_session, root)
         page = _mount_admin(
@@ -719,6 +780,64 @@ def test_admin_email_edit_requires_actor_step_up(temp_db: Persistence):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("authorization_change", ["demote", "revoke"])
+def test_admin_email_edit_rejects_authorization_lost_during_step_up(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+    authorization_change: str,
+):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        target = await temp_db.admin_create_user(
+            email="email-race-target@example.com",
+            password=PASSWORD,
+            role="user",
+            admin_context=_admin_context(root_session),
+        )
+        await temp_db.create_reset_token(target.id)
+        await temp_db.create_email_verification_token(target.id)
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(
+            session,
+            edit_user_identifier=target.email,
+            edit_user_email="email-race-mutated@example.com",
+            edit_user_step_up_password=PASSWORD,
+            edit_user_step_up_2fa="should-be-cleared",
+        )
+
+        async def lose_authorization_during_step_up(*args, **kwargs):
+            _race_admin_authorization(
+                temp_db,
+                actor_user_id=root.id,
+                authorization_change=authorization_change,
+            )
+            return StepUpResult(ok=True)
+
+        monkeypatch.setattr(
+            AdminPage,
+            "_verify_actor_step_up",
+            lose_authorization_during_step_up,
+        )
+
+        await AdminPage._on_edit_user_pressed(page)
+
+        refreshed = await temp_db.get_user_by_id(target.id)
+        assert refreshed.email == target.email
+        assert _reset_token_count(temp_db, target.id) == 1
+        assert _email_verification_token_count(temp_db, target.id) == 1
+        assert _admin_action_count(
+            temp_db,
+            action="user_edit",
+            target_user_id=target.id,
+        ) == 0
+        assert page.edit_user_success == ""
+        assert page.edit_user_step_up_password == ""
+        assert page.edit_user_step_up_2fa == ""
+        assert session.navigation_target == "/"
+
+    asyncio.run(scenario())
+
+
 def test_oauth_admin_without_step_up_path_gets_actionable_errors(
     temp_db: Persistence,
     monkeypatch: pytest.MonkeyPatch,
@@ -736,7 +855,7 @@ def test_oauth_admin_without_step_up_path_gets_actionable_errors(
             email="oauth-stepup-target@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         session = _FakeSession(temp_db, root_session, root)
         expected = "Set up a password or 2FA to perform this action."
@@ -820,7 +939,7 @@ def test_admin_non_email_profile_edit_does_not_require_step_up(temp_db: Persiste
             email="non-email-edit-target@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         session = _FakeSession(temp_db, root_session, root)
         page = _mount_admin(
@@ -849,7 +968,7 @@ def test_admin_email_step_up_prompt_uses_cached_target_email(temp_db: Persistenc
             email="same-email-target@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
             username="sameemail",
         )
         session = _FakeSession(temp_db, root_session, root)
@@ -871,12 +990,12 @@ def test_admin_update_user_profile_updates_user_and_profile(
     temp_db: Persistence,
 ):
     async def scenario():
-        root, _ = await _create_root_session(temp_db)
+        root, root_session = await _create_root_session(temp_db)
         target = await temp_db.admin_create_user(
             email="old-profile@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
             username="oldname",
             full_name="Old Name",
         )
@@ -885,8 +1004,9 @@ def test_admin_update_user_profile_updates_user_and_profile(
 
         updated = await temp_db.admin_update_user_profile(
             target.id,
-            actor=root,
+            admin_context=_admin_context(root_session),
             email="new-profile@example.com",
+            expected_email=target.email,
             username="newname",
             full_name="New Name",
         )
@@ -906,12 +1026,12 @@ def test_admin_update_user_profile_updates_user_and_profile(
 
 def test_inactive_reset_checks_reject_retained_stale_tokens(temp_db: Persistence):
     async def scenario():
-        root, _ = await _create_root_session(temp_db)
+        root, root_session = await _create_root_session(temp_db)
         lookup_target = await temp_db.admin_create_user(
             email="stale-lookup-token@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         lookup_token = await temp_db.create_reset_token(lookup_target.id)
         temp_db.conn.execute(
@@ -928,7 +1048,7 @@ def test_inactive_reset_checks_reject_retained_stale_tokens(temp_db: Persistence
             email="stale-consume-token@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         consume_token = await temp_db.create_reset_token(consume_target.id)
         temp_db.conn.execute(
@@ -948,7 +1068,7 @@ def test_inactive_reset_checks_reject_retained_stale_tokens(temp_db: Persistence
             email="stale-verification-token@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
             is_verified=False,
         )
         verification_token = await temp_db.create_email_verification_token(
@@ -971,12 +1091,12 @@ def test_deactivated_user_cannot_login_refresh_session_or_reset_password(
     temp_db: Persistence,
 ):
     async def scenario():
-        root, _ = await _create_root_session(temp_db)
+        root, root_session = await _create_root_session(temp_db)
         target = await temp_db.admin_create_user(
             email="inactive-user@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         target_session = await temp_db.create_session(target.id)
         reset_token = await temp_db.create_reset_token(target.id)
@@ -985,7 +1105,7 @@ def test_deactivated_user_cannot_login_refresh_session_or_reset_password(
         updated = await temp_db.admin_set_user_active(
             target.id,
             False,
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
 
         assert updated.is_active is False
@@ -1020,12 +1140,12 @@ def test_login_handles_late_session_creation_rejection_without_partial_auth(
     monkeypatch: pytest.MonkeyPatch,
 ):
     async def scenario():
-        root, _ = await _create_root_session(temp_db)
+        root, root_session = await _create_root_session(temp_db)
         target = await temp_db.admin_create_user(
             email="late-session-rejection@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
 
         async def reject_session_creation(user_id):
@@ -1060,7 +1180,7 @@ def test_admin_page_deactivation_requires_confirmation(temp_db: Persistence):
             email="confirm-target@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         session = _FakeSession(temp_db, root_session, root)
         page = _mount_admin(
@@ -1099,7 +1219,7 @@ def test_admin_page_deactivates_reactivates_and_sends_password_reset(
             email="reset-target@example.com",
             password=PASSWORD,
             role="user",
-            actor=root,
+            admin_context=_admin_context(root_session),
         )
         session = _FakeSession(temp_db, root_session, root)
 

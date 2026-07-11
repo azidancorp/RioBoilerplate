@@ -21,7 +21,11 @@ from app.currency import (
     major_to_minor,
 )
 from app.data_models import AppUser, CurrencyLedgerEntry, UserSession
-from app.persistence import Persistence
+from app.persistence import (
+    AdminMutationContext,
+    AdminSessionInvalidError,
+    Persistence,
+)
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.session_validation import verify_step_up_credentials
 from app.validation import (
@@ -151,13 +155,28 @@ async def adjust_currency_route(
     minor_delta = major_to_minor(payload.amount)
 
     try:
-        entry = await db.adjust_currency_balance(
+        entry = await db.admin_adjust_currency_balance(
             target_user.id,
             delta_minor=minor_delta,
             reason=payload.reason,
             metadata=payload.metadata,
-            actor_user_id=current_user.id,
-            actor_role=current_user.role,
+            admin_context=AdminMutationContext(auth_token=current_session.id),
+        )
+    except AdminSessionInvalidError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Target user not found.",
         )
     except ValueError as exc:
         raise HTTPException(
@@ -198,13 +217,28 @@ async def set_currency_route(
     minor_amount = major_to_minor(payload.balance)
 
     try:
-        entry = await db.set_currency_balance(
+        entry = await db.admin_set_currency_balance(
             target_user.id,
             new_balance_minor=minor_amount,
             reason=payload.reason,
             metadata=payload.metadata,
-            actor_user_id=current_user.id,
-            actor_role=current_user.role,
+            admin_context=AdminMutationContext(auth_token=current_session.id),
+        )
+    except AdminSessionInvalidError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Target user not found.",
         )
     except ValueError as exc:
         raise HTTPException(

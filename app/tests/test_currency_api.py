@@ -6,6 +6,7 @@ import pyotp
 from fastapi.testclient import TestClient
 
 from app import fastapi_app
+from app.api import currency as currency_api
 from app.api.auth_dependencies import get_persistence
 from app.config import config
 from app.data_models import AppUser
@@ -174,6 +175,172 @@ def test_adjust_endpoint_enforces_target_role_hierarchy(api_test_setup):
     )
     root_after = asyncio.run(persistence.get_user_by_id(root.id))
     assert root_after.primary_currency_balance == 0
+
+
+@pytest.mark.parametrize(
+    ("route", "payload", "method_name"),
+    [
+        (
+            "/api/currency/adjust",
+            {"amount": "25", "reason": "denied adjustment"},
+            "admin_adjust_currency_balance",
+        ),
+        (
+            "/api/currency/set",
+            {"balance": "25", "reason": "denied balance set"},
+            "admin_set_currency_balance",
+        ),
+    ],
+)
+def test_currency_mutation_maps_transaction_authorization_denial_to_403(
+    api_test_setup,
+    monkeypatch,
+    route,
+    payload,
+    method_name,
+):
+    client, persistence = api_test_setup
+    user, token = asyncio.run(
+        _create_user_with_session(persistence, "transaction-denial@example.com")
+    )
+
+    async def deny_mutation(*args, **kwargs):
+        raise PermissionError("Administrator authorization changed. Please try again.")
+
+    monkeypatch.setattr(Persistence, method_name, deny_mutation)
+
+    response = client.post(
+        route,
+        json={
+            "target_user_id": str(user.id),
+            **payload,
+            "step_up": {"password": "secret"},
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Administrator authorization changed. Please try again."
+    )
+
+
+@pytest.mark.parametrize("session_state", ["revoked", "expired"])
+@pytest.mark.parametrize(
+    ("route", "payload", "audit_action"),
+    [
+        (
+            "/api/currency/adjust",
+            {"amount": "25", "reason": "stale-session adjustment"},
+            "currency_adjust",
+        ),
+        (
+            "/api/currency/set",
+            {"balance": "25", "reason": "stale-session balance set"},
+            "currency_set",
+        ),
+    ],
+)
+def test_currency_mutation_maps_late_session_loss_to_401(
+    api_test_setup,
+    monkeypatch,
+    session_state,
+    route,
+    payload,
+    audit_action,
+):
+    client, persistence = api_test_setup
+    user, token = asyncio.run(
+        _create_user_with_session(persistence, "late-session-loss@example.com")
+    )
+    balance_before = user.primary_currency_balance
+
+    async def lose_session_before_write(
+        request_payload,
+        current_session,
+        current_user,
+        db,
+    ):
+        if session_state == "revoked":
+            await db.invalidate_session(current_session.id)
+        else:
+            db.conn.execute(
+                "UPDATE user_sessions SET valid_until = 0 WHERE id = ?",
+                (db._hash_one_time_token(current_session.id),),
+            )
+            db.conn.commit()
+
+    monkeypatch.setattr(
+        currency_api,
+        "_require_step_up",
+        lose_session_before_write,
+    )
+
+    response = client.post(
+        route,
+        json={
+            "target_user_id": str(user.id),
+            **payload,
+            "step_up": {"password": "secret"},
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert response.json()["detail"] == "Your admin session is no longer valid."
+    refreshed = asyncio.run(persistence.get_user_by_id(user.id))
+    assert refreshed.primary_currency_balance == balance_before
+    assert persistence.list_admin_actions(
+        action=audit_action,
+        target_user_id=user.id,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("route", "payload", "method_name"),
+    [
+        (
+            "/api/currency/adjust",
+            {"amount": "25", "reason": "missing target adjustment"},
+            "admin_adjust_currency_balance",
+        ),
+        (
+            "/api/currency/set",
+            {"balance": "25", "reason": "missing target balance set"},
+            "admin_set_currency_balance",
+        ),
+    ],
+)
+def test_currency_mutation_maps_transaction_target_disappearance_to_404(
+    api_test_setup,
+    monkeypatch,
+    route,
+    payload,
+    method_name,
+):
+    client, persistence = api_test_setup
+    user, token = asyncio.run(
+        _create_user_with_session(persistence, "transaction-target-missing@example.com")
+    )
+
+    async def lose_target(*args, **kwargs):
+        raise KeyError("Target user not found.")
+
+    monkeypatch.setattr(Persistence, method_name, lose_target)
+
+    response = client.post(
+        route,
+        json={
+            "target_user_id": str(user.id),
+            **payload,
+            "step_up": {"password": "secret"},
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Target user not found."
 
 
 def test_ledger_endpoint_enforces_target_role_hierarchy(api_test_setup):

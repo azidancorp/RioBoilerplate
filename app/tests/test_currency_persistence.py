@@ -55,7 +55,6 @@ def test_adjust_currency_balance_records_ledger(temp_db: Persistence):
             delta_minor=150,
             reason="signup bonus",
             metadata={"source": "test"},
-            actor_user_id=None,
         )
         updated = await temp_db.get_user_by_id(user.id)
         assert updated.primary_currency_balance == 150

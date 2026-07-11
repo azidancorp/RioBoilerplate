@@ -171,6 +171,152 @@ async def get_currency_overview(
     }
 
 
+def adjust_currency_balance_in_transaction(
+    persistence: CurrencyPersistence,
+    user_id: uuid.UUID,
+    delta_minor: int,
+    *,
+    actor_user_id: uuid.UUID | None,
+    actor_role: str | None,
+    client_ip: str | None,
+    reason: str | None = None,
+    metadata: dict[str, t.Any] | None = None,
+) -> CurrencyLedgerEntry:
+    """Adjust a balance and write its ledger/audit rows in an open transaction."""
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("Currency adjustment requires an open transaction.")
+    cfg = get_currency_config()
+    cursor = persistence._get_cursor()
+
+    if metadata is not None and not isinstance(metadata, dict):
+        raise ValueError("metadata must be a mapping if provided")
+
+    cursor.execute(
+        "SELECT primary_currency_balance FROM users WHERE id = ?",
+        (str(user_id),),
+    )
+    row = cursor.fetchone()
+    if not row:
+        raise KeyError(user_id)
+
+    current_balance = int(row[0] or 0)
+    new_balance = current_balance + int(delta_minor)
+
+    if not cfg.allow_negative and new_balance < 0:
+        raise ValueError("Currency balance cannot be negative")
+
+    timestamp = datetime.now(timezone.utc).timestamp()
+    cursor.execute(
+        """
+        UPDATE users
+        SET primary_currency_balance = ?, primary_currency_updated_at = ?
+        WHERE id = ?
+        """,
+        (new_balance, timestamp, str(user_id)),
+    )
+
+    ledger_entry = append_currency_ledger_entry(
+        persistence,
+        user_id=user_id,
+        delta=int(delta_minor),
+        balance_after=new_balance,
+        reason=reason,
+        metadata=metadata,
+        actor_user_id=actor_user_id,
+        created_at=timestamp,
+    )
+
+    # Thin audit row for symmetry: the currency ledger holds the detail
+    # (delta + balance_after + actor), so the audit row just points at it via
+    # ledger_id and answers "all admin actions" from one table.
+    persistence_audit.record_admin_action(
+        persistence,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        action="currency_adjust",
+        target_user_id=user_id,
+        before={"balance": current_balance},
+        after={"balance": new_balance},
+        metadata={"ledger_id": ledger_entry.id},
+        client_ip=client_ip,
+        created_at=timestamp,
+        commit=False,
+    )
+
+    return ledger_entry
+
+
+def set_currency_balance_in_transaction(
+    persistence: CurrencyPersistence,
+    user_id: uuid.UUID,
+    new_balance_minor: int,
+    *,
+    actor_user_id: uuid.UUID | None,
+    actor_role: str | None,
+    client_ip: str | None,
+    reason: str | None = None,
+    metadata: dict[str, t.Any] | None = None,
+) -> CurrencyLedgerEntry:
+    """Set a balance and write its ledger/audit rows in an open transaction."""
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("Currency replacement requires an open transaction.")
+    cfg = get_currency_config()
+    if not cfg.allow_negative and new_balance_minor < 0:
+        raise ValueError("Currency balance cannot be negative")
+
+    cursor = persistence._get_cursor()
+    cursor.execute(
+        "SELECT primary_currency_balance FROM users WHERE id = ?",
+        (str(user_id),),
+    )
+    row = cursor.fetchone()
+    if not row:
+        raise KeyError(user_id)
+
+    current_balance = int(row[0] or 0)
+    delta = int(new_balance_minor) - current_balance
+
+    timestamp = datetime.now(timezone.utc).timestamp()
+    cursor.execute(
+        """
+        UPDATE users
+        SET primary_currency_balance = ?, primary_currency_updated_at = ?
+        WHERE id = ?
+        """,
+        (int(new_balance_minor), timestamp, str(user_id)),
+    )
+
+    ledger_entry = append_currency_ledger_entry(
+        persistence,
+        user_id=user_id,
+        delta=delta,
+        balance_after=int(new_balance_minor),
+        reason=reason,
+        metadata=metadata,
+        actor_user_id=actor_user_id,
+        created_at=timestamp,
+    )
+
+    # Thin audit row for symmetry (see adjust_currency_balance).
+    persistence_audit.record_admin_action(
+        persistence,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        action="currency_set",
+        target_user_id=user_id,
+        before={"balance": current_balance},
+        after={"balance": int(new_balance_minor)},
+        metadata={"ledger_id": ledger_entry.id},
+        client_ip=client_ip,
+        created_at=timestamp,
+        commit=False,
+    )
+
+    return ledger_entry
+
+
 async def adjust_currency_balance(
     persistence: CurrencyPersistence,
     user_id: uuid.UUID,
@@ -178,78 +324,31 @@ async def adjust_currency_balance(
     *,
     reason: str | None = None,
     metadata: dict[str, t.Any] | None = None,
-    actor_user_id: uuid.UUID | None = None,
-    actor_role: str | None = None,
-    client_ip: str | None = None,
 ) -> CurrencyLedgerEntry:
-    """
-    Increment a user's balance by the specified delta and record a ledger entry.
-    """
-    cfg = get_currency_config()
+    """Trusted/system balance adjustment with atomic ledger and audit writes."""
     conn = _get_connection(persistence)
-    cursor = persistence._get_cursor()
-
-    if metadata is not None and not isinstance(metadata, dict):
-        raise ValueError("metadata must be a mapping if provided")
+    if conn.in_transaction:
+        raise RuntimeError(
+            "Currency adjustments cannot run inside an existing transaction."
+        )
 
     try:
         conn.execute("BEGIN IMMEDIATE")
-        cursor.execute(
-            "SELECT primary_currency_balance FROM users WHERE id = ?",
-            (str(user_id),),
-        )
-        row = cursor.fetchone()
-        if not row:
-            raise KeyError(user_id)
-
-        current_balance = int(row[0] or 0)
-        new_balance = current_balance + int(delta_minor)
-
-        if not cfg.allow_negative and new_balance < 0:
-            raise ValueError("Currency balance cannot be negative")
-
-        timestamp = datetime.now(timezone.utc).timestamp()
-        cursor.execute(
-            """
-            UPDATE users
-            SET primary_currency_balance = ?, primary_currency_updated_at = ?
-            WHERE id = ?
-            """,
-            (new_balance, timestamp, str(user_id)),
-        )
-
-        ledger_entry = append_currency_ledger_entry(
+        ledger_entry = adjust_currency_balance_in_transaction(
             persistence,
-            user_id=user_id,
-            delta=int(delta_minor),
-            balance_after=new_balance,
+            user_id,
+            delta_minor,
+            actor_user_id=None,
+            actor_role=None,
+            client_ip=None,
             reason=reason,
             metadata=metadata,
-            actor_user_id=actor_user_id,
-            created_at=timestamp,
         )
-
-        # Thin audit row for symmetry: the currency ledger holds the detail
-        # (delta + balance_after + actor), so the audit row just points at it via
-        # ledger_id and answers "all admin actions" from one table.
-        persistence_audit.record_admin_action(
-            persistence,
-            actor_user_id=actor_user_id,
-            actor_role=actor_role,
-            action="currency_adjust",
-            target_user_id=user_id,
-            before={"balance": current_balance},
-            after={"balance": new_balance},
-            metadata={"ledger_id": ledger_entry.id},
-            client_ip=client_ip,
-            created_at=timestamp,
-            commit=False,
-        )
-
         conn.commit()
         return ledger_entry
     except Exception:
-        conn.rollback()
+        if conn.in_transaction:
+            conn.rollback()
         raise
 
 
@@ -260,71 +359,31 @@ async def set_currency_balance(
     *,
     reason: str | None = None,
     metadata: dict[str, t.Any] | None = None,
-    actor_user_id: uuid.UUID | None = None,
-    actor_role: str | None = None,
-    client_ip: str | None = None,
 ) -> CurrencyLedgerEntry:
-    """Set a user's balance to the provided amount and record ledger delta."""
-    cfg = get_currency_config()
-    if not cfg.allow_negative and new_balance_minor < 0:
-        raise ValueError("Currency balance cannot be negative")
-
+    """Trusted/system balance replacement with atomic ledger and audit writes."""
     conn = _get_connection(persistence)
-    cursor = persistence._get_cursor()
+    if conn.in_transaction:
+        raise RuntimeError(
+            "Currency replacements cannot run inside an existing transaction."
+        )
 
     try:
         conn.execute("BEGIN IMMEDIATE")
-        cursor.execute(
-            "SELECT primary_currency_balance FROM users WHERE id = ?",
-            (str(user_id),),
-        )
-        row = cursor.fetchone()
-        if not row:
-            raise KeyError(user_id)
-
-        current_balance = int(row[0] or 0)
-        delta = int(new_balance_minor) - current_balance
-
-        timestamp = datetime.now(timezone.utc).timestamp()
-        cursor.execute(
-            """
-            UPDATE users
-            SET primary_currency_balance = ?, primary_currency_updated_at = ?
-            WHERE id = ?
-            """,
-            (int(new_balance_minor), timestamp, str(user_id)),
-        )
-
-        ledger_entry = append_currency_ledger_entry(
+        ledger_entry = set_currency_balance_in_transaction(
             persistence,
-            user_id=user_id,
-            delta=delta,
-            balance_after=int(new_balance_minor),
+            user_id,
+            new_balance_minor,
+            actor_user_id=None,
+            actor_role=None,
+            client_ip=None,
             reason=reason,
             metadata=metadata,
-            actor_user_id=actor_user_id,
-            created_at=timestamp,
         )
-
-        # Thin audit row for symmetry (see adjust_currency_balance).
-        persistence_audit.record_admin_action(
-            persistence,
-            actor_user_id=actor_user_id,
-            actor_role=actor_role,
-            action="currency_set",
-            target_user_id=user_id,
-            before={"balance": current_balance},
-            after={"balance": int(new_balance_minor)},
-            metadata={"ledger_id": ledger_entry.id},
-            client_ip=client_ip,
-            created_at=timestamp,
-            commit=False,
-        )
-
         conn.commit()
         return ledger_entry
     except Exception:
-        conn.rollback()
+        if conn.in_transaction:
+            conn.rollback()
         raise
 
 

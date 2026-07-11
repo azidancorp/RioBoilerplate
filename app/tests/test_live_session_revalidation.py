@@ -11,7 +11,7 @@ import pytest
 
 from app.config import config
 from app.data_models import AppUser, UserSession, UserSettings
-from app.persistence import Persistence
+from app.persistence import AdminMutationContext, Persistence
 
 
 def _load_app_page_guard():
@@ -168,7 +168,7 @@ def test_session_start_rejects_inactive_stored_auth_token(temp_db: Persistence):
     async def scenario():
         from app import on_session_start
 
-        root, _ = await _create_root_session(temp_db)
+        _, root_session = await _create_root_session(temp_db)
         user = AppUser.create_new_user_with_default_settings(
             email="inactive-session@example.com",
             password="password",
@@ -177,7 +177,11 @@ def test_session_start_rejects_inactive_stored_auth_token(temp_db: Persistence):
         await temp_db._create_user_unchecked(user)
         user = await temp_db.get_user_by_id(user.id)
         cached_session = await temp_db.create_session(user.id)
-        await temp_db.admin_set_user_active(user.id, False, actor=root)
+        await temp_db.admin_set_user_active(
+            user.id,
+            False,
+            admin_context=AdminMutationContext(auth_token=root_session.id),
+        )
 
         fresh_session = FreshRioSession(temp_db, cached_session.id)
         await on_session_start(fresh_session)

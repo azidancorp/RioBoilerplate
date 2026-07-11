@@ -1,5 +1,17 @@
 # Implementation Plan — Admin Action Audit Log
 
+> **Historical design note (superseded).** The audit log was implemented, then
+> the web-admin mutation contract was hardened further. Current web-admin writes
+> require `AdminMutationContext` so the persistence layer can revalidate the
+> actor's live session and target hierarchy inside the same `BEGIN IMMEDIATE`
+> transaction as the mutation. Trusted/operator role and currency helpers no
+> longer accept caller-supplied actor identity. `admin_issue_password_reset`
+> returns an `AdminPasswordResetIssuance` (token-compatible fields plus the
+> recipient captured under the lock), and its transactional audit event is
+> `password_reset_issued`; actual email delivery happens afterward. The API and
+> line-specific instructions below describe the original implementation plan,
+> not the current callable contract.
+
 ## Objective
 
 Persist a tamper-evident record of **who did what to whom** for every privileged
@@ -166,7 +178,7 @@ For each, build the audit attribution from the actor (reuse the existing
 | `role_change`         | `update_user_role` (`persistence.py:776`)    | `_update_role` (`admin.py:551`)              | `{"role": old}` → `{"role": new}` |
 | `user_deactivate` / `user_reactivate` | `set_user_active` (persistence) | `_on_set_active_pressed` (`admin.py:348`)    | `{"is_active": old}` → `{"is_active": new}` |
 | `user_edit`           | admin profile/email update (persistence)     | `_on_edit_user_pressed` (`admin.py:271`)     | `{"email":…, "username":…}` → new values |
-| `password_reset_sent` | reset-token creation (persistence)           | `_on_send_reset_pressed` (`admin.py:425`)    | `null` → `{"token_id": …}` (never the token itself) |
+| `password_reset_issued` | reset-token creation (persistence)         | `_on_send_reset_pressed` (`admin.py:425`)    | issuance metadata only (never the token itself) |
 | `user_create`         | `create_user` (persistence)                  | `_on_create_user_pressed` (`admin.py:189`)   | `null` → `{"email":…, "role":…}` |
 | `user_delete`         | `delete_user` / `admin_delete_user` (persistence) | `_on_delete_user_pressed` (admin page)   | `{"email":…, "role":…}` → `null` |
 | `currency_adjust` / `currency_set` | currency adjust/set (persistence) | `_on_currency_submit` (`admin.py:718`) + API `api/currency.py:118,157` | `{"balance": old}` → `{"balance": new}` |
@@ -188,14 +200,11 @@ Notes:
   admin removals from self-deletions. (Decide in review whether self-deletions
   belong in the *admin* audit log at all, or only admin-initiated ones — see
   Open Questions.)
-- **`password_reset_sent` is not truly same-transaction.**
-  `admin_issue_password_reset` (`persistence.py:608`) delegates to
-  `create_reset_token` (`persistence_auth.py:785`), which commits on its own
-  (`:833`) and is preceded by a separate `clear_reset_tokens` commit (`:896`).
-  So the audit row for this action cannot share one transaction with token
-  creation without first refactoring that two-commit flow. For v1, accept
-  best-effort ordering (write the audit row immediately after the token is
-  created) rather than expanding scope to refactor the reset-token path.
+- **Password-reset issuance is transactional; delivery is not.** The current
+  implementation replaces the reset token and records
+  `password_reset_issued` in one transaction. Email delivery happens only after
+  that transaction commits, so the audit event deliberately describes issuance
+  rather than claiming that transport succeeded.
 - **Currency** is partially covered already: `user_currency_ledger` records
   `actor_user_id` + `delta` + `balance_after`. To avoid double bookkeeping, the
   audit row for currency can be thin (`metadata: {"ledger_id": <id>}`) and defer
@@ -251,8 +260,8 @@ The codebase already derives request context via `context_from_rio_session`
    - Add `client_ip: str | None = None` (keyword-only, defaulted) where audit
      needs it.
    - Each method calls `persistence_audit.record_admin_action(..., commit=False)`
-     before its final `conn.commit()`, so the audit row commits atomically with
-     the mutation. (Exception: `password_reset_sent` — see the note above.)
+   before its final `conn.commit()`, so the audit row commits atomically with
+   the mutation.
    - **Backward-compat for callers**: every new param is defaulted
      (`actor=None` on the two methods that gain it, `client_ip=None`). Existing
      tests/scripts keep working; a row written without a known actor simply has a

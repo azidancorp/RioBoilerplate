@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from app.data_models import AppUser
-from app.persistence import Persistence
+from app.persistence import AdminMutationContext, Persistence
 
 
 PASSWORD = "VeryStrongPass!9"
@@ -43,13 +43,30 @@ async def _create_user(
     return await persistence.get_user_by_id(user.id)
 
 
+async def _create_admin_context(
+    persistence: Persistence,
+    actor: AppUser,
+    *,
+    client_ip: str | None = None,
+) -> AdminMutationContext:
+    session = await persistence.create_session(actor.id)
+    return AdminMutationContext(auth_token=session.id, client_ip=client_ip)
+
+
 def test_role_change_writes_single_row_atomically(temp_db: Persistence):
     async def scenario():
-        admin = await _create_user(temp_db, "admin@example.com", role="admin")
+        admin = await _create_user(temp_db, "root@example.com", role="root")
         target = await _create_user(temp_db, "target@example.com", role="user")
+        admin_context = await _create_admin_context(
+            temp_db,
+            admin,
+            client_ip="203.0.113.7",
+        )
 
-        await temp_db.update_user_role(
-            target.id, "admin", actor=admin, client_ip="203.0.113.7"
+        await temp_db.admin_update_user_role(
+            target.id,
+            "admin",
+            admin_context=admin_context,
         )
 
         # State changed ...
@@ -61,7 +78,7 @@ def test_role_change_writes_single_row_atomically(temp_db: Persistence):
         assert len(rows) == 1
         row = rows[0]
         assert row["actor_user_id"] == admin.id
-        assert row["actor_role"] == "admin"
+        assert row["actor_role"] == "root"
         assert row["target_user_id"] == target.id
         assert row["target_label"] == "target@example.com"
         assert row["before"] == {"role": "user"}
@@ -105,15 +122,20 @@ def test_role_change_rolls_back_every_write_on_failure(
     error_message: str,
 ):
     async def scenario():
-        admin = await _create_user(temp_db, "rollback-admin@example.com", role="admin")
+        admin = await _create_user(temp_db, "rollback-root@example.com", role="root")
         target = await _create_user(temp_db, "rollback-target@example.com")
+        admin_context = await _create_admin_context(temp_db, admin)
         await temp_db.create_session(target.id)
 
         temp_db.conn.execute(trigger_sql)
         temp_db.conn.commit()
 
         with pytest.raises(sqlite3.IntegrityError, match=error_message):
-            await temp_db.update_user_role(target.id, "admin", actor=admin)
+            await temp_db.admin_update_user_role(
+                target.id,
+                "admin",
+                admin_context=admin_context,
+            )
 
         assert temp_db.conn.in_transaction is False
         assert (await temp_db.get_user_by_id(target.id)).role == "user"
@@ -249,11 +271,15 @@ def test_deletion_audit_row_survives_user_removal(temp_db: Persistence):
         admin = await _create_user(temp_db, "admin@example.com", role="admin")
         target = await _create_user(temp_db, "victim@example.com", role="user")
         target_id = target.id
+        admin_context = await _create_admin_context(
+            temp_db,
+            admin,
+            client_ip="198.51.100.5",
+        )
 
         deleted = await temp_db.admin_delete_user(
             target_id,
-            actor=admin,
-            client_ip="198.51.100.5",
+            admin_context=admin_context,
         )
         assert deleted is True
 
@@ -278,12 +304,19 @@ def test_admin_delete_user_enforces_actor_hierarchy(temp_db: Persistence):
         root = await _create_user(temp_db, "root-delete-denied@example.com", role="root")
         admin = await _create_user(temp_db, "admin-delete-denied@example.com", role="admin")
         peer_admin = await _create_user(temp_db, "peer-delete-denied@example.com", role="admin")
+        admin_context = await _create_admin_context(temp_db, admin)
 
         with pytest.raises(PermissionError):
-            await temp_db.admin_delete_user(root.id, actor=admin)
+            await temp_db.admin_delete_user(
+                root.id,
+                admin_context=admin_context,
+            )
 
         with pytest.raises(PermissionError):
-            await temp_db.admin_delete_user(peer_admin.id, actor=admin)
+            await temp_db.admin_delete_user(
+                peer_admin.id,
+                admin_context=admin_context,
+            )
 
         assert (await temp_db.get_user_by_id(root.id)).email == root.email
         assert (await temp_db.get_user_by_id(peer_admin.id)).email == peer_admin.email
@@ -330,13 +363,20 @@ def test_outcome_failure_is_recordable(temp_db: Persistence):
 
 def test_list_admin_actions_filters_and_orders(temp_db: Persistence):
     async def scenario():
-        admin = await _create_user(temp_db, "admin@example.com", role="admin")
+        admin = await _create_user(temp_db, "root@example.com", role="root")
         a = await _create_user(temp_db, "a@example.com", role="user")
         b = await _create_user(temp_db, "b@example.com", role="user")
+        admin_context = await _create_admin_context(temp_db, admin)
 
-        await temp_db.update_user_role(a.id, "admin", actor=admin)
-        await temp_db.adjust_currency_balance(
-            b.id, 500, actor_user_id=admin.id, actor_role=admin.role
+        await temp_db.admin_update_user_role(
+            a.id,
+            "admin",
+            admin_context=admin_context,
+        )
+        await temp_db.admin_adjust_currency_balance(
+            b.id,
+            500,
+            admin_context=admin_context,
         )
 
         # Filter by action.
@@ -365,16 +405,23 @@ def test_no_secret_material_in_audit_columns(temp_db: Persistence):
     async def scenario():
         admin = await _create_user(temp_db, "admin@example.com", role="admin")
         secret_pw = "Sup3rSecret-Password!"
+        admin_context = await _create_admin_context(
+            temp_db,
+            admin,
+            client_ip="203.0.113.9",
+        )
 
         await temp_db.admin_create_user(
             email="created@example.com",
             password=secret_pw,
             role="user",
-            actor=admin,
-            client_ip="203.0.113.9",
+            admin_context=admin_context,
         )
         created = await temp_db.get_user_by_email("created@example.com")
-        token = await temp_db.admin_issue_password_reset(created.id, actor=admin)
+        issuance = await temp_db.admin_issue_password_reset(
+            created.id,
+            admin_context=admin_context,
+        )
 
         haystacks: list[str] = []
         for row in temp_db.list_admin_actions():
@@ -384,7 +431,7 @@ def test_no_secret_material_in_audit_columns(temp_db: Persistence):
         blob = "\n".join(haystacks)
 
         assert secret_pw not in blob
-        assert token.token not in blob
+        assert issuance.token not in blob
 
     asyncio.run(scenario())
 
@@ -413,13 +460,16 @@ def test_currency_set_writes_thin_audit_row(temp_db: Persistence):
     async def scenario():
         admin = await _create_user(temp_db, "admin@example.com", role="admin")
         target = await _create_user(temp_db, "wallet@example.com", role="user")
+        admin_context = await _create_admin_context(
+            temp_db,
+            admin,
+            client_ip="203.0.113.11",
+        )
 
-        entry = await temp_db.set_currency_balance(
+        entry = await temp_db.admin_set_currency_balance(
             target.id,
             1000,
-            actor_user_id=admin.id,
-            actor_role=admin.role,
-            client_ip="203.0.113.11",
+            admin_context=admin_context,
         )
 
         rows = temp_db.list_admin_actions(target_user_id=target.id, action="currency_set")

@@ -1069,6 +1069,40 @@ async def consume_reset_token_and_update_password(
         raise
 
 
+def create_reset_token_in_transaction(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+) -> ExpirableVerificationToken:
+    """Replace a user's reset token inside the caller's open transaction."""
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("Reset-token replacement requires an open transaction.")
+
+    reset_token = ExpirableVerificationToken.create(
+        user_id=user_id,
+        valid_for=timedelta(minutes=config.PASSWORD_RESET_TOKEN_TTL_MINUTES),
+    )
+    hashed_token = _hash_one_time_token(reset_token.token)
+    cursor = persistence._get_cursor()
+    cursor.execute(
+        "DELETE FROM password_reset_tokens WHERE user_id = ?",
+        (str(user_id),),
+    )
+    cursor.execute(
+        """
+        INSERT INTO password_reset_tokens (token_hash, user_id, created_at, valid_until)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            hashed_token,
+            str(reset_token.user_id),
+            reset_token.created_at.timestamp(),
+            reset_token.valid_until.timestamp(),
+        ),
+    )
+    return reset_token
+
+
 async def create_reset_token(
     persistence: AuthPersistence,
     user_id: uuid.UUID,
@@ -1113,27 +1147,9 @@ async def create_reset_token(
                 "Cannot create a reset token for an external-auth user."
             )
 
-        reset_token = ExpirableVerificationToken.create(
-            user_id=user_id,
-            valid_for=timedelta(minutes=config.PASSWORD_RESET_TOKEN_TTL_MINUTES),
-        )
-        hashed_token = _hash_one_time_token(reset_token.token)
-
-        cursor.execute(
-            "DELETE FROM password_reset_tokens WHERE user_id = ?",
-            (str(user_id),),
-        )
-        cursor.execute(
-            """
-            INSERT INTO password_reset_tokens (token_hash, user_id, created_at, valid_until)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                hashed_token,
-                str(reset_token.user_id),
-                reset_token.created_at.timestamp(),
-                reset_token.valid_until.timestamp(),
-            ),
+        reset_token = create_reset_token_in_transaction(
+            persistence,
+            user_id,
         )
         conn.commit()
     except Exception:

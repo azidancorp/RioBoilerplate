@@ -9,7 +9,7 @@ import typing as t
 import pandas as pd
 
 import rio
-from app.persistence import Persistence
+from app.persistence import AdminMutationContext, Persistence
 from app.data_models import AppUser, UserSession
 from app.permissions import (
     can_manage_role,
@@ -132,6 +132,7 @@ class AdminPage(ResponsiveComponent):
     step_up_2fa: str = ""
     step_up_error: str = ""
     step_up_pending_identifier: str = ""
+    step_up_pending_user_id: str = ""
     step_up_pending_new_role: str = ""
 
     @rio.event.on_populate
@@ -189,6 +190,19 @@ class AdminPage(ResponsiveComponent):
     def _client_ip(self) -> str | None:
         """Best-effort source IP for audit attribution."""
         return context_from_rio_session(self.session).client_ip
+
+    def _admin_mutation_context(self) -> AdminMutationContext:
+        """Build the live-session context required by admin persistence writes."""
+        try:
+            user_session = self.session[UserSession]
+        except KeyError as exc:
+            raise PermissionError(
+                "Your session has expired. Please log in again."
+            ) from exc
+        return AdminMutationContext(
+            auth_token=user_session.id,
+            client_ip=self._client_ip(),
+        )
 
     async def _get_target_user(self, identifier: str) -> AppUser:
         persistence = self.session[Persistence]
@@ -332,6 +346,8 @@ class AdminPage(ResponsiveComponent):
     def _admin_error_message(self, action: str, exc: Exception) -> str:
         if isinstance(exc, PermissionError):
             return str(exc)
+        if isinstance(exc, KeyError):
+            return "The user no longer exists. Refresh the page and try again."
         if isinstance(exc, ValueError):
             return str(exc)
         if isinstance(exc, sqlite3.IntegrityError):
@@ -461,11 +477,10 @@ class AdminPage(ResponsiveComponent):
                 email=email,
                 password=password,
                 role=role,
-                actor=self.current_user,
+                admin_context=self._admin_mutation_context(),
                 username=username,
                 full_name=full_name,
                 is_verified=is_verified,
-                client_ip=self._client_ip(),
             )
         except Exception as exc:
             self.create_user_error = _with_recovery_code_warning(
@@ -540,6 +555,7 @@ class AdminPage(ResponsiveComponent):
             updates["email"] is not None
             and updates["email"].lower() != target_user.email.lower()
         )
+        expected_email = target_user.email
         unavailable_message = (
             self._step_up_unavailable_message()
             if email_is_changing
@@ -567,16 +583,41 @@ class AdminPage(ResponsiveComponent):
             self.force_refresh()
             return
 
+        used_recovery_code = False
         if email_is_changing:
-            result = await self._verify_actor_step_up(
-                persistence,
-                password=self.edit_user_step_up_password,
-                two_factor_code=self.edit_user_step_up_2fa or None,
-            )
+            try:
+                result = await self._verify_actor_step_up(
+                    persistence,
+                    password=self.edit_user_step_up_password,
+                    two_factor_code=self.edit_user_step_up_2fa or None,
+                )
+            finally:
+                self._clear_edit_step_up_fields()
             if not result.ok:
                 self.edit_user_error = result.error_message or "Verification failed."
                 self.edit_user_success = ""
-                self._clear_edit_step_up_fields()
+                self.force_refresh()
+                return
+            used_recovery_code = result.used_recovery_code
+
+            if not self._refresh_current_user_authorization():
+                return
+            try:
+                target_user = await persistence.get_user_by_id(target_user.id)
+            except KeyError:
+                self.edit_user_error = _with_recovery_code_warning(
+                    f"User not found: {identifier}",
+                    used_recovery_code,
+                )
+                self.edit_user_success = ""
+                self.force_refresh()
+                return
+            if not self._can_manage_user(target_user):
+                self.edit_user_error = _with_recovery_code_warning(
+                    f"You do not have permission to edit users with role: {target_user.role}",
+                    used_recovery_code,
+                )
+                self.edit_user_success = ""
                 self.force_refresh()
                 return
         else:
@@ -585,14 +626,17 @@ class AdminPage(ResponsiveComponent):
         try:
             updated = await persistence.admin_update_user_profile(
                 target_user.id,
-                actor=self.current_user,
+                admin_context=self._admin_mutation_context(),
                 email=updates["email"],
                 username=updates["username"],
                 full_name=updates["full_name"],
-                client_ip=self._client_ip(),
+                expected_email=expected_email,
             )
         except Exception as exc:
-            self.edit_user_error = self._admin_error_message("updating user", exc)
+            self.edit_user_error = _with_recovery_code_warning(
+                self._admin_error_message("updating user", exc),
+                used_recovery_code,
+            )
             self.edit_user_success = ""
             self._clear_edit_step_up_fields()
             self.force_refresh()
@@ -600,7 +644,10 @@ class AdminPage(ResponsiveComponent):
 
         self._clear_rate_limit(persistence, "admin_edit_user", str(target_user.id))
         self.edit_user_success = f"Updated user {updated.email}"
-        self.edit_user_error = ""
+        self.edit_user_error = _with_recovery_code_warning(
+            "",
+            used_recovery_code,
+        )
         self.edit_user_identifier = ""
         self.edit_user_email = ""
         self.edit_user_username = ""
@@ -716,8 +763,7 @@ class AdminPage(ResponsiveComponent):
             updated = await persistence.admin_set_user_active(
                 target_user.id,
                 is_active,
-                actor=self.current_user,
-                client_ip=self._client_ip(),
+                admin_context=self._admin_mutation_context(),
             )
         except Exception as exc:
             self.active_user_error = _with_recovery_code_warning(
@@ -852,15 +898,14 @@ class AdminPage(ResponsiveComponent):
             return
 
         try:
-            reset_token = await persistence.admin_issue_password_reset(
+            issuance = await persistence.admin_issue_password_reset(
                 target_user.id,
-                actor=self.current_user,
-                client_ip=self._client_ip(),
+                admin_context=self._admin_mutation_context(),
             )
             send_password_reset_email(
-                recipient=target_user.email,
-                token=reset_token.token,
-                valid_until=reset_token.valid_until,
+                recipient=issuance.recipient_email,
+                token=issuance.token,
+                valid_until=issuance.valid_until,
             )
         except Exception as exc:
             self.reset_user_error = _with_recovery_code_warning(
@@ -880,7 +925,9 @@ class AdminPage(ResponsiveComponent):
             "admin_send_password_reset",
             str(target_user.id),
         )
-        self.reset_user_success = f"Password reset email sent to {target_user.email}"
+        self.reset_user_success = (
+            f"Password reset email sent to {issuance.recipient_email}"
+        )
         self.reset_user_error = _with_recovery_code_warning(
             "",
             result.used_recovery_code,
@@ -945,6 +992,7 @@ class AdminPage(ResponsiveComponent):
         *,
         step_up_verified: bool = False,
         action_limit_checked_for: uuid.UUID | None = None,
+        target_user_id: uuid.UUID | None = None,
     ) -> bool:
         """Update a user's role."""
         if not self._refresh_current_user_authorization():
@@ -956,7 +1004,10 @@ class AdminPage(ResponsiveComponent):
 
         persistence = self.session[Persistence]
         try:
-            target_user = await persistence.get_user_by_email_or_username(identifier)
+            if target_user_id is None:
+                target_user = await persistence.get_user_by_email_or_username(identifier)
+            else:
+                target_user = await persistence.get_user_by_id(target_user_id)
         except KeyError:
             self.change_role_error = f"User {identifier} not found"
             return False
@@ -988,7 +1039,11 @@ class AdminPage(ResponsiveComponent):
             if unavailable_message:
                 self.change_role_error = unavailable_message
                 return False
-            self._show_step_up_dialog(identifier=identifier, new_role=new_role)
+            self._show_step_up_dialog(
+                identifier=identifier,
+                user_id=target_user.id,
+                new_role=new_role,
+            )
             return False
 
         if action_limit_checked_for != target_user.id:
@@ -1006,11 +1061,10 @@ class AdminPage(ResponsiveComponent):
 
         try:
             self.change_role_error = ""
-            await persistence.update_user_role(
+            await persistence.admin_update_user_role(
                 target_user.id,
                 new_role,
-                actor=self.current_user,
-                client_ip=self._client_ip(),
+                admin_context=self._admin_mutation_context(),
             )
             persistence.clear_rate_limit(
                 scope=sensitive_action_policy("admin_change_role").scope,
@@ -1021,9 +1075,16 @@ class AdminPage(ResponsiveComponent):
             self.change_role_error = self._admin_error_message("updating role", exc)
             return False
 
-    def _show_step_up_dialog(self, *, identifier: str, new_role: str) -> None:
+    def _show_step_up_dialog(
+        self,
+        *,
+        identifier: str,
+        user_id: uuid.UUID,
+        new_role: str,
+    ) -> None:
         """Stash the pending role change and reveal the step-up re-auth dialog."""
         self.step_up_pending_identifier = identifier
+        self.step_up_pending_user_id = str(user_id)
         self.step_up_pending_new_role = new_role
         self.step_up_password = ""
         self.step_up_2fa = ""
@@ -1036,6 +1097,7 @@ class AdminPage(ResponsiveComponent):
         self.step_up_2fa = ""
         self.step_up_error = ""
         self.step_up_pending_identifier = ""
+        self.step_up_pending_user_id = ""
         self.step_up_pending_new_role = ""
 
     def _on_step_up_cancel(self, _: rio.TextInputConfirmEvent | None = None) -> None:
@@ -1049,11 +1111,12 @@ class AdminPage(ResponsiveComponent):
 
         persistence = self.session[Persistence]
         identifier = self.step_up_pending_identifier
+        user_id = self.step_up_pending_user_id
         new_role = self.step_up_pending_new_role
 
         try:
-            target_user = await persistence.get_user_by_email_or_username(identifier)
-        except KeyError:
+            target_user = await persistence.get_user_by_id(uuid.UUID(user_id))
+        except (ValueError, KeyError):
             self.step_up_error = f"User {identifier} not found"
             self.step_up_password = ""
             self.step_up_2fa = ""
@@ -1075,15 +1138,24 @@ class AdminPage(ResponsiveComponent):
             self.force_refresh()
             return
 
-        result = await self._verify_actor_step_up(
-            persistence,
-            password=self.step_up_password,
-            two_factor_code=self.step_up_2fa or None,
-        )
-        if not result.ok:
-            self.step_up_error = result.error_message or "Verification failed."
+        try:
+            result = await self._verify_actor_step_up(
+                persistence,
+                password=self.step_up_password,
+                two_factor_code=self.step_up_2fa or None,
+            )
+        except Exception:
+            logger.exception("Admin step-up verification failed")
+            self.step_up_error = (
+                "Could not verify your credentials. Please try again."
+            )
+            self.force_refresh()
+            return
+        finally:
             self.step_up_password = ""
             self.step_up_2fa = ""
+        if not result.ok:
+            self.step_up_error = result.error_message or "Verification failed."
             self.force_refresh()
             return
 
@@ -1094,6 +1166,7 @@ class AdminPage(ResponsiveComponent):
             new_role,
             step_up_verified=True,
             action_limit_checked_for=target_user.id,
+            target_user_id=target_user.id,
         )
         if updated:
             self.change_role_identifier = ""
@@ -1101,10 +1174,13 @@ class AdminPage(ResponsiveComponent):
             await self._load_user_data()
 
         # Surface the recovery-code warning only after _update_role runs, since
-        # it resets change_role_error on the success path. On a failed update we
-        # leave its error message in place rather than clobber it.
-        if result.used_recovery_code and updated:
-            self.change_role_error = RECOVERY_CODE_USED_MESSAGE
+        # it resets change_role_error on the success path. Preserve any mutation
+        # error because the one-time code was still consumed during step-up.
+        if result.used_recovery_code:
+            self.change_role_error = _with_recovery_code_warning(
+                self.change_role_error,
+                True,
+            )
 
         self.force_refresh()
 
@@ -1178,27 +1254,47 @@ class AdminPage(ResponsiveComponent):
             self.force_refresh()
             return
 
-        result = await self._verify_actor_step_up(
-            persistence,
-            password=self.delete_user_step_up_password,
-            two_factor_code=self.delete_user_step_up_2fa or None,
-        )
+        identifier_to_delete = self.delete_user_identifier
+        try:
+            result = await self._verify_actor_step_up(
+                persistence,
+                password=self.delete_user_step_up_password,
+                two_factor_code=self.delete_user_step_up_2fa or None,
+            )
+        finally:
+            self._clear_delete_step_up_fields()
         if not result.ok:
             self.delete_user_error = result.error_message or "Verification failed."
             self.delete_user_success = ""
-            self._clear_delete_step_up_fields()
             self.force_refresh()
             return
 
-        # Store username for success message
-        identifier_to_delete = self.delete_user_identifier
+        if not self._refresh_current_user_authorization():
+            return
+        try:
+            target_user = await persistence.get_user_by_id(target_user.id)
+        except KeyError:
+            self.delete_user_error = _with_recovery_code_warning(
+                f"User not found: {identifier_to_delete}",
+                result.used_recovery_code,
+            )
+            self.delete_user_success = ""
+            self.force_refresh()
+            return
+        if not self._can_manage_user(target_user):
+            self.delete_user_error = _with_recovery_code_warning(
+                f"You do not have permission to delete users with role: {target_user.role}",
+                result.used_recovery_code,
+            )
+            self.delete_user_success = ""
+            self.force_refresh()
+            return
 
         # Delete the user
         try:
             success = await persistence.admin_delete_user(
                 user_id=target_user.id,
-                actor=self.current_user,
-                client_ip=self._client_ip(),
+                admin_context=self._admin_mutation_context(),
             )
             if success:
                 # Set success message
@@ -1207,7 +1303,10 @@ class AdminPage(ResponsiveComponent):
                 self.delete_user_identifier = ""
                 self.delete_user_confirmation = ""
                 self._clear_delete_step_up_fields()
-                self.delete_user_error = ""
+                self.delete_user_error = _with_recovery_code_warning(
+                    "",
+                    result.used_recovery_code,
+                )
                 persistence.clear_rate_limit(
                     scope=sensitive_action_policy("admin_delete_user").scope,
                     key=rate_limit_key("admin_delete_user", f"{self.current_user.id}:{target_user.id}"),
@@ -1216,12 +1315,18 @@ class AdminPage(ResponsiveComponent):
                 await self._load_user_data()
                 self.force_refresh()
             else:
-                self.delete_user_error = "Failed to delete user"
+                self.delete_user_error = _with_recovery_code_warning(
+                    "Failed to delete user",
+                    result.used_recovery_code,
+                )
                 self.delete_user_success = ""
                 self._clear_delete_step_up_fields()
                 self.force_refresh()
         except Exception as e:
-            self.delete_user_error = self._admin_error_message("deleting user", e)
+            self.delete_user_error = _with_recovery_code_warning(
+                self._admin_error_message("deleting user", e),
+                result.used_recovery_code,
+            )
             self.delete_user_success = ""
             self._clear_delete_step_up_fields()
             self.force_refresh()
@@ -1326,43 +1431,68 @@ class AdminPage(ResponsiveComponent):
             self.force_refresh()
             return
 
-        result = await self._verify_actor_step_up(
-            persistence,
-            password=self.currency_step_up_password,
-            two_factor_code=self.currency_step_up_2fa or None,
-        )
+        try:
+            result = await self._verify_actor_step_up(
+                persistence,
+                password=self.currency_step_up_password,
+                two_factor_code=self.currency_step_up_2fa or None,
+            )
+        finally:
+            self._clear_currency_step_up_fields()
         if not result.ok:
             self.currency_error = result.error_message or "Verification failed."
             self.currency_success = ""
-            self._clear_currency_step_up_fields()
+            self.force_refresh()
+            return
+
+        if not self._refresh_current_user_authorization():
+            return
+        try:
+            target_user = await persistence.get_user_by_id(target_user.id)
+        except KeyError:
+            self.currency_error = _with_recovery_code_warning(
+                f"User not found: {identifier}",
+                result.used_recovery_code,
+            )
+            self.currency_success = ""
+            self.force_refresh()
+            return
+        if (
+            self.current_user.id != target_user.id
+            and not self._can_manage_user(target_user)
+        ):
+            self.currency_error = _with_recovery_code_warning(
+                f"You do not have permission to update balances for users with role {target_user.role}.",
+                result.used_recovery_code,
+            )
+            self.currency_success = ""
             self.force_refresh()
             return
 
         try:
             if self.currency_mode_is_set:
-                entry = await persistence.set_currency_balance(
+                entry = await persistence.admin_set_currency_balance(
                     target_user.id,
                     new_balance_minor=minor_amount,
                     reason=reason,
                     metadata=None,
-                    actor_user_id=self.current_user.id,
-                    actor_role=self.current_user.role,
-                    client_ip=self._client_ip(),
+                    admin_context=self._admin_mutation_context(),
                 )
                 action_word = "Set"
             else:
-                entry = await persistence.adjust_currency_balance(
+                entry = await persistence.admin_adjust_currency_balance(
                     target_user.id,
                     delta_minor=minor_amount,
                     reason=reason,
                     metadata=None,
-                    actor_user_id=self.current_user.id,
-                    actor_role=self.current_user.role,
-                    client_ip=self._client_ip(),
+                    admin_context=self._admin_mutation_context(),
                 )
                 action_word = "Adjusted"
-        except ValueError as exc:
-            self.currency_error = str(exc)
+        except Exception as exc:
+            self.currency_error = _with_recovery_code_warning(
+                self._admin_error_message("updating currency balance", exc),
+                result.used_recovery_code,
+            )
             self.currency_success = ""
             self._clear_currency_step_up_fields()
             self.force_refresh()
@@ -1379,7 +1509,10 @@ class AdminPage(ResponsiveComponent):
             f"{action_word} {target_user.email or target_user.username}'s balance. "
             f"Delta: {delta_text}. New balance: {balance_text}."
         )
-        self.currency_error = ""
+        self.currency_error = _with_recovery_code_warning(
+            "",
+            result.used_recovery_code,
+        )
         self.currency_amount = ""
         self._clear_currency_step_up_fields()
         self._clear_rate_limit(persistence, "admin_currency_update", str(target_user.id))

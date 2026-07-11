@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.data_models import AppUser, UserSession
-from app.persistence import Persistence
+from app.persistence import AdminMutationContext, Persistence
 
 
 PASSWORD = "VeryStrongPass!9"
@@ -54,6 +54,14 @@ def _session_count(persistence: Persistence, user: AppUser) -> int:
     ).fetchone()
     assert row is not None
     return int(row[0])
+
+
+async def _admin_context(
+    persistence: Persistence,
+    actor: AppUser,
+) -> AdminMutationContext:
+    session = await persistence.create_session(actor.id)
+    return AdminMutationContext(auth_token=session.id)
 
 
 def test_deactivation_wins_before_session_creation_rereads_state(
@@ -111,6 +119,7 @@ def test_session_creation_wins_then_deactivation_deletes_new_session(
     temp_db: Persistence,
 ):
     root, target = asyncio.run(_create_root_and_target(temp_db))
+    admin_context = asyncio.run(_admin_context(temp_db, root))
     state_read_reached = threading.Event()
     allow_session_creation = threading.Event()
     deactivation_begin_attempted = threading.Event()
@@ -151,7 +160,7 @@ def test_session_creation_wins_then_deactivation_deletes_new_session(
                 persistence.admin_set_user_active(
                     target.id,
                     False,
-                    actor=root,
+                    admin_context=admin_context,
                 )
             )
         except BaseException as exc:
@@ -195,6 +204,7 @@ def test_session_creation_wins_then_deactivation_deletes_new_session(
 def test_reactivation_purges_a_legacy_dormant_session(temp_db: Persistence):
     async def scenario() -> None:
         root, target = await _create_root_and_target(temp_db)
+        admin_context = await _admin_context(temp_db, root)
         session = await temp_db.create_session(target.id)
 
         temp_db.conn.execute(
@@ -210,7 +220,7 @@ def test_reactivation_purges_a_legacy_dormant_session(temp_db: Persistence):
         reactivated = await temp_db.admin_set_user_active(
             target.id,
             True,
-            actor=root,
+            admin_context=admin_context,
         )
 
         assert reactivated.is_active is True
@@ -224,12 +234,13 @@ def test_reactivation_purges_a_legacy_dormant_session(temp_db: Persistence):
 def test_active_to_active_noop_preserves_live_sessions(temp_db: Persistence):
     async def scenario() -> None:
         root, target = await _create_root_and_target(temp_db)
+        admin_context = await _admin_context(temp_db, root)
         session = await temp_db.create_session(target.id)
 
         unchanged = await temp_db.admin_set_user_active(
             target.id,
             True,
-            actor=root,
+            admin_context=admin_context,
         )
 
         assert unchanged.is_active is True
@@ -243,13 +254,22 @@ def test_active_to_active_noop_preserves_live_sessions(temp_db: Persistence):
 def test_deactivation_invalidates_pending_oauth_handoffs(temp_db: Persistence):
     async def scenario() -> None:
         root, target = await _create_root_and_target(temp_db)
+        admin_context = await _admin_context(temp_db, root)
         handoff = await temp_db.create_oauth_handoff(
             user_id=target.id,
             provider="google",
         )
 
-        await temp_db.admin_set_user_active(target.id, False, actor=root)
-        await temp_db.admin_set_user_active(target.id, True, actor=root)
+        await temp_db.admin_set_user_active(
+            target.id,
+            False,
+            admin_context=admin_context,
+        )
+        await temp_db.admin_set_user_active(
+            target.id,
+            True,
+            admin_context=admin_context,
+        )
 
         with pytest.raises(KeyError):
             await temp_db.consume_oauth_handoff(handoff)

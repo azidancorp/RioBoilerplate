@@ -48,6 +48,7 @@ decision not to change it.
 | Area | Problem in simple terms | Status |
 | --- | --- | --- |
 | Profile privacy | A signed-in user can read another user's private profile fields. | done — `Restrict private profile reads` |
+| Profile read hierarchy | Admin profile reads can expose root/peer private data outside the role hierarchy. | done — `Apply role hierarchy to profile reads` |
 | Profile mutations | Cross-user profile edits do not consistently enforce the live role hierarchy inside the write transaction. | done — `Authorize profile writes atomically` |
 | Session lifetime | API bearer authentication accepts a session beyond its absolute maximum lifetime. | queued |
 | Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | queued |
@@ -91,4 +92,14 @@ decision not to change it.
 - Added API coverage for all three mutation routes, role hierarchy, demotion
   between request authentication and persistence, lower-role administration,
   and self-service delete/recreate behavior.
+- Verification: `pytest app/tests/test_profiles_api.py -q`.
+
+### 2026-07-11 — Profile read hierarchy
+
+- Tightened both individual and bulk profile reads to the same role hierarchy
+  used by account management: users see themselves, privileged users see
+  themselves and lower-role users, and root/peer private profiles are excluded.
+- Made authorization and profile retrieval use one consistent SQLite read
+  snapshot, so a role change cannot be interleaved between the permission check
+  and the sensitive read.
 - Verification: `pytest app/tests/test_profiles_api.py -q`.

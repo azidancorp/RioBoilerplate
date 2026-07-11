@@ -130,6 +130,95 @@ def test_admin_can_read_a_users_private_profile(profile_api_setup):
     assert response.json()["user_id"] == str(target.id)
 
 
+def test_admin_cannot_read_a_root_private_profile(profile_api_setup):
+    client, persistence = profile_api_setup
+
+    async def scenario():
+        _, admin_token = await _create_user_with_session(
+            persistence,
+            email="profile-read-hierarchy-admin@example.com",
+            role="admin",
+        )
+        root, _ = await _create_user_with_session(
+            persistence,
+            email="private-root-profile@example.com",
+            role="root",
+        )
+        await persistence.update_profile(
+            str(root.id),
+            address="Root-only private address",
+        )
+        return admin_token, root
+
+    admin_token, root = asyncio.run(scenario())
+
+    response = client.get(
+        f"/api/profiles/{root.id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert response.status_code == 403
+    assert "Root-only private address" not in response.text
+
+
+def test_bulk_profile_reads_exclude_peer_and_higher_roles(profile_api_setup):
+    client, persistence = profile_api_setup
+
+    async def scenario():
+        admin, admin_token = await _create_user_with_session(
+            persistence,
+            email="profile-list-admin@example.com",
+            role="admin",
+        )
+        peer, _ = await _create_user_with_session(
+            persistence,
+            email="profile-list-peer@example.com",
+            role="admin",
+        )
+        root, _ = await _create_user_with_session(
+            persistence,
+            email="profile-list-root@example.com",
+            role="root",
+        )
+        user, _ = await _create_user_with_session(
+            persistence,
+            email="profile-list-user@example.com",
+            role="user",
+        )
+        return admin, admin_token, peer, root, user
+
+    admin, admin_token, peer, root, user = asyncio.run(scenario())
+
+    response = client.get(
+        "/api/profiles",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert response.status_code == 200
+    visible_ids = {profile["user_id"] for profile in response.json()}
+    assert visible_ids == {str(admin.id), str(user.id)}
+    assert str(peer.id) not in visible_ids
+    assert str(root.id) not in visible_ids
+
+
+def test_bulk_profile_reads_remain_privileged(profile_api_setup):
+    client, persistence = profile_api_setup
+    _, token = asyncio.run(
+        _create_user_with_session(
+            persistence,
+            email="profile-list-user-denied@example.com",
+            role="user",
+        )
+    )
+
+    response = client.get(
+        "/api/profiles",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+
+
 def test_admin_can_update_a_lower_role_profile(profile_api_setup):
     client, persistence = profile_api_setup
 

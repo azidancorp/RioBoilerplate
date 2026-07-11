@@ -461,7 +461,7 @@ class Persistence:
             )
         return actor, target
 
-    def _require_live_profile_actor_can_manage(
+    def _require_live_profile_actor_can_access(
         self,
         cursor: sqlite3.Cursor,
         *,
@@ -491,7 +491,7 @@ class Persistence:
 
         if not check_access("/app/admin", actor.role):
             raise PermissionError(
-                "You do not have permission to modify another user's profile."
+                "You do not have permission to access another user's profile."
             )
         self._require_role_can_manage(
             actor_role=actor.role,
@@ -1590,7 +1590,7 @@ class Persistence:
 
         try:
             conn.execute("BEGIN IMMEDIATE")
-            _, target = self._require_live_profile_actor_can_manage(
+            _, target = self._require_live_profile_actor_can_access(
                 cursor,
                 auth_token=auth_token,
                 target_user_id=user_id,
@@ -1642,6 +1642,113 @@ class Persistence:
     async def get_profile_by_user_id(self, user_id: str) -> dict[str, t.Any] | None:
         return await persistence_profiles.get_profile_by_user_id(self, user_id)
 
+    async def get_profile_for_session(
+        self,
+        *,
+        auth_token: str,
+        user_id: str,
+    ) -> dict[str, t.Any] | None:
+        """Read a profile from the same snapshot used to authorize its actor."""
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="Profile reads")
+        cursor = conn.cursor()
+
+        try:
+            conn.execute("BEGIN")
+            _, target = self._require_live_profile_actor_can_access(
+                cursor,
+                auth_token=auth_token,
+                target_user_id=user_id,
+                action="view profiles for",
+            )
+            cursor.execute(
+                """
+                SELECT id, user_id, full_name, email, phone, address, bio,
+                       avatar_url, created_at, updated_at
+                FROM profiles
+                WHERE user_id = ?
+                """,
+                (str(target.id),),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+        if row is None:
+            return None
+        return persistence_profiles._row_to_profile(row)
+
+    async def get_profiles_for_session(
+        self,
+        *,
+        auth_token: str,
+    ) -> list[dict[str, t.Any]]:
+        """List only profiles the live privileged actor is allowed to manage."""
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="Profile list reads")
+        cursor = conn.cursor()
+
+        try:
+            conn.execute("BEGIN")
+            try:
+                _, actor = self.get_valid_session_by_auth_token(auth_token)
+            except KeyError as exc:
+                raise AdminSessionInvalidError(
+                    "Your session is no longer valid."
+                ) from exc
+            if not check_access("/app/admin", actor.role):
+                raise PermissionError(
+                    "Only privileged users can view managed profiles."
+                )
+
+            cursor.execute(
+                """
+                SELECT
+                    p.id,
+                    p.user_id,
+                    p.full_name,
+                    p.email,
+                    p.phone,
+                    p.address,
+                    p.bio,
+                    p.avatar_url,
+                    p.created_at,
+                    p.updated_at,
+                    u.role
+                FROM profiles AS p
+                JOIN users AS u ON u.id = p.user_id
+                ORDER BY p.created_at DESC
+                """
+            )
+            rows = cursor.fetchall()
+            visible_rows = [
+                row
+                for row in rows
+                if str(actor.id) == str(row[1])
+                or can_manage_role(actor.role, t.cast(str, row[10]))
+            ]
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+        return [
+            persistence_profiles._row_to_profile(row[:10])
+            for row in visible_rows
+        ]
+
     async def update_profile(
         self, user_id: str, full_name: str = None, email: str = None,
         phone: str = None, address: str = None,
@@ -1688,7 +1795,7 @@ class Persistence:
 
         try:
             conn.execute("BEGIN IMMEDIATE")
-            _, target = self._require_live_profile_actor_can_manage(
+            _, target = self._require_live_profile_actor_can_access(
                 cursor,
                 auth_token=auth_token,
                 target_user_id=user_id,
@@ -1741,7 +1848,7 @@ class Persistence:
 
         try:
             conn.execute("BEGIN IMMEDIATE")
-            _, target = self._require_live_profile_actor_can_manage(
+            _, target = self._require_live_profile_actor_can_access(
                 cursor,
                 auth_token=auth_token,
                 target_user_id=user_id,

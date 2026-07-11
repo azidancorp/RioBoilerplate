@@ -4,8 +4,8 @@ Profile Management API Endpoints
 Authentication: Bearer token in Authorization header (UserSettings.auth_token in Rio apps)
 
 Authorization:
-- GET /api/profiles: Admin/root only (bulk profiles list)
-- GET /api/profiles/{user_id}: Self or admin/root only
+- GET /api/profiles: Admin/root managed profiles only (bulk profiles list)
+- GET /api/profiles/{user_id}: Self or higher-role admin/root only
 - POST /api/profiles: Create profile (self or admin/root)
 - PUT /api/profiles/{user_id}: Update profile (self or admin/root)
 - DELETE /api/profiles/{user_id}: Delete profile (self or admin/root)
@@ -27,14 +27,8 @@ from app.validation import (
     ProfileResponse,
     SecuritySanitizer
 )
-from app.api.auth_dependencies import (
-    get_current_user,
-    get_current_session,
-    get_persistence,
-    require_self_or_admin,
-    is_admin_or_root,
-)
-from app.data_models import AppUser, UserSession
+from app.api.auth_dependencies import get_current_session, get_persistence
+from app.data_models import UserSession
 
 router = APIRouter()
 
@@ -45,28 +39,37 @@ router = APIRouter()
 
 @router.get("/api/profiles", response_model=List[ProfileResponse])
 async def get_profiles(
-    current_user: AppUser = Depends(get_current_user),
+    current_session: UserSession = Depends(get_current_session),
     db: Persistence = Depends(get_persistence)
 ) -> List[Dict]:
     """
-    Get all user profiles (admin/root only).
+    Get manageable user profiles (admin/root only).
 
-    Only users with admin or root role can retrieve the full list of profiles.
+    Privileged users receive their own profile and profiles belonging to
+    lower-role users. Peer and higher-role profiles remain private.
 
     Raises: 401 (auth fails), 403 (insufficient privileges).
     """
-    if not is_admin_or_root(current_user):
+    try:
+        return await db.get_profiles_for_session(
+            auth_token=current_session.id,
+        )
+    except AdminSessionInvalidError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient privileges. Only admin or root users can view all profiles."
+            detail=str(exc),
         )
-
-    return await db.get_profiles()
 
 @router.get("/api/profiles/{user_id}", response_model=ProfileResponse)
 async def get_profile(
     user_id: str,
-    current_user: AppUser = Depends(get_current_user),
+    current_session: UserSession = Depends(get_current_session),
     db: Persistence = Depends(get_persistence)
 ) -> Dict:
     """
@@ -93,9 +96,27 @@ async def get_profile(
             detail="Invalid user ID format"
         )
 
-    require_self_or_admin(sanitized_user_id, current_user)
-
-    profile = await db.get_profile_by_user_id(sanitized_user_id)
+    try:
+        profile = await db.get_profile_for_session(
+            auth_token=current_session.id,
+            user_id=sanitized_user_id,
+        )
+    except AdminSessionInvalidError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {sanitized_user_id} does not exist",
+        )
 
     if profile is None:
         raise HTTPException(

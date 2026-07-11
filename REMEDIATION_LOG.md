@@ -47,7 +47,7 @@ decision not to change it.
 
 | Area | Problem in simple terms | Status |
 | --- | --- | --- |
-| Profile privacy | A signed-in user can read another user's private profile fields. | queued |
+| Profile privacy | A signed-in user can read another user's private profile fields. | done — `Restrict private profile reads` |
 | Profile mutations | Cross-user profile edits do not consistently enforce the live role hierarchy inside the write transaction. | queued |
 | Session lifetime | API bearer authentication accepts a session beyond its absolute maximum lifetime. | queued |
 | Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | queued |
@@ -69,5 +69,10 @@ decision not to change it.
 
 ## Completed work
 
-No repair commits have been made yet. This first commit establishes the audit
-trail and the boundaries above.
+### 2026-07-11 — Private profile reads
+
+- Changed the single-profile endpoint so ordinary users can read only their
+  own profile. Admin/root access remains available for account support.
+- Added API tests proving cross-user reads are rejected without leaking the
+  private fields, while self and administrator reads still work.
+- Verification: `pytest app/tests/test_profiles_api.py -q`.

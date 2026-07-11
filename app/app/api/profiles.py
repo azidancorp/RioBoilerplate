@@ -5,7 +5,7 @@ Authentication: Bearer token in Authorization header (UserSettings.auth_token in
 
 Authorization:
 - GET /api/profiles: Admin/root only (bulk profiles list)
-- GET /api/profiles/{user_id}: Any authenticated user can view specific profile
+- GET /api/profiles/{user_id}: Self or admin/root only
 - POST /api/profiles: Create profile (self or admin/root)
 - PUT /api/profiles/{user_id}: Update profile (self or admin/root)
 - DELETE /api/profiles/{user_id}: Delete profile (self or admin/root)
@@ -69,10 +69,10 @@ async def get_profile(
     db: Persistence = Depends(get_persistence)
 ) -> Dict:
     """
-    Get profile by user ID (requires authentication).
+    Get profile by user ID (requires authentication and authorization).
 
-    Any authenticated user can view any profile. Extension ideas: visibility settings,
-    connection checks, metadata (connection status, mutual friends).
+    Users can view their own private profile. Admin/root users can view profiles
+    for support and account-management work.
 
     Raises: 401 (auth fails), 404 (not found), 422 (invalid ID).
     """
@@ -91,6 +91,8 @@ async def get_profile(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid user ID format"
         )
+
+    require_self_or_admin(sanitized_user_id, current_user)
 
     profile = await db.get_profile_by_user_id(sanitized_user_id)
 

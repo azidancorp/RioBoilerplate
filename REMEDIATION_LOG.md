@@ -65,7 +65,7 @@ decision not to change it.
 | Responsive refresh | The first mobile/desktop breakpoint crossing can be missed. | queued |
 | Admin experience | Stale authorization, misleading mail feedback, and unbounded user-table loading need focused corrections. | queued |
 | Source quality | Ruff errors remain and CI does not enforce the source checks used locally. | queued |
-| Deployment guide | Non-Railway Linux guidance targets an obsolete release and an unnecessarily privileged service. | queued |
+| Deployment guide | Non-Railway Linux guidance targets an obsolete release and an unnecessarily privileged service. | done — `Harden the supported VPS deployment guide` |
 | Final verification | Focused tests, full pytest, Ruff, and dev/release boot evidence must all be reconciled here. | queued |
 
 ## Completed work
@@ -429,3 +429,27 @@ decision not to change it.
   application/runtime dependencies.
 - Verification: the workflow YAML parsed successfully and local
   `ruff 0.15.12 check .` passed.
+
+### 2026-07-11 — Supported, least-privilege VPS deployment
+
+- Retargeted the non-Railway guide from the obsolete Ubuntu 24.10 interim
+  release to Ubuntu 24.04 LTS and Python 3.12, matching CI. Linked the official
+  Ubuntu lifecycle and package references and updated the version examples.
+- Replaced the root-run application service with a dedicated no-login account.
+  The systemd unit now runs prestart and Rio under that account with a read-only
+  system/source view, no new privileges or capabilities, private temporary and
+  device namespaces, and only the SQLite/email-outbox and contact-message
+  directories writable.
+- Changed source transfer to archive only the committed Git revision. Local
+  secrets, virtual environments, databases, caches, and untracked files are
+  excluded automatically. Source and the server-built virtual environment stay
+  root-owned; runtime data stays owned by the application account.
+- Made the deployment secret file root-owned and service-group-readable, and
+  made manual bootstrap/prestart/boot commands use the same runtime account and
+  no-bytecode/cache environment as the service.
+- Railway instructions and application dependency files remain unchanged, as
+  required by this remediation pass.
+- Verification: `systemd-analyze verify` accepted the rendered unit after
+  substituting local test paths; all placeholders are declared; obsolete
+  release, path, runtime, and ownership instructions are absent; and
+  `git diff --check` passed.

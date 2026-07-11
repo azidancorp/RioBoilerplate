@@ -6,10 +6,15 @@ Complete step-by-step instructions for deploying a Rio/FastAPI application to a 
 
 ## Prerequisites
 
-- DigitalOcean droplet running Ubuntu 24.10
+- DigitalOcean droplet running Ubuntu 24.04 LTS (Python 3.12)
 - Domain name with DNS management access
 - Local application files ready for deployment
 - SSH access to the droplet
+
+Ubuntu 24.04 LTS is used deliberately: Canonical lists standard maintenance
+through May 2029, and Noble provides Python 3.12, matching this repository's CI.
+See the official [Ubuntu release cycle](https://ubuntu.com/about/release-cycle?product=ubuntu&release=ubuntu&version=24.04+LTS)
+and [Noble Python 3.12 package](https://packages.ubuntu.com/noble/python3.12).
 
 ## Variables to Replace
 
@@ -19,7 +24,10 @@ Throughout this guide, replace these variables with your actual values:
 - `[EMAIL]` - Your email for SSL certificate notifications
 - `[LOCAL_APP_PATH]` - Path to your local application files
 - `[APP_NAME]` - Name for your systemd service
+- `[APP_USER]` - Dedicated no-login service account (e.g., `rioapp`)
 - `[SSH_ALIAS]` - Short name for SSH connection (e.g., `mysite`)
+- `[USERNAME]` - Your local Windows username when using the shown config path
+- `[KEY_FILE]` - Filename of an optional custom SSH private key
 
 ## Step 0: Configure SSH for Easy Access (Optional but Recommended)
 
@@ -118,6 +126,10 @@ apt update && apt upgrade -y
 # Install essential packages
 apt install -y python3 python3-pip python3-venv git nginx ufw certbot python3-certbot-nginx ssl-cert
 
+# Create the non-login account that will run the application
+useradd --system --user-group --home-dir /srv/[APP_NAME] --shell /usr/sbin/nologin [APP_USER]
+install -d -o root -g [APP_USER] -m 0750 /srv/[APP_NAME]
+
 # Configure firewall
 ufw allow OpenSSH
 ufw allow 'Nginx Full'  # Opens ports 80 & 443
@@ -152,45 +164,68 @@ Nginx Full (v6)            ALLOW       Anywhere (v6)
 **Common Issues:**
 - **Package installation fails**: Run `apt update` first, check internet connection
 - **UFW already active**: That's fine, existing rules will be preserved
-- **Permission denied**: Ensure you're logged in as root user
+- **Permission denied**: Provisioning commands in this step require root/sudo
 
 ## Step 3: Deploy Application Files
 
-From your **local machine**, upload your application:
+From your **local machine**, deploy the committed revision. `git archive` sends
+only files tracked by Git, so local virtual environments, secrets, databases,
+caches, and other uncommitted files cannot accidentally reach the server:
 
 ```bash
-# Upload application files (run from local machine)
-scp -r [LOCAL_APP_PATH] [SSH_ALIAS]:/root/
+# Stream the committed HEAD to a fresh, root-only staging path (run locally)
+git -C [LOCAL_APP_PATH] archive --format=tar.gz HEAD | ssh [SSH_ALIAS] '
+  rm -rf /tmp/[APP_NAME] &&
+  install -d -m 0700 /tmp/[APP_NAME] &&
+  tar -xzf - -C /tmp/[APP_NAME]
+'
 # OR
-scp -r [LOCAL_APP_PATH] root@[DROPLET_IP]:/root/
+git -C [LOCAL_APP_PATH] archive --format=tar.gz HEAD | ssh root@[DROPLET_IP] '
+  rm -rf /tmp/[APP_NAME] &&
+  install -d -m 0700 /tmp/[APP_NAME] &&
+  tar -xzf - -C /tmp/[APP_NAME]
+'
+
+# Back on the server, install root-owned source and app-owned writable directories
+chown -R root:root /tmp/[APP_NAME]
+cp -a /tmp/[APP_NAME]/. /srv/[APP_NAME]/
+install -d -o [APP_USER] -g [APP_USER] -m 0750 \
+  /srv/[APP_NAME]/app/app/data \
+  /srv/[APP_NAME]/.local/share/rio-boilerplate
+rm -rf /tmp/[APP_NAME]
+
+# Build an immutable virtual environment on the server; do not upload a local venv
+python3 -m venv /srv/[APP_NAME]/venv
+/srv/[APP_NAME]/venv/bin/pip install -r /srv/[APP_NAME]/requirements.txt
 
 # Example structure on server should be:
-# /root/[APP_NAME]/
+# /srv/[APP_NAME]/
 # ├── app/           # Main application files
 # │   ├── rio.toml   # Rio configuration
 # │   └── ...
 # └── venv/          # Python virtual environment
 ```
 
-**Expected Output:**
-```bash
-# SCP upload progress
-app/                          100%  2048KB   1.5MB/s   00:01
-venv/                         100%  50MB     8.2MB/s   00:06
-```
+Successful archive transfer is quiet. On the server,
+`test -x /srv/[APP_NAME]/venv/bin/rio` should exit successfully after the
+installation finishes.
 
 **Common Issues:**
 - **Permission denied**: Check SSH access and target directory permissions
-- **No such file or directory**: Verify local path and create target directory if needed
+- **Not a Git repository**: Verify `[LOCAL_APP_PATH]` points to this repository
+- **Missing recent changes**: Commit the intended revision before running
+  `git archive`; uncommitted files are deliberately excluded
 - **Connection timeout**: Check network connection and SSH configuration
 
 ## Step 3.5: Configure Environment
 
 ```bash
 # From the application directory
-cd /root/[APP_NAME]
+cd /srv/[APP_NAME]
 [ -f .env ] || cp .env.example .env
 nano .env
+chown root:[APP_USER] .env
+chmod 0640 .env
 ```
 
 Add any deployment-specific secrets required by the providers you enable.
@@ -204,11 +239,23 @@ Add any deployment-specific secrets required by the providers you enable.
 Before exposing the app publicly, create the initial verified owner account from the server shell:
 
 ```bash
-cd /root/[APP_NAME]/app
-../venv/bin/python -m app.scripts.bootstrap_root
+cd /srv/[APP_NAME]/app
+sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
+  ../venv/bin/python -m app.scripts.bootstrap_root
 ```
 
-With no arguments, the command prompts for email and password. You can also pass values directly, for example `../venv/bin/python -m app.scripts.bootstrap_root --email owner@example.com --password '<strong-password>'`. `--username owner` is optional; if you provide `--username` without `--email`, that username becomes the root login identifier. If users already exist, the command exits successfully without changing anything.
+With no arguments, the command prompts for email and password. You can also
+pass values directly:
+
+```bash
+sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
+  ../venv/bin/python -m app.scripts.bootstrap_root \
+  --email owner@example.com --password '<strong-password>'
+```
+
+`--username owner` is optional; if you provide `--username` without `--email`,
+that username becomes the root login identifier. If users already exist, the
+command exits successfully without changing anything.
 
 This CLI is the only supported initial-root creation path. Password signup and OAuth account creation are blocked while the database is empty. Run it before anything else creates users; it deliberately refuses to modify a database that already contains accounts.
 
@@ -230,16 +277,17 @@ SSH back into the server and test the application:
 
 ```bash
 # Navigate to application directory
-cd /root/[APP_NAME]
-source venv/bin/activate
-cd app
+cd /srv/[APP_NAME]/app
 
 # Test application locally
 # Note: --release flag enables production optimizations (faster performance,
 # lower memory usage, and additional safety checks)
 APP_PORT=8000
-../venv/bin/python -m app.scripts.prestart --strict-bootstrap
-rio run --port "$APP_PORT" --release
+sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
+  ../venv/bin/python -m app.scripts.prestart --strict-bootstrap
+sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
+  XDG_CACHE_HOME=/tmp/[APP_NAME]-cache \
+  ../venv/bin/rio run --port "$APP_PORT" --release
 
 # Verify it's working from another terminal with the same port value.
 APP_PORT=8000
@@ -294,15 +342,39 @@ nano /etc/systemd/system/[APP_NAME].service
 ```ini
 [Unit]
 Description=Rio App for [DOMAIN_NAME]
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
-WorkingDirectory=/root/[APP_NAME]/app
+Type=simple
+User=[APP_USER]
+Group=[APP_USER]
+WorkingDirectory=/srv/[APP_NAME]/app
+Environment=HOME=/srv/[APP_NAME]
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=XDG_CACHE_HOME=/tmp/[APP_NAME]-cache
 # --release flag provides production optimizations and safety checks
 # Required: verify schema and require a verified root user before public start
-ExecStartPre=/root/[APP_NAME]/venv/bin/python -m app.scripts.prestart --strict-bootstrap
-ExecStart=/root/[APP_NAME]/venv/bin/rio run --port 8000 --release
-Restart=always
+ExecStartPre=/srv/[APP_NAME]/venv/bin/python -m app.scripts.prestart --strict-bootstrap
+ExecStart=/srv/[APP_NAME]/venv/bin/rio run --port 8000 --release
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+
+# Keep the service read-only except for its two documented runtime-data paths.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/srv/[APP_NAME]/app/app/data /srv/[APP_NAME]/.local/share/rio-boilerplate
 
 [Install]
 WantedBy=multi-user.target
@@ -335,13 +407,14 @@ Created symlink '/etc/systemd/system/multi-user.target.wants/[APP_NAME].service'
      Memory: 20.2M (peak: 20.4M)
         CPU: 278ms
      CGroup: /system.slice/[APP_NAME].service
-             └─19392 /root/[APP_NAME]/venv/bin/python3 /root/[APP_NAME]/venv/bin/rio run --port 8000 --release
+             └─19392 /srv/[APP_NAME]/venv/bin/python3 /srv/[APP_NAME]/venv/bin/rio run --port 8000 --release
 ```
 
 **Common Issues:**
 - **Service fails to start**: Check the service file syntax and file paths
 - **"restart counter is at 2"**: Service restarted due to quick exit, check logs for errors
-- **Permission denied**: Ensure service file has correct ownership and permissions
+- **Permission denied**: Confirm `/srv/[APP_NAME]` is root-owned and traversable
+  by group `[APP_USER]`, and both `ReadWritePaths` are owned by `[APP_USER]`
 - **Python module not found**: Virtual environment path may be incorrect
 
 ## Step 6: Configure Nginx Reverse Proxy
@@ -522,7 +595,7 @@ curl -I https://[DOMAIN_NAME]
 ```bash
 # HTTP redirect test
 HTTP/1.1 301 Moved Permanently
-Server: nginx/1.26.0 (Ubuntu)
+Server: nginx/1.24.0 (Ubuntu)
 Date: Sat, 21 Jun 2025 11:35:57 GMT
 Content-Type: text/html
 Content-Length: 178
@@ -600,7 +673,7 @@ certbot renew
 
 #### Common Issues
 
-**1. SSL Certificate Error (Ubuntu 24.10)**
+**1. SSL Certificate Error (Ubuntu 24.04 LTS)**
 ```bash
 # Install missing SSL certificate package
 apt install -y ssl-cert
@@ -641,15 +714,17 @@ ufw allow OpenSSH
 
 **Server directory structure:**
 ```
-/root/[APP_NAME]/
+/srv/[APP_NAME]/
+├── .env                   # Deployment secrets
+├── requirements.txt
 ├── app/                    # Main application files
 │   ├── rio.toml           # Rio configuration
 │   └── app/
 │       └── __init__.py    # Rio app bootstrap + FastAPI bridge
-└── venv/                  # Python virtual environment
-    ├── bin/
-    ├── lib/
-    └── ...
+├── venv/                  # Server-built Python virtual environment
+│   ├── bin/
+│   └── lib/
+└── .local/share/rio-boilerplate/  # Contact-message runtime data
 ```
 
 **Key configuration files created:**
@@ -660,8 +735,17 @@ ufw allow OpenSSH
 
 ## Security Notes
 
-- This guide uses root user for simplicity
-- For production environments, consider creating a dedicated application user
+- Root/sudo is used only for provisioning packages, firewall, Nginx, Certbot,
+  source installation, and the systemd unit.
+- The application itself runs as the dedicated no-login `[APP_USER]` account.
+  Do not grant this account sudo or an interactive shell.
+- The systemd unit makes the OS and deployed source read-only to the service;
+  only the SQLite/email-outbox data directory and contact-message data directory
+  are writable.
+- During code updates, install files and dependencies as root, keep source and
+  `venv/` root-owned, preserve `[APP_USER]` ownership of the two runtime-data
+  directories, run strict prestart as `[APP_USER]`, and then restart the
+  service.
 - Regularly update system packages and monitor security advisories
 - Consider implementing fail2ban for additional security
 - Monitor SSL certificate expiry (auto-renewal should handle this)
@@ -680,4 +764,7 @@ Your deployment is successful when:
 
 ---
 
-**Note:** This guide provides general deployment instructions for Rio applications on Ubuntu 24.10 DigitalOcean droplets. Adapt the instructions as needed for your specific application and requirements.
+**Note:** This guide targets Ubuntu 24.04 LTS on DigitalOcean. That release
+provides the Python 3.12 line used by CI and receives standard security
+maintenance through May 2029. Re-verify package/runtime compatibility before
+moving the deployment to a newer Ubuntu or Python release.

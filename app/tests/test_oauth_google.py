@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 import app as app_module
 from app.api import oauth as oauth_module
 from app.api.auth_dependencies import get_persistence
-from app.data_models import AppUser, RecoveryCodeUsage, UserSettings
+from app.data_models import AppUser, RecoveryCodeUsage, UserSession, UserSettings
 from app.pages.login import LoginPage, SocialMFAForm
 from app.persistence import Persistence
 
@@ -378,6 +378,34 @@ def test_login_page_consumes_social_handoff_and_creates_session(temp_db: Persist
         assert page.session.navigated_to == "/app/dashboard"
         session_user = page.session[AppUser]
         assert session_user.id == user.id
+
+    asyncio.run(scenario())
+
+
+def test_oauth_login_handles_late_session_creation_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_db: Persistence,
+):
+    async def scenario():
+        user = await _create_social_user(temp_db, "late-oauth-rejection@example.com")
+        token = await temp_db.create_oauth_handoff(user_id=user.id, provider="google")
+        page = _new_login_page(temp_db, {"social_login_token": token})
+
+        async def reject_session_creation(user_id):
+            assert user_id == user.id
+            raise KeyError(user_id)
+
+        monkeypatch.setattr(temp_db, "create_session", reject_session_creation)
+
+        await LoginPage.on_populate(page)
+
+        assert page.current_form == "login"
+        assert page.page_message_style == "danger"
+        assert "changed or became inactive" in page.page_message
+        assert page.session[UserSettings].auth_token == ""
+        assert UserSession not in page.session._store
+        assert AppUser not in page.session._store
+        assert page.session.navigated_to is None
 
     asyncio.run(scenario())
 

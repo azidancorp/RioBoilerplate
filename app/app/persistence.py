@@ -694,15 +694,32 @@ class Persistence:
         try:
             conn.execute("BEGIN IMMEDIATE")
             cursor.execute(
+                "SELECT is_active FROM users WHERE id = ?",
+                (uid,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise KeyError(user_id)
+            was_active = bool(row[0])
+
+            cursor.execute(
                 "UPDATE users SET is_active = ? WHERE id = ?",
                 (1 if is_active else 0, uid),
             )
             if cursor.rowcount == 0:
                 raise KeyError(user_id)
 
-            if not is_active:
+            # Deactivation revokes live sessions. Activation also clears any
+            # impossible dormant rows left by an older raced session issuer.
+            if not is_active or not was_active:
                 cursor.execute(
                     "DELETE FROM user_sessions WHERE user_id = ?",
+                    (uid,),
+                )
+
+            if not is_active:
+                cursor.execute(
+                    "DELETE FROM oauth_login_handoffs WHERE user_id = ?",
                     (uid,),
                 )
                 cursor.execute(
@@ -720,7 +737,7 @@ class Persistence:
                 action="user_reactivate" if is_active else "user_deactivate",
                 target_user_id=user_id,
                 target_label=current_user.email,
-                before={"is_active": current_user.is_active},
+                before={"is_active": was_active},
                 after={"is_active": is_active},
                 client_ip=client_ip,
                 commit=False,

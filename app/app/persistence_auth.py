@@ -395,39 +395,60 @@ async def create_session(
     `user_id`: The UUID of the user for whom to create the session.
     """
     conn = _get_connection(persistence)
-    now = datetime.now(tz=timezone.utc)
+    if conn.in_transaction:
+        raise RuntimeError(
+            "Session creation cannot run inside an existing transaction."
+        )
 
-    user = await persistence.get_user_by_id(user_id)
-    if not user.is_active:
-        raise KeyError(f"User account is inactive: {user_id}")
-
-    session = UserSession(
-        id=secrets.token_urlsafe(),
-        user_id=user_id,
-        created_at=now,
-        valid_until=now + timedelta(days=1),
-        role=user.role,
-    )
-
+    raw_token = secrets.token_urlsafe()
+    hashed_token = _hash_one_time_token(raw_token)
     cursor = persistence._get_cursor()
-    cursor.execute(
-        """
-        INSERT INTO user_sessions (id, user_id, created_at, valid_until, role)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            # Store the SHA-256 hash of the token at rest; the raw token is
-            # returned to the caller (and handed to the client) but never
-            # persisted in cleartext. See get_session_by_auth_token for the
-            # matching hash-on-lookup.
-            _hash_one_time_token(session.id),
-            str(session.user_id),
-            session.created_at.timestamp(),
-            session.valid_until.timestamp(),
-            session.role,
-        ),
-    )
-    conn.commit()
+
+    try:
+        # Establish the ordering point against concurrent account deactivation
+        # before re-reading account state. Keep this transaction free of awaits.
+        conn.execute("BEGIN IMMEDIATE")
+        now = datetime.now(tz=timezone.utc)
+        cursor.execute(
+            "SELECT is_active, role FROM users WHERE id = ?",
+            (str(user_id),),
+        )
+        user_row = cursor.fetchone()
+        if user_row is None:
+            raise KeyError(user_id)
+        if not bool(user_row[0]):
+            raise KeyError(f"User account is inactive: {user_id}")
+
+        session = UserSession(
+            id=raw_token,
+            user_id=user_id,
+            created_at=now,
+            valid_until=now + timedelta(days=1),
+            role=t.cast(str, user_row[1]),
+        )
+
+        cursor.execute(
+            """
+            INSERT INTO user_sessions (id, user_id, created_at, valid_until, role)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                # Store the SHA-256 hash of the token at rest; the raw token is
+                # returned to the caller (and handed to the client) but never
+                # persisted in cleartext. See get_session_by_auth_token for the
+                # matching hash-on-lookup.
+                hashed_token,
+                str(session.user_id),
+                session.created_at.timestamp(),
+                session.valid_until.timestamp(),
+                session.role,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
 
     return session
 

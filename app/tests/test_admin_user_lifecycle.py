@@ -1015,6 +1015,44 @@ def test_deactivated_user_cannot_login_refresh_session_or_reset_password(
     asyncio.run(scenario())
 
 
+def test_login_handles_late_session_creation_rejection_without_partial_auth(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        root, _ = await _create_root_session(temp_db)
+        target = await temp_db.admin_create_user(
+            email="late-session-rejection@example.com",
+            password=PASSWORD,
+            role="user",
+            actor=root,
+        )
+
+        async def reject_session_creation(user_id):
+            assert user_id == target.id
+            raise KeyError(user_id)
+
+        monkeypatch.setattr(temp_db, "create_session", reject_session_creation)
+        login_session = _FakeSession(temp_db)
+        login_form = _mount_login(
+            login_session,
+            email=target.email,
+            password=PASSWORD,
+        )
+
+        await LoginForm.login(login_form)
+
+        assert login_form.banner_style == "danger"
+        assert "changed or became inactive" in login_form.error_message
+        assert login_form._currently_logging_in is False
+        assert UserSession not in login_session._attachments
+        assert AppUser not in login_session._attachments
+        assert login_session[UserSettings].auth_token == ""
+        assert login_session.navigation_target is None
+
+    asyncio.run(scenario())
+
+
 def test_admin_page_deactivation_requires_confirmation(temp_db: Persistence):
     async def scenario():
         root, root_session = await _create_root_session(temp_db)

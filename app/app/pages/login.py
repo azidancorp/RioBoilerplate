@@ -76,14 +76,25 @@ def _generic_reset_message() -> str:
     )
 
 
+def _account_changed_during_login_message() -> str:
+    return (
+        "This account changed or became inactive during sign-in. "
+        "Please try again or contact an administrator."
+    )
+
+
 async def _complete_login_session(
     session: rio.Session,
     pers: Persistence,
     user_info: AppUser,
     *,
     recovery_code_used: bool = False,
-) -> None:
-    user_session = await pers.create_session(user_id=user_info.id)
+) -> bool:
+    try:
+        user_session = await pers.create_session(user_id=user_info.id)
+    except KeyError:
+        return False
+
     session.attach(user_session)
     session.attach(user_info)
 
@@ -100,6 +111,7 @@ async def _complete_login_session(
         usage.used_at_login = True
 
     session.navigate_to("/app/dashboard")
+    return True
 
 
 def _oauth_error_message(error_code: str) -> str:
@@ -280,12 +292,15 @@ class LoginForm(rio.Component):
                 key=login_identifier_key,
             )
 
-            await _complete_login_session(
+            session_created = await _complete_login_session(
                 self.session,
                 pers,
                 user_info,
                 recovery_code_used=recovery_code_used,
             )
+            if not session_created:
+                self.banner_style = "danger"
+                self.error_message = _account_changed_during_login_message()
 
         finally:
             self._currently_logging_in = False
@@ -848,7 +863,14 @@ class SocialMFAForm(rio.Component):
                 return
 
             if not user_info.two_factor_enabled:
-                await _complete_login_session(self.session, pers, user_info)
+                session_created = await _complete_login_session(
+                    self.session,
+                    pers,
+                    user_info,
+                )
+                if not session_created:
+                    self.banner_style = "danger"
+                    self.error_message = _account_changed_during_login_message()
                 return
 
             mfa_key = rate_limit_key("user", user_info.id)
@@ -871,12 +893,15 @@ class SocialMFAForm(rio.Component):
                 return
 
             pers.clear_rate_limit(scope=login_mfa_policy().scope, key=mfa_key)
-            await _complete_login_session(
+            session_created = await _complete_login_session(
                 self.session,
                 pers,
                 user_info,
                 recovery_code_used=result.used_recovery_code,
             )
+            if not session_created:
+                self.banner_style = "danger"
+                self.error_message = _account_changed_during_login_message()
         finally:
             self._is_processing = False
             self.force_refresh()
@@ -1424,7 +1449,18 @@ class LoginPage(rio.Component):
                 self.force_refresh()
                 return
 
-            await _complete_login_session(self.session, persistence, user_info)
+            session_created = await _complete_login_session(
+                self.session,
+                persistence,
+                user_info,
+            )
+            if not session_created:
+                self.current_form = "login"
+                self._set_page_message(
+                    "danger",
+                    _account_changed_during_login_message(),
+                )
+                self.force_refresh()
             return
 
         if oauth_error:

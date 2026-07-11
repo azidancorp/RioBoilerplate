@@ -418,3 +418,14 @@ decision not to change it.
   disabled and no dependency or lint configuration was changed.
 - Verification: `ruff check .` passed, followed by 42 health/OAuth/page-smoke
   regression tests.
+
+### 2026-07-11 — Ruff enforced in CI
+
+- Added the official Ruff GitHub Action before dependency installation and the
+  pytest step, so new lint regressions fail pull requests and pushes to `main`.
+- Pinned Ruff to `0.15.12`, matching the version used for the clean local run,
+  instead of letting CI silently change rules with `latest`.
+- Kept Ruff out of `requirements.txt`; this workflow-only tool does not change
+  application/runtime dependencies.
+- Verification: the workflow YAML parsed successfully and local
+  `ruff 0.15.12 check .` passed.

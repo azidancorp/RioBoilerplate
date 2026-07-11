@@ -1389,7 +1389,11 @@ def test_admin_page_deactivates_reactivates_and_sends_password_reset(
         await AdminPage._on_send_reset_pressed(reset_page)
 
         assert reset_page.reset_user_error == ""
-        assert "reset-target@example.com" in reset_page.reset_user_success
+        assert reset_page.reset_user_success == (
+            "Password reset instructions prepared for reset-target@example.com. "
+            "Check the configured mailbox or local outbox."
+        )
+        assert "sent" not in reset_page.reset_user_success.lower()
         assert len(sent) == 1
         assert sent[0]["recipient"] == "reset-target@example.com"
         token = sent[0]["token"]

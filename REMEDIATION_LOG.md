@@ -375,3 +375,15 @@ decision not to change it.
   write and the correct revoke-versus-demotion cleanup.
 - Verification: 40 admin lifecycle/authorization tests and all 16 page-smoke
   tests passed.
+
+### 2026-07-11 — Truthful admin reset-delivery wording
+
+- Changed the Admin success message from claiming an email was sent to saying
+  reset instructions were prepared and directing the operator to the configured
+  mailbox or local outbox. That is accurate for both SMTP delivery and the
+  built-in development outbox.
+- Did not change the synchronous mail/outbox implementation, as that path is an
+  explicit remediation exclusion.
+- Tightened the lifecycle test to reject the word “sent” while still proving the
+  intended recipient, token issuance, and delivery helper call.
+- Verification: all 29 admin lifecycle tests passed.

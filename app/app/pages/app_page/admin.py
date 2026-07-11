@@ -945,7 +945,9 @@ class AdminPage(ResponsiveComponent):
             str(target_user.id),
         )
         self.reset_user_success = (
-            f"Password reset email sent to {issuance.recipient_email}"
+            "Password reset instructions prepared for "
+            f"{issuance.recipient_email}. Check the configured mailbox or "
+            "local outbox."
         )
         self.reset_user_error = _with_recovery_code_warning(
             "",

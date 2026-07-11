@@ -13,6 +13,7 @@ from app.data_models import (
     CurrencyLedgerEntry,
 )
 from app.validation import SecuritySanitizer
+from app.password_policy import require_new_password
 from app.config import config
 from app.permissions import (
     can_manage_role,
@@ -575,6 +576,7 @@ class Persistence:
         username: str | None = None,
         full_name: str | None = None,
         is_verified: bool = False,
+        acknowledged_weak: bool = False,
     ) -> AppUser:
         """Create a user from the authenticated admin surface."""
         if not validate_role(role):
@@ -582,8 +584,10 @@ class Persistence:
                 f"Invalid role: {role}. Must be one of: {', '.join(get_all_roles())}"
             )
 
-        if len((password or "").strip()) < 8:
-            raise ValueError("Password must be at least 8 characters.")
+        require_new_password(
+            password,
+            acknowledged_weak=acknowledged_weak,
+        )
 
         normalized_email = SecuritySanitizer.validate_email_format(
             email,
@@ -1375,8 +1379,19 @@ class Persistence:
     async def invalidate_all_sessions(self, user_id: uuid.UUID) -> None:
         await persistence_auth.invalidate_all_sessions(self, user_id)
 
-    async def update_password(self, user_id: uuid.UUID, new_password: str) -> None:
-        await persistence_auth.update_password(self, user_id, new_password)
+    async def update_password(
+        self,
+        user_id: uuid.UUID,
+        new_password: str,
+        *,
+        acknowledged_weak: bool = False,
+    ) -> None:
+        await persistence_auth.update_password(
+            self,
+            user_id,
+            new_password,
+            acknowledged_weak=acknowledged_weak,
+        )
 
     async def upgrade_user_password_hash(self, user_id: uuid.UUID, password: str) -> AppUser:
         return await persistence_auth.upgrade_user_password_hash(self, user_id, password)
@@ -1386,12 +1401,15 @@ class Persistence:
         token: str,
         user_id: uuid.UUID,
         new_password: str,
+        *,
+        acknowledged_weak: bool = False,
     ) -> bool:
         return await persistence_auth.consume_reset_token_and_update_password(
             self,
             token,
             user_id,
             new_password,
+            acknowledged_weak=acknowledged_weak,
         )
 
     async def update_notification_preferences(

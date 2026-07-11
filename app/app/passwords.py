@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from dataclasses import dataclass
 
@@ -12,6 +13,77 @@ HASH_SCHEME_PBKDF2_SHA256 = "pbkdf2_sha256"
 LEGACY_PBKDF2_ITERATIONS = 100000
 
 _password_hash = PasswordHash.recommended()
+
+
+def get_password_strength(password: str) -> int:
+    """Return the existing 0-99 heuristic score used by the password policy."""
+    length = len(password)
+    score = 0
+
+    score += length * 4
+
+    upper_case_letters = re.findall(r"[A-Z]", password)
+    lower_case_letters = re.findall(r"[a-z]", password)
+    numbers = re.findall(r"\d", password)
+    symbols = re.findall(r"[\W_]", password)
+
+    if upper_case_letters:
+        score += (length - len(upper_case_letters)) * 2
+    if lower_case_letters:
+        score += (length - len(lower_case_letters)) * 2
+    if numbers:
+        score += len(numbers) * 4
+    if symbols:
+        score += len(symbols) * 6
+
+    if length > 2:
+        middle_chars = password[1:-1]
+        score += len(re.findall(r"[\d\W_]", middle_chars)) * 2
+
+    requirements = [
+        length >= 12,
+        bool(upper_case_letters),
+        bool(lower_case_letters),
+        bool(numbers),
+        bool(symbols),
+    ]
+    fulfilled_requirements = sum(requirements)
+    if fulfilled_requirements >= 3:
+        score += fulfilled_requirements * 2
+
+    if re.match(r"^[a-zA-Z]+$", password):
+        score -= length
+    if re.match(r"^\d+$", password):
+        score -= length
+
+    score -= len(password) - len(set(password.lower()))
+    score -= len(re.findall(r"[A-Z]{2,}", password)) * 2
+    score -= len(re.findall(r"[a-z]{2,}", password)) * 2
+    score -= len(re.findall(r"\d{2,}", password)) * 2
+
+    score -= sum(
+        1
+        for index in range(len(password) - 2)
+        if password[index : index + 3].isalpha()
+        and ord(password[index + 1]) == ord(password[index]) + 1
+        and ord(password[index + 2]) == ord(password[index]) + 2
+    ) * 3
+    score -= sum(
+        1
+        for index in range(len(password) - 2)
+        if password[index : index + 3].isdigit()
+        and ord(password[index + 1]) == ord(password[index]) + 1
+        and ord(password[index + 2]) == ord(password[index]) + 2
+    ) * 3
+    score -= sum(
+        1
+        for index in range(len(password) - 2)
+        if re.match(r"[\W_]{3}", password[index : index + 3])
+        and ord(password[index + 1]) == ord(password[index]) + 1
+        and ord(password[index + 2]) == ord(password[index]) + 2
+    ) * 3
+
+    return max(0, min(score, 99))
 
 
 @dataclass(frozen=True)

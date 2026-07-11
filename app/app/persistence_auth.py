@@ -11,6 +11,7 @@ from typing import Protocol
 import pyotp
 
 from app import passwords as password_utils
+from app.password_policy import require_new_password
 from app.config import config
 from app.data_models import (
     AppUser,
@@ -970,6 +971,8 @@ async def update_password(
     persistence: AuthPersistence,
     user_id: uuid.UUID,
     new_password: str,
+    *,
+    acknowledged_weak: bool = False,
 ) -> None:
     """
     Update a user's password and invalidate their sessions and reset tokens.
@@ -987,7 +990,10 @@ async def update_password(
     _require_top_level_transaction(conn, operation="Password update")
 
     # Generate new password hash and salt using the current password scheme.
-    # TODO: Enforce minimum password strength once QA convenience window closes.
+    require_new_password(
+        new_password,
+        acknowledged_weak=acknowledged_weak,
+    )
     password_hash, password_salt, password_scheme = password_utils.hash_password(new_password)
     cursor = persistence._get_cursor()
 
@@ -1082,10 +1088,16 @@ async def consume_reset_token_and_update_password(
     token: str,
     user_id: uuid.UUID,
     new_password: str,
+    *,
+    acknowledged_weak: bool = False,
 ) -> bool:
     conn = _get_connection(persistence)
     _require_top_level_transaction(conn, operation="Password reset completion")
 
+    require_new_password(
+        new_password,
+        acknowledged_weak=acknowledged_weak,
+    )
     password_hash, password_salt, password_scheme = password_utils.hash_password(new_password)
     token_hash = _hash_one_time_token(token)
     now = datetime.now(timezone.utc)

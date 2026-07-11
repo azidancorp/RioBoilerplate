@@ -5,6 +5,7 @@ from pathlib import Path
 import pyotp
 import pytest
 
+from app.config import config
 from app.data_models import AppUser, UserSettings, UserSession
 from app.components.navbar import Navbar
 from app.pages.app_page.dashboard import Overview
@@ -122,6 +123,7 @@ def _mount_settings(session: _FakeSession, **attributes) -> Settings:
     component.change_password_2fa = ""
     component.change_password_new_password_strength = 0
     component.change_password_passwords_match = False
+    component.change_password_acknowledge_weak_password = False
     component.delete_account_password = ""
     component.delete_account_2fa = ""
     component.delete_account_confirmation = ""
@@ -288,6 +290,67 @@ def test_successful_mounted_password_change_logs_out_invalidated_session(temp_db
             await temp_db.get_session_by_auth_token(user_session.id)
         with pytest.raises(KeyError):
             await temp_db.get_user_by_reset_token(reset_token.token)
+        _assert_logged_out(session)
+
+    asyncio.run(scenario())
+
+
+def test_settings_password_change_honors_strict_policy(
+    temp_db: Persistence,
+    monkeypatch,
+):
+    async def scenario():
+        monkeypatch.setattr(config, "ALLOW_WEAK_PASSWORDS", False)
+        user, user_session, session = await _create_user_with_session(
+            temp_db,
+            "strict-settings-password@example.com",
+        )
+        page = _mount_settings(
+            session,
+            change_password_current_password=PASSWORD,
+            change_password_new_password="weak",
+            change_password_confirm_password="weak",
+            change_password_passwords_match=True,
+            change_password_acknowledge_weak_password=True,
+        )
+
+        await Settings._on_confirm_password_change_pressed(page)
+
+        assert "too weak" in page.error_message
+        refreshed = await temp_db.get_user_by_id(user.id)
+        assert refreshed.verify_password(PASSWORD)
+        assert not refreshed.verify_password("weak")
+        assert (await temp_db.get_session_by_auth_token(user_session.id)).user_id == user.id
+
+    asyncio.run(scenario())
+
+
+def test_settings_password_change_requires_weak_acknowledgement_when_allowed(
+    temp_db: Persistence,
+    monkeypatch,
+):
+    async def scenario():
+        monkeypatch.setattr(config, "ALLOW_WEAK_PASSWORDS", True)
+        user, _, session = await _create_user_with_session(
+            temp_db,
+            "acknowledged-settings-password@example.com",
+        )
+        page = _mount_settings(
+            session,
+            change_password_current_password=PASSWORD,
+            change_password_new_password="weak",
+            change_password_confirm_password="weak",
+            change_password_passwords_match=True,
+        )
+
+        await Settings._on_confirm_password_change_pressed(page)
+        assert "acknowledge" in page.error_message
+        assert (await temp_db.get_user_by_id(user.id)).verify_password(PASSWORD)
+
+        page.change_password_acknowledge_weak_password = True
+        await Settings._on_confirm_password_change_pressed(page)
+
+        assert (await temp_db.get_user_by_id(user.id)).verify_password("weak")
         _assert_logged_out(session)
 
     asyncio.run(scenario())

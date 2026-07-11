@@ -9,6 +9,8 @@ import typing as t
 import pandas as pd
 
 import rio
+from app.config import config
+from app.password_policy import evaluate_new_password
 from app.persistence import AdminMutationContext, Persistence
 from app.data_models import AppUser, UserSession
 from app.permissions import (
@@ -29,6 +31,11 @@ from app.session_validation import (
 from app.currency import major_to_minor, format_minor_amount, attach_currency_name
 from app.validation import SecuritySanitizer
 from app.scripts.message_utils import send_password_reset_email
+from app.scripts.utils import (
+    get_password_strength,
+    get_password_strength_color,
+    get_password_strength_status,
+)
 from app.components.center_component import CenterComponent
 from app.components.responsive import ResponsiveComponent, WIDTH_FULL
 
@@ -72,6 +79,8 @@ class AdminPage(ResponsiveComponent):
     create_user_username: str = ""
     create_user_full_name: str = ""
     create_user_password: str = ""
+    create_user_password_strength: int = 0
+    create_user_acknowledge_weak_password: bool = False
     create_user_role: str = field(default_factory=get_default_role)
     create_user_is_verified: bool = False
     create_user_step_up_password: str = ""
@@ -388,8 +397,14 @@ class AdminPage(ResponsiveComponent):
             self.force_refresh()
             return
 
-        if len(password.strip()) < 8:
-            self.create_user_error = "Password must be at least 8 characters"
+        password_policy = evaluate_new_password(
+            password,
+            acknowledged_weak=self.create_user_acknowledge_weak_password,
+        )
+        if not password_policy.ok:
+            self.create_user_error = (
+                password_policy.message or "Password is not allowed."
+            )
             self.create_user_success = ""
             self._clear_create_step_up_fields()
             self.force_refresh()
@@ -481,6 +496,7 @@ class AdminPage(ResponsiveComponent):
                 username=username,
                 full_name=full_name,
                 is_verified=is_verified,
+                acknowledged_weak=self.create_user_acknowledge_weak_password,
             )
         except Exception as exc:
             self.create_user_error = _with_recovery_code_warning(
@@ -502,6 +518,8 @@ class AdminPage(ResponsiveComponent):
         self.create_user_username = ""
         self.create_user_full_name = ""
         self.create_user_password = ""
+        self.create_user_password_strength = 0
+        self.create_user_acknowledge_weak_password = False
         self.create_user_role = get_default_role()
         self.create_user_is_verified = False
         self._clear_create_step_up_fields()
@@ -1528,6 +1546,12 @@ class AdminPage(ResponsiveComponent):
         self.create_user_is_verified = event.is_on
         self.force_refresh()
 
+    def _on_create_password_change(self, event: rio.TextInputChangeEvent) -> None:
+        self.create_user_password = event.text
+        self.create_user_password_strength = get_password_strength(event.text)
+        self.create_user_acknowledge_weak_password = False
+        self.force_refresh()
+
     def _on_create_role_change(self, event: rio.DropdownChangeEvent) -> None:
         self.create_user_role = event.value
         self._clear_create_step_up_fields()
@@ -1894,6 +1918,7 @@ class AdminPage(ResponsiveComponent):
                     label="Temporary Password",
                     text=self.bind().create_user_password,
                     is_secret=True,
+                    on_change=self._on_create_password_change,
                     on_confirm=self._on_create_user_pressed,
                 ),
                 rio.Dropdown(
@@ -1914,6 +1939,49 @@ class AdminPage(ResponsiveComponent):
                     spacing=1,
                 ),
                 proportions=[1, 1, 1],
+            ),
+
+            rio.Text(
+                f"Password strength: {self.create_user_password_strength}, "
+                f"{get_password_strength_status(self.create_user_password_strength)}",
+                style=rio.TextStyle(
+                    fill=get_password_strength_color(
+                        self.create_user_password_strength
+                    )
+                ),
+            ),
+            rio.ProgressBar(
+                progress=max(
+                    0,
+                    min(self.create_user_password_strength / 100, 1),
+                ),
+                color=get_password_strength_color(
+                    self.create_user_password_strength
+                ),
+            ),
+            *(
+                [
+                    rio.Row(
+                        rio.Switch(
+                            is_on=self.bind().create_user_acknowledge_weak_password,
+                        ),
+                        rio.Text(
+                            "I acknowledge this temporary password is weak",
+                            style=rio.TextStyle(
+                                fill=rio.Color.from_rgb(1, 0.6, 0, srgb=True),
+                            ),
+                        ),
+                        spacing=1,
+                        align_x=0,
+                    )
+                ]
+                if (
+                    config.ALLOW_WEAK_PASSWORDS
+                    and self.create_user_password
+                    and self.create_user_password_strength
+                    < config.MIN_PASSWORD_STRENGTH
+                )
+                else []
             ),
 
             create_step_up_row,

@@ -14,7 +14,7 @@ from app.config import config
 from app.data_models import AppUser
 from app.permissions import get_highest_privilege_role
 from app.persistence import DEFAULT_DB_PATH, Persistence
-from app.scripts.utils import get_password_strength
+from app.password_policy import evaluate_new_password
 
 
 MISSING_CREDENTIALS_EXIT_CODE = 2
@@ -114,11 +114,12 @@ async def bootstrap_root(args: argparse.Namespace) -> int:
         if not password:
             return _warn_missing(["password"], strict=args.strict)
 
-        strength = get_password_strength(password)
-        if (
-            strength < config.MIN_PASSWORD_STRENGTH
-            and not args.allow_weak_password
-        ):
+        password_policy = evaluate_new_password(
+            password,
+            acknowledged_weak=args.allow_weak_password,
+            allow_weak=args.allow_weak_password,
+        )
+        if not password_policy.ok:
             print(
                 "ERROR: Root password is too weak. Choose a stronger password "
                 f"(minimum strength: {config.MIN_PASSWORD_STRENGTH}) or pass "

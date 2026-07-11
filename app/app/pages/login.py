@@ -8,7 +8,6 @@ import rio
 from fastapi import HTTPException
 
 from app.persistence import BootstrapRequiredError, Persistence
-from app.persistence_auth import TwoFactorFailure
 from app.data_models import AppUser, UserSettings, RecoveryCodeUsage
 from app.components.center_component import CenterComponent
 from app.components.responsive import WIDTH_NARROW
@@ -42,6 +41,7 @@ from app.rate_limits import (
 )
 from app.validation import SecuritySanitizer
 from app.config import config
+from app.password_policy import evaluate_new_password
 
 
 def guard(event: rio.GuardEvent) -> str | None:
@@ -539,19 +539,14 @@ class SignUpForm(rio.Component):
             self.is_email_valid = True
             return
 
-        # Check password strength
-        strength = get_password_strength(self.password)
-        if strength < config.MIN_PASSWORD_STRENGTH:
-            if not config.ALLOW_WEAK_PASSWORDS:
-                # Weak passwords are not allowed at all
-                self.banner_style = "danger"
-                self.error_message = f"Your password is too weak. Please choose a stronger password (minimum strength: {config.MIN_PASSWORD_STRENGTH})."
-                return
-            elif not self.acknowledge_weak_password:
-                # Weak passwords allowed with acknowledgement
-                self.banner_style = "danger"
-                self.error_message = "Your password is weak. Please acknowledge this below or choose a stronger password."
-                return
+        password_policy = evaluate_new_password(
+            self.password,
+            acknowledged_weak=self.acknowledge_weak_password,
+        )
+        if not password_policy.ok:
+            self.banner_style = "danger"
+            self.error_message = password_policy.message or "Password is not allowed."
+            return
 
         if pers.get_user_count() == 0:
             self.banner_style = "danger"
@@ -1134,11 +1129,14 @@ class ResetPasswordForm(rio.Component):
             self._set_banner("danger", "Passwords do not match.")
             return
 
-        strength = get_password_strength(self.new_password)
-        if strength < config.MIN_PASSWORD_STRENGTH and not self.acknowledge_weak_password:
+        password_policy = evaluate_new_password(
+            self.new_password,
+            acknowledged_weak=self.acknowledge_weak_password,
+        )
+        if not password_policy.ok:
             self._set_banner(
                 "danger",
-                "Your password is weak. Please acknowledge this below or choose a stronger password.",
+                password_policy.message or "Password is not allowed.",
             )
             return
 
@@ -1205,6 +1203,7 @@ class ResetPasswordForm(rio.Component):
                 sanitized_token,
                 user.id,
                 self.new_password,
+                acknowledged_weak=self.acknowledge_weak_password,
             )
         except Exception:
             self._set_banner("danger", "Failed to update password. Please request a new token and try again.")
@@ -1252,7 +1251,6 @@ class ResetPasswordForm(rio.Component):
 
     def build(self) -> rio.Component:
         primary_label = "Update Password" if self.code_sent else "Send Reset Link"
-        strength = get_password_strength(self.new_password) if self.code_sent else 0
 
         additional_inputs: list[rio.Component] = []
         if self.code_sent:
@@ -1307,7 +1305,11 @@ class ResetPasswordForm(rio.Component):
                     self.password_strength_progress(),
                 ]
             )
-            if self.new_password and self.password_strength < config.MIN_PASSWORD_STRENGTH:
+            if (
+                config.ALLOW_WEAK_PASSWORDS
+                and self.new_password
+                and self.password_strength < config.MIN_PASSWORD_STRENGTH
+            ):
                 additional_inputs.append(
                     rio.Row(
                         rio.Switch(

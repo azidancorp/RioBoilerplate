@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import timezone
 
 import rio
+from app.config import config
+from app.password_policy import evaluate_new_password
 from app.persistence import Persistence
 from app.persistence_auth import TwoFactorFailure
 from app.data_models import RecoveryCodeUsage
@@ -48,6 +50,7 @@ class Settings(ResponsiveComponent):
     # Tracking password strength in real time
     change_password_new_password_strength: int = 0
     change_password_passwords_match: bool = False
+    change_password_acknowledge_weak_password: bool = False
 
     # Account deletion fields
     delete_account_password: str = ""
@@ -163,6 +166,7 @@ class Settings(ResponsiveComponent):
         self.change_password_passwords_match = (
             self.change_password_new_password == self.change_password_confirm_password
         )
+        self.change_password_acknowledge_weak_password = False
         self.force_refresh()
 
     async def on_change_confirm_password(self, event: rio.TextInputChangeEvent):
@@ -207,6 +211,16 @@ class Settings(ResponsiveComponent):
                 self.error_message = "New passwords do not match"
                 return
 
+            password_policy = evaluate_new_password(
+                self.change_password_new_password,
+                acknowledged_weak=self.change_password_acknowledge_weak_password,
+            )
+            if not password_policy.ok:
+                self.error_message = (
+                    password_policy.message or "Password is not allowed."
+                )
+                return
+
             decision = self._sensitive_action_limited(
                 persistence,
                 "settings_password_change",
@@ -248,7 +262,11 @@ class Settings(ResponsiveComponent):
                 self.change_password_2fa = ""
             
             # Update the password
-            await persistence.update_password(user_session.user_id, self.change_password_new_password)
+            await persistence.update_password(
+                user_session.user_id,
+                self.change_password_new_password,
+                acknowledged_weak=self.change_password_acknowledge_weak_password,
+            )
             
             # Clear the form
             self.change_password_current_password = ""
@@ -257,6 +275,7 @@ class Settings(ResponsiveComponent):
             self.change_password_2fa = ""
             self.change_password_new_password_strength = 0
             self.change_password_passwords_match = False
+            self.change_password_acknowledge_weak_password = False
             self.error_message = ""
             persistence.clear_rate_limit(
                 scope=sensitive_action_policy("settings_password_change").scope,
@@ -534,6 +553,35 @@ class Settings(ResponsiveComponent):
                             )
                         ),
                         self.new_password_strength_progress(),
+                        *(
+                            [
+                                rio.Row(
+                                    rio.Switch(
+                                        is_on=self.bind().change_password_acknowledge_weak_password,
+                                    ),
+                                    rio.Text(
+                                        "I acknowledge my password is weak",
+                                        style=rio.TextStyle(
+                                            fill=rio.Color.from_rgb(
+                                                1,
+                                                0.6,
+                                                0,
+                                                srgb=True,
+                                            ),
+                                        ),
+                                    ),
+                                    spacing=1,
+                                    align_x=0,
+                                )
+                            ]
+                            if (
+                                config.ALLOW_WEAK_PASSWORDS
+                                and self.change_password_new_password
+                                and self.change_password_new_password_strength
+                                < config.MIN_PASSWORD_STRENGTH
+                            )
+                            else []
+                        ),
 
                         rio.Link(
                             rio.Button(

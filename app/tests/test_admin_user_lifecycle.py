@@ -155,6 +155,8 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.create_user_username = ""
     component.create_user_full_name = ""
     component.create_user_password = ""
+    component.create_user_password_strength = 0
+    component.create_user_acknowledge_weak_password = False
     component.create_user_role = "user"
     component.create_user_is_verified = False
     component.create_user_step_up_password = ""
@@ -348,6 +350,35 @@ def test_admin_page_can_create_lower_privilege_user_and_clear_limit(
         assert created.is_verified is True
         profile = await temp_db.get_profile_by_user_id(str(created.id))
         assert profile["full_name"] == "New User"
+
+    asyncio.run(scenario())
+
+
+def test_admin_creation_requires_weak_password_acknowledgement_when_allowed(
+    temp_db: Persistence,
+    monkeypatch,
+):
+    async def scenario():
+        monkeypatch.setattr(config, "ALLOW_WEAK_PASSWORDS", True)
+        root, root_session = await _create_root_session(temp_db)
+        page = _mount_admin(
+            _FakeSession(temp_db, root_session, root),
+            create_user_email="weak-admin-created@example.com",
+            create_user_password="weak",
+            create_user_role="user",
+        )
+
+        await AdminPage._on_create_user_pressed(page)
+        assert "acknowledge" in page.create_user_error
+        with pytest.raises(KeyError):
+            await temp_db.get_user_by_email("weak-admin-created@example.com")
+
+        page.create_user_acknowledge_weak_password = True
+        await AdminPage._on_create_user_pressed(page)
+
+        assert page.create_user_error == ""
+        created = await temp_db.get_user_by_email("weak-admin-created@example.com")
+        assert created.verify_password("weak")
 
     asyncio.run(scenario())
 

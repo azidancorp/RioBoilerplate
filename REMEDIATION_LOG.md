@@ -51,7 +51,7 @@ decision not to change it.
 | Profile read hierarchy | Admin profile reads can expose root/peer private data outside the role hierarchy. | done — `Apply role hierarchy to profile reads` |
 | Profile mutations | Cross-user profile edits do not consistently enforce the live role hierarchy inside the write transaction. | done — `Authorize profile writes atomically` |
 | Session lifetime | API bearer authentication accepts a session beyond its absolute maximum lifetime. | done — `Enforce absolute session lifetime everywhere` |
-| Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | queued |
+| Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | done — `Apply one password policy to every flow` |
 | OAuth account deletion | An OAuth-only user cannot complete self-service account deletion. | queued |
 | Browser token storage | The bearer token is exposed to normal browser-side code instead of using Rio's HTTP-only storage marker. | done — `Store browser sessions in HTTP-only cookies` |
 | OAuth handoffs | A deactivation race can leave a handoff usable after an account is reactivated. | queued |
@@ -131,3 +131,22 @@ decision not to change it.
   rejection, and stale-token clearing. A live browser was not needed.
 - Verification: `pytest app/tests/test_user_settings_storage.py
   app/tests/test_live_session_revalidation.py -q`.
+
+### 2026-07-11 — One password policy across every flow
+
+- Added one policy decision function for signup, password reset, settings
+  changes, administrator-created accounts, and root bootstrap.
+- `ALLOW_WEAK_PASSWORDS=False` now means acknowledgement can never override the
+  configured minimum. When weak passwords are enabled, every user-facing flow
+  requires an explicit acknowledgement; empty passwords are always rejected.
+- Enforced the same rule again at the persistence boundary for normal password
+  changes, reset-token completion, and admin creation, preventing a caller from
+  bypassing the UI. Rejected attempts leave hashes, sessions, and reset tokens
+  untouched.
+- Added matching strength/acknowledgement controls to Settings and Admin, and
+  retained the existing signup/reset visuals.
+- Verification: 114 focused tests passed across password policy, hashing,
+  reset-token lifecycle, signup/bootstrap, mounted settings, admin lifecycle,
+  and public rate-limit flows. The 16 page-smoke tests passed, and a live Rio
+  dev boot returned the login page plus the expected protected redirects for
+  Settings and Admin.

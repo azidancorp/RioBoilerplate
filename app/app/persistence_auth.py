@@ -252,12 +252,32 @@ def invalidate_recovery_codes(
     """Remove all recovery codes for a user."""
     conn = _get_connection(persistence)
     cursor = persistence._get_cursor()
+    if commit:
+        _require_top_level_transaction(
+            conn,
+            operation="Recovery-code invalidation",
+        )
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                "DELETE FROM two_factor_recovery_codes WHERE user_id = ?",
+                (str(user_id),),
+            )
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        return
+
+    if not conn.in_transaction:
+        raise RuntimeError(
+            "Uncommitted recovery-code invalidation requires an open transaction."
+        )
     cursor.execute(
         "DELETE FROM two_factor_recovery_codes WHERE user_id = ?",
         (str(user_id),),
     )
-    if commit:
-        conn.commit()
 
 
 def _consume_recovery_code_in_transaction(
@@ -481,9 +501,11 @@ async def invalidate_session(
         return
 
     conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="Session invalidation")
     cursor = persistence._get_cursor()
 
     try:
+        conn.execute("BEGIN IMMEDIATE")
         cursor.execute(
             "DELETE FROM user_sessions WHERE id = ?",
             (_hash_one_time_token(auth_token),),
@@ -953,9 +975,11 @@ async def invalidate_all_sessions(
     `user_id`: The UUID of the user whose sessions to invalidate.
     """
     conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="Session invalidation")
     cursor = persistence._get_cursor()
 
     try:
+        conn.execute("BEGIN IMMEDIATE")
         cursor.execute(
             "DELETE FROM user_sessions WHERE user_id = ?",
             (str(user_id),),
@@ -1283,6 +1307,7 @@ async def get_user_by_reset_token(
     `KeyError`: If the token is invalid, expired, or the associated user doesn't exist
     """
     conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="Reset-token lookup")
     hashed_token = _hash_one_time_token(token)
     cursor = persistence._get_cursor()
 
@@ -1334,12 +1359,19 @@ async def clear_reset_tokens(
     `user_id`: The UUID of the user whose reset tokens to clear
     """
     conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="Reset-token clearing")
     cursor = persistence._get_cursor()
-    cursor.execute(
-        "DELETE FROM password_reset_tokens WHERE user_id = ?",
-        (str(user_id),),
-    )
-    conn.commit()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            "DELETE FROM password_reset_tokens WHERE user_id = ?",
+            (str(user_id),),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 async def set_user_verified(
@@ -1349,13 +1381,21 @@ async def set_user_verified(
 ) -> None:
     """Mark a user account as verified/unverified."""
     conn = _get_connection(persistence)
-    await persistence.get_user_by_id(user_id)
+    _require_top_level_transaction(conn, operation="User verification updates")
     cursor = persistence._get_cursor()
-    cursor.execute(
-        "UPDATE users SET is_verified = ? WHERE id = ?",
-        (1 if is_verified else 0, str(user_id)),
-    )
-    conn.commit()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            "UPDATE users SET is_verified = ? WHERE id = ?",
+            (1 if is_verified else 0, str(user_id)),
+        )
+        if cursor.rowcount != 1:
+            raise KeyError(user_id)
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 async def create_email_verification_token(
@@ -1366,6 +1406,10 @@ async def create_email_verification_token(
     Create a new email verification token for a user.
     """
     conn = _get_connection(persistence)
+    _require_top_level_transaction(
+        conn,
+        operation="Email verification token issuance",
+    )
     await persistence.get_user_by_id(user_id)
     await clear_email_verification_tokens(persistence, user_id)
 
@@ -1471,9 +1515,19 @@ async def clear_email_verification_tokens(
 ) -> None:
     """Delete all email verification tokens for a user."""
     conn = _get_connection(persistence)
-    cursor = persistence._get_cursor()
-    cursor.execute(
-        "DELETE FROM email_verification_tokens WHERE user_id = ?",
-        (str(user_id),),
+    _require_top_level_transaction(
+        conn,
+        operation="Email verification token clearing",
     )
-    conn.commit()
+    cursor = persistence._get_cursor()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            "DELETE FROM email_verification_tokens WHERE user_id = ?",
+            (str(user_id),),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise

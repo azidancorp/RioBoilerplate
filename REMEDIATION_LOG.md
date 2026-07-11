@@ -56,7 +56,7 @@ decision not to change it.
 | Browser token storage | The bearer token is exposed to normal browser-side code instead of using Rio's HTTP-only storage marker. | done — `Store browser sessions in HTTP-only cookies` |
 | OAuth handoffs | A deactivation race can leave a handoff usable after an account is reactivated. | queued |
 | Verification tokens | Concurrent email-verification requests can leave more than one live token. | queued |
-| Transaction ownership | Some persistence helpers can accidentally commit a caller's unrelated pending work. | queued |
+| Transaction ownership | Some persistence helpers can accidentally commit a caller's unrelated pending work. | done — `Protect caller-owned auth transactions` |
 | Expired auth data | Expired sessions and completed/expired OAuth handoffs accumulate indefinitely. | queued |
 | Currency rounding | A positive display amount can round to a zero-unit ledger adjustment. | queued |
 | Currency idempotency | Retrying the same adjustment can apply it twice. | queued |
@@ -150,3 +150,19 @@ decision not to change it.
   and public rate-limit flows. The 16 page-smoke tests passed, and a live Rio
   dev boot returned the login page plus the expected protected redirects for
   Settings and Admin.
+
+### 2026-07-11 — Auth transaction ownership
+
+- Gave the remaining session, reset-token, verification-token, user-verification,
+  and recovery-code helpers an explicit transaction contract. A standalone
+  helper now owns and closes only the transaction it starts; an in-transaction
+  helper requires the caller to have opened one.
+- Removed the preliminary awaited user lookup from verification-state updates
+  and made the checked update plus missing-user result part of one owned write
+  transaction.
+- Added a parameterized regression suite that starts an unrelated pending user
+  edit, calls every affected helper, and proves the edit is neither committed
+  nor rolled back and all auth rows remain unchanged.
+- Verification: `pytest app/tests/test_auth_transaction_ownership.py
+  app/tests/test_password_reset_token_lifecycle.py app/tests/test_auth_email_flows.py
+  app/tests/test_live_session_revalidation.py -q`.

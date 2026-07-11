@@ -36,6 +36,9 @@ from app.persistence_schema import initialize_schema
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "app.db"
 TwoFactorStateConflict = persistence_auth.TwoFactorStateConflict
+CurrencyIdempotencyConflictError = (
+    persistence_currency.CurrencyIdempotencyConflictError
+)
 
 
 class BootstrapRequiredError(RuntimeError):
@@ -1089,6 +1092,8 @@ class Persistence:
         admin_context: AdminMutationContext,
         reason: str | None = None,
         metadata: dict[str, t.Any] | None = None,
+        idempotency_key: uuid.UUID | None = None,
+        request_fingerprint: str | None = None,
     ) -> CurrencyLedgerEntry:
         """Admin balance adjustment authorized at the write linearization point."""
         self._ensure_connection()
@@ -1097,6 +1102,10 @@ class Persistence:
 
         conn = self.conn
         self._require_top_level_transaction(conn, action="Admin currency adjustments")
+        if (idempotency_key is None) != (request_fingerprint is None):
+            raise ValueError(
+                "Currency idempotency key and fingerprint must be provided together."
+            )
         cursor = conn.cursor()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -1107,6 +1116,16 @@ class Persistence:
                 action="update balances for",
                 allow_self=True,
             )
+            if idempotency_key is not None and request_fingerprint is not None:
+                replay = persistence_currency.get_idempotent_currency_mutation(
+                    self,
+                    actor_user_id=actor.id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+                if replay is not None:
+                    conn.commit()
+                    return replay
             entry = persistence_currency.adjust_currency_balance_in_transaction(
                 self,
                 user_id,
@@ -1117,6 +1136,14 @@ class Persistence:
                 reason=reason,
                 metadata=metadata,
             )
+            if idempotency_key is not None and request_fingerprint is not None:
+                persistence_currency.record_currency_idempotency_result(
+                    self,
+                    actor_user_id=actor.id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    ledger_entry_id=entry.id,
+                )
             conn.commit()
             return entry
         except Exception:
@@ -1145,6 +1172,8 @@ class Persistence:
         admin_context: AdminMutationContext,
         reason: str | None = None,
         metadata: dict[str, t.Any] | None = None,
+        idempotency_key: uuid.UUID | None = None,
+        request_fingerprint: str | None = None,
     ) -> CurrencyLedgerEntry:
         """Admin balance replacement authorized at the write linearization point."""
         self._ensure_connection()
@@ -1153,6 +1182,10 @@ class Persistence:
 
         conn = self.conn
         self._require_top_level_transaction(conn, action="Admin currency replacements")
+        if (idempotency_key is None) != (request_fingerprint is None):
+            raise ValueError(
+                "Currency idempotency key and fingerprint must be provided together."
+            )
         cursor = conn.cursor()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -1163,6 +1196,16 @@ class Persistence:
                 action="update balances for",
                 allow_self=True,
             )
+            if idempotency_key is not None and request_fingerprint is not None:
+                replay = persistence_currency.get_idempotent_currency_mutation(
+                    self,
+                    actor_user_id=actor.id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+                if replay is not None:
+                    conn.commit()
+                    return replay
             entry = persistence_currency.set_currency_balance_in_transaction(
                 self,
                 user_id,
@@ -1173,6 +1216,14 @@ class Persistence:
                 reason=reason,
                 metadata=metadata,
             )
+            if idempotency_key is not None and request_fingerprint is not None:
+                persistence_currency.record_currency_idempotency_result(
+                    self,
+                    actor_user_id=actor.id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    ledger_entry_id=entry.id,
+                )
             conn.commit()
             return entry
         except Exception:

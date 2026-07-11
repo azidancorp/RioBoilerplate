@@ -1,4 +1,5 @@
 import json
+import secrets
 import sqlite3
 import typing as t
 import uuid
@@ -24,6 +25,10 @@ class CurrencyPersistence(Protocol):
         ...
 
 
+class CurrencyIdempotencyConflictError(ValueError):
+    """An actor reused an idempotency key for a different mutation."""
+
+
 def _get_connection(persistence: CurrencyPersistence) -> sqlite3.Connection:
     persistence._ensure_connection()
     if persistence.conn is None:
@@ -45,6 +50,83 @@ def _row_to_currency_ledger_entry(row: tuple) -> CurrencyLedgerEntry:
         metadata=metadata,
         actor_user_id=actor_id,
         created_at=datetime.fromtimestamp(row[7], tz=timezone.utc),
+    )
+
+
+def get_idempotent_currency_mutation(
+    persistence: CurrencyPersistence,
+    *,
+    actor_user_id: uuid.UUID,
+    idempotency_key: uuid.UUID,
+    request_fingerprint: str,
+) -> CurrencyLedgerEntry | None:
+    """Return a prior matching result from the caller's open transaction."""
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("Currency idempotency lookup requires an open transaction.")
+    cursor = persistence._get_cursor()
+    cursor.execute(
+        """
+        SELECT request_fingerprint, ledger_entry_id
+        FROM currency_mutation_idempotency
+        WHERE actor_user_id = ? AND idempotency_key = ?
+        """,
+        (str(actor_user_id), str(idempotency_key)),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    if not secrets.compare_digest(str(row[0]), request_fingerprint):
+        raise CurrencyIdempotencyConflictError(
+            "Idempotency-Key was already used for a different currency request."
+        )
+
+    cursor.execute(
+        """
+        SELECT id, user_id, delta, balance_after, reason, metadata,
+               actor_user_id, created_at
+        FROM user_currency_ledger
+        WHERE id = ?
+        """,
+        (int(row[1]),),
+    )
+    ledger_row = cursor.fetchone()
+    if ledger_row is None:
+        raise RuntimeError("Stored idempotent currency result is missing.")
+    return _row_to_currency_ledger_entry(ledger_row)
+
+
+def record_currency_idempotency_result(
+    persistence: CurrencyPersistence,
+    *,
+    actor_user_id: uuid.UUID,
+    idempotency_key: uuid.UUID,
+    request_fingerprint: str,
+    ledger_entry_id: int,
+) -> None:
+    """Bind a key to a result inside the mutation's open transaction."""
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("Currency idempotency recording requires an open transaction.")
+    cursor = persistence._get_cursor()
+    cursor.execute(
+        """
+        INSERT INTO currency_mutation_idempotency (
+            actor_user_id,
+            idempotency_key,
+            request_fingerprint,
+            ledger_entry_id,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            str(actor_user_id),
+            str(idempotency_key),
+            request_fingerprint,
+            int(ledger_entry_id),
+            datetime.now(timezone.utc).timestamp(),
+        ),
     )
 
 

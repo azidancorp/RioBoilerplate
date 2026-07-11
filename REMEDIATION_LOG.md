@@ -59,7 +59,7 @@ decision not to change it.
 | Transaction ownership | Some persistence helpers can accidentally commit a caller's unrelated pending work. | done — `Protect caller-owned auth transactions` |
 | Expired auth data | Expired sessions and completed/expired OAuth handoffs accumulate indefinitely. | done — `Bound stale authentication data` |
 | Currency rounding | A positive display amount can round to a zero-unit ledger adjustment. | done — `Reject zero-unit currency adjustments` |
-| Currency idempotency | Retrying the same adjustment can apply it twice. | queued |
+| Currency idempotency | Retrying the same adjustment can apply it twice. | done — `Make currency API mutations idempotent` |
 | Protected deep links | Logged-out users lose the protected destination they originally requested. | queued |
 | HTTP route semantics | Unknown/API/documentation routes can return the Rio app shell with HTTP 200, and crawler metadata lists unsuitable routes. | queued |
 | Responsive refresh | The first mobile/desktop breakpoint crossing can be missed. | queued |
@@ -223,3 +223,27 @@ decision not to change it.
   remain unchanged at both boundaries.
 - Verification: `pytest app/tests/test_currency_api.py
   app/tests/test_currency_persistence.py app/tests/test_currency_reconciliation.py -q`.
+
+### 2026-07-11 — Idempotent currency API mutations
+
+- Both balance mutation endpoints now require a UUID `Idempotency-Key` header.
+  The server fingerprints the operation, resolved target, stored minor-unit
+  amount, reason, and canonical metadata.
+- Added a current-schema table binding each actor/key pair to the committed
+  ledger result. A retry with the same request returns that original entry
+  without another balance change or audit row; reusing the key for a different
+  amount, target, operation, reason, or metadata returns HTTP 409.
+- Lookup, balance/ledger/audit mutation, and key recording all share the
+  existing `BEGIN IMMEDIATE` transaction. Concurrent same-key requests therefore
+  apply once, while a failure to store the result rolls everything back and
+  permits a clean retry.
+- Trusted in-process helpers remain usable without a key; the requirement is on
+  externally retryable API mutations. The built-in currency playground supplies
+  a fresh key for each manual action.
+- Step-up verification still runs before an idempotent replay is returned. This
+  keeps authorization live, but a one-time recovery code cannot itself be reused
+  to retrieve the cached response; the original mutation still cannot run twice.
+- Verification: `pytest app/tests/test_currency_idempotency.py
+  app/tests/test_currency_api.py app/tests/test_currency_persistence.py
+  app/tests/test_currency_reconciliation.py -q`; the page-smoke suite and a
+  live Rio dev boot of the playground/API surface also passed.

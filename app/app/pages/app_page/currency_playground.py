@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from functools import partial
 import json
 import typing as t
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import rio
 from fastapi import HTTPException
@@ -500,6 +500,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
         try:
             response = await adjust_currency_route(
                 payload=payload,
+                idempotency_key=uuid4(),
                 current_session=current_session,
                 current_user=current_user,
                 db=persistence,
@@ -535,6 +536,7 @@ class CurrencyPlaygroundPage(ResponsiveComponent):
         try:
             response = await set_currency_route(
                 payload=payload,
+                idempotency_key=uuid4(),
                 current_session=current_session,
                 current_user=current_user,
                 db=persistence,

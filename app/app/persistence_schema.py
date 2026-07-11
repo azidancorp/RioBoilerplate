@@ -23,6 +23,7 @@ def initialize_schema(persistence: SchemaPersistence) -> None:
     create_profiles_table(persistence)
     create_recovery_codes_table(persistence)
     create_currency_ledger_table(persistence)
+    create_currency_idempotency_table(persistence)
     create_rate_limit_tables(persistence)
     create_admin_audit_table(persistence)
 
@@ -139,6 +140,29 @@ def create_currency_ledger_table(persistence: SchemaPersistence) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_currency_ledger_user_id_created
         ON user_currency_ledger(user_id, created_at DESC)
+        """
+    )
+    conn.commit()
+
+
+def create_currency_idempotency_table(persistence: SchemaPersistence) -> None:
+    """Store the committed result for each actor-scoped API mutation key."""
+    cursor = persistence._get_cursor()
+    conn = _get_connection(persistence)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS currency_mutation_idempotency (
+            actor_user_id TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            request_fingerprint TEXT NOT NULL,
+            ledger_entry_id INTEGER NOT NULL,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (actor_user_id, idempotency_key),
+            FOREIGN KEY (actor_user_id)
+                REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (ledger_entry_id)
+                REFERENCES user_currency_ledger(id) ON DELETE CASCADE
+        )
         """
     )
     conn.commit()

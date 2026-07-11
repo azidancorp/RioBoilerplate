@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import pytest
 import pyotp
@@ -12,6 +13,13 @@ from app.api.auth_dependencies import get_persistence
 from app.config import config
 from app.data_models import AppUser
 from app.persistence import Persistence
+
+
+def _auth_headers(token: str, idempotency_key: UUID | None = None) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Idempotency-Key": str(idempotency_key or uuid4()),
+    }
 
 
 @pytest.fixture
@@ -82,7 +90,7 @@ def test_balance_and_adjust_endpoint(api_test_setup):
 
     response = client.get(
         "/api/currency/balance",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
     assert response.status_code == 200
     data = response.json()
@@ -96,7 +104,7 @@ def test_balance_and_adjust_endpoint(api_test_setup):
             "reason": "api test",
             "step_up": {"password": "secret"},
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
     assert adjust_response.status_code == 201, adjust_response.text
     payload = adjust_response.json()
@@ -104,7 +112,7 @@ def test_balance_and_adjust_endpoint(api_test_setup):
 
     response_after = client.get(
         "/api/currency/balance",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
     assert response_after.status_code == 200
     data_after = response_after.json()
@@ -138,7 +146,7 @@ def test_api_rejects_session_past_its_absolute_lifetime(
 
     read_response = client.get(
         "/api/currency/balance",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
     mutation_response = client.post(
         "/api/currency/adjust",
@@ -148,7 +156,7 @@ def test_api_rejects_session_past_its_absolute_lifetime(
             "reason": "must not use absolute-expired session",
             "step_up": {"password": "secret"},
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
 
     assert read_response.status_code == 401
@@ -178,7 +186,7 @@ def test_adjust_endpoint_rejects_amount_that_rounds_to_zero(api_test_setup):
             "reason": "would round to zero",
             "step_up": {"password": "secret"},
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
 
     assert response.status_code == 422
@@ -199,6 +207,138 @@ def test_adjust_endpoint_rejects_amount_that_rounds_to_zero(api_test_setup):
     ).fetchone()[0] == 0
 
 
+def test_currency_mutation_requires_uuid_idempotency_key(api_test_setup):
+    client, persistence = api_test_setup
+    user, token = asyncio.run(
+        _create_user_with_session(persistence, "missing-idempotency-key@example.com")
+    )
+    payload = {
+        "target_user_id": str(user.id),
+        "amount": "10",
+        "reason": "missing key",
+        "step_up": {"password": "secret"},
+    }
+
+    missing = client.post(
+        "/api/currency/adjust",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    malformed = client.post(
+        "/api/currency/adjust",
+        json=payload,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Idempotency-Key": "not-a-uuid",
+        },
+    )
+
+    assert missing.status_code == 422
+    assert malformed.status_code == 422
+
+
+def test_retried_currency_adjustment_returns_original_result_once(api_test_setup):
+    client, persistence = api_test_setup
+    config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
+    user, token = asyncio.run(
+        _create_user_with_session(persistence, "idempotent-adjustment@example.com")
+    )
+    key = uuid4()
+    first_payload = {
+        "target_user_id": str(user.id),
+        "amount": "10",
+        "reason": "retry-safe grant",
+        "metadata": {"source": "test", "sequence": 1},
+        "step_up": {"password": "secret"},
+    }
+    replay_payload = {
+        **first_payload,
+        "metadata": {"sequence": 1, "source": "test"},
+    }
+
+    first = client.post(
+        "/api/currency/adjust",
+        json=first_payload,
+        headers=_auth_headers(token, key),
+    )
+    replay = client.post(
+        "/api/currency/adjust",
+        json=replay_payload,
+        headers=_auth_headers(token, key),
+    )
+
+    assert first.status_code == 201, first.text
+    assert replay.status_code == 201, replay.text
+    assert replay.json() == first.json()
+    assert asyncio.run(
+        persistence.get_user_by_id(user.id)
+    ).primary_currency_balance == 10
+    assert persistence.conn.execute(
+        "SELECT COUNT(*) FROM user_currency_ledger WHERE user_id = ?",
+        (str(user.id),),
+    ).fetchone()[0] == 1
+    assert persistence.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM admin_audit_log
+        WHERE target_user_id = ? AND action = 'currency_adjust'
+        """,
+        (str(user.id),),
+    ).fetchone()[0] == 1
+    assert persistence.conn.execute(
+        "SELECT COUNT(*) FROM currency_mutation_idempotency",
+    ).fetchone()[0] == 1
+
+
+def test_reused_currency_key_with_different_request_returns_conflict(api_test_setup):
+    client, persistence = api_test_setup
+    config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
+    user, token = asyncio.run(
+        _create_user_with_session(persistence, "idempotency-conflict@example.com")
+    )
+    key = uuid4()
+    headers = _auth_headers(token, key)
+
+    first = client.post(
+        "/api/currency/adjust",
+        json={
+            "target_user_id": str(user.id),
+            "amount": "10",
+            "reason": "original request",
+            "step_up": {"password": "secret"},
+        },
+        headers=headers,
+    )
+    changed_amount = client.post(
+        "/api/currency/adjust",
+        json={
+            "target_user_id": str(user.id),
+            "amount": "11",
+            "reason": "original request",
+            "step_up": {"password": "secret"},
+        },
+        headers=headers,
+    )
+    changed_operation = client.post(
+        "/api/currency/set",
+        json={
+            "target_user_id": str(user.id),
+            "balance": "10",
+            "reason": "original request",
+            "step_up": {"password": "secret"},
+        },
+        headers=headers,
+    )
+
+    assert first.status_code == 201
+    assert changed_amount.status_code == 409
+    assert changed_operation.status_code == 409
+    assert "different currency request" in changed_amount.json()["detail"]
+    assert asyncio.run(
+        persistence.get_user_by_id(user.id)
+    ).primary_currency_balance == 10
+
+
 def test_adjust_endpoint_requires_actor_step_up(api_test_setup):
     client, persistence = api_test_setup
     config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
@@ -212,7 +352,7 @@ def test_adjust_endpoint_requires_actor_step_up(api_test_setup):
             "amount": "25",
             "reason": "missing step-up",
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
     assert missing_response.status_code == 422
 
@@ -224,13 +364,13 @@ def test_adjust_endpoint_requires_actor_step_up(api_test_setup):
             "reason": "wrong step-up",
             "step_up": {"password": "wrong"},
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
     assert wrong_response.status_code == 403
 
     balance_after = client.get(
         "/api/currency/balance",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
     assert balance_after.status_code == 200
     assert balance_after.json()["balance_minor"] == 0
@@ -256,7 +396,7 @@ def test_adjust_endpoint_enforces_target_role_hierarchy(api_test_setup):
             "reason": "admin should not update root",
             "step_up": {"password": "secret"},
         },
-        headers={"Authorization": f"Bearer {admin_token}"},
+        headers=_auth_headers(admin_token),
     )
 
     assert response.status_code == 403
@@ -306,7 +446,7 @@ def test_currency_mutation_maps_transaction_authorization_denial_to_403(
             **payload,
             "step_up": {"password": "secret"},
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
 
     assert response.status_code == 403
@@ -373,7 +513,7 @@ def test_currency_mutation_maps_late_session_loss_to_401(
             **payload,
             "step_up": {"password": "secret"},
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
 
     assert response.status_code == 401
@@ -426,7 +566,7 @@ def test_currency_mutation_maps_transaction_target_disappearance_to_404(
             **payload,
             "step_up": {"password": "secret"},
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
 
     assert response.status_code == 404
@@ -447,7 +587,7 @@ def test_ledger_endpoint_enforces_target_role_hierarchy(api_test_setup):
 
     response = client.get(
         f"/api/currency/ledger?user_id={root.id}",
-        headers={"Authorization": f"Bearer {admin_token}"},
+        headers=_auth_headers(admin_token),
     )
 
     assert response.status_code == 403
@@ -472,7 +612,7 @@ def test_set_endpoint_requires_actor_2fa_when_enabled(api_test_setup):
             "reason": "missing 2fa",
             "step_up": {"password": "secret"},
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
     assert missing_2fa.status_code == 403
     assert missing_2fa.json()["detail"] == "2FA code is required"
@@ -488,7 +628,7 @@ def test_set_endpoint_requires_actor_2fa_when_enabled(api_test_setup):
                 "two_factor_code": pyotp.TOTP(secret).now(),
             },
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
     assert ok_response.status_code == 201, ok_response.text
     assert ok_response.json()["balance_after_minor"] == 40
@@ -525,7 +665,7 @@ def test_set_endpoint_allows_oauth_actor_with_2fa_and_no_password(api_test_setup
                 "two_factor_code": pyotp.TOTP(secret).now(),
             },
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
 
     assert ok_response.status_code == 201, ok_response.text
@@ -554,7 +694,7 @@ def test_inactive_user_bearer_token_is_rejected(api_test_setup):
 
     response = client.get(
         "/api/currency/balance",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(token),
     )
 
     assert response.status_code == 401

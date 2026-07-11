@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Annotated, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from app.api.auth_dependencies import (
     get_current_session,
@@ -24,6 +26,7 @@ from app.data_models import AppUser, CurrencyLedgerEntry, UserSession
 from app.persistence import (
     AdminMutationContext,
     AdminSessionInvalidError,
+    CurrencyIdempotencyConflictError,
     Persistence,
 )
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
@@ -37,6 +40,29 @@ from app.validation import (
 )
 
 router = APIRouter()
+
+
+def _currency_mutation_fingerprint(
+    *,
+    operation: str,
+    target_user_id: UUID,
+    amount_minor: int,
+    reason: str | None,
+    metadata: dict | None,
+) -> str:
+    canonical_request = json.dumps(
+        {
+            "operation": operation,
+            "target_user_id": str(target_user_id),
+            "amount_minor": amount_minor,
+            "reason": reason,
+            "metadata": metadata,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
 
 
 @router.get("/api/currency/config", response_model=CurrencyConfigResponse)
@@ -132,6 +158,7 @@ async def list_currency_ledger_route(
 )
 async def adjust_currency_route(
     payload: CurrencyAdjustmentRequest,
+    idempotency_key: Annotated[UUID, Header(alias="Idempotency-Key")],
     current_session: UserSession = Depends(get_current_session),
     current_user: AppUser = Depends(get_current_user),
     db: Persistence = Depends(get_persistence),
@@ -153,6 +180,13 @@ async def adjust_currency_route(
     )
     await _require_step_up(payload, current_session, current_user, db)
     minor_delta = major_to_minor(payload.amount)
+    request_fingerprint = _currency_mutation_fingerprint(
+        operation="adjust",
+        target_user_id=target_user.id,
+        amount_minor=minor_delta,
+        reason=payload.reason,
+        metadata=payload.metadata,
+    )
 
     try:
         entry = await db.admin_adjust_currency_balance(
@@ -161,6 +195,8 @@ async def adjust_currency_route(
             reason=payload.reason,
             metadata=payload.metadata,
             admin_context=AdminMutationContext(auth_token=current_session.id),
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
         )
     except AdminSessionInvalidError as exc:
         raise HTTPException(
@@ -171,6 +207,11 @@ async def adjust_currency_route(
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        )
+    except CurrencyIdempotencyConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         )
     except KeyError:
@@ -194,6 +235,7 @@ async def adjust_currency_route(
 )
 async def set_currency_route(
     payload: CurrencySetBalanceRequest,
+    idempotency_key: Annotated[UUID, Header(alias="Idempotency-Key")],
     current_session: UserSession = Depends(get_current_session),
     current_user: AppUser = Depends(get_current_user),
     db: Persistence = Depends(get_persistence),
@@ -215,6 +257,13 @@ async def set_currency_route(
     )
     await _require_step_up(payload, current_session, current_user, db)
     minor_amount = major_to_minor(payload.balance)
+    request_fingerprint = _currency_mutation_fingerprint(
+        operation="set",
+        target_user_id=target_user.id,
+        amount_minor=minor_amount,
+        reason=payload.reason,
+        metadata=payload.metadata,
+    )
 
     try:
         entry = await db.admin_set_currency_balance(
@@ -223,6 +272,8 @@ async def set_currency_route(
             reason=payload.reason,
             metadata=payload.metadata,
             admin_context=AdminMutationContext(auth_token=current_session.id),
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
         )
     except AdminSessionInvalidError as exc:
         raise HTTPException(
@@ -233,6 +284,11 @@ async def set_currency_route(
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        )
+    except CurrencyIdempotencyConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         )
     except KeyError:

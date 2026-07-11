@@ -20,6 +20,7 @@ from app.api.profiles import router as profile_router
 from app.api.currency import router as currency_router
 from app.api.health import router as health_router
 from app.api.oauth import router as oauth_router
+from app.http_surface import install_http_surface
 from starlette.middleware.sessions import SessionMiddleware
 
 
@@ -122,3 +123,4 @@ fastapi_app.include_router(example_router)
 fastapi_app.include_router(profile_router)
 fastapi_app.include_router(currency_router)
 fastapi_app.include_router(health_router)
+install_http_surface(fastapi_app)

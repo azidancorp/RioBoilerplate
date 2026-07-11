@@ -310,3 +310,21 @@ decision not to change it.
   protocol-relative targets, and the Login button's hard-navigation URL.
 - Verification: 50 focused OAuth/navigation/live-session tests and all 16
   page-smoke tests passed.
+
+### 2026-07-11 — Real HTTP 404s and API documentation
+
+- Stopped Rio's single-page fallback from turning every unknown browser or API
+  URL into a successful HTML response. Unknown browser paths now return a plain
+  404, while unknown `/api/*` and `/auth/*` paths return a JSON 404.
+- Kept registered public/authenticated pages, Rio's own internal endpoints, and
+  explicit FastAPI routes working normally. Path matches with the wrong HTTP
+  method still reach FastAPI and return 405 rather than being mislabeled 404.
+- Added working `/docs`, `/redoc`, and `/openapi.json` endpoints. The generated
+  schema includes only the application `/api/*` and `/auth/*` routes, not Rio's
+  internal websocket/assets/cookie machinery.
+- This is HTTP routing correctness only. It does not change or attempt to solve
+  the excluded crawler-rendering/WebView behavior.
+- Verification: the new HTTP-semantics suite passed; 76 health/OAuth/profile/
+  currency/page-smoke regression tests passed. A live Rio dev boot returned
+  plain 404, JSON 404, Swagger HTML, and OpenAPI JSON for the four corresponding
+  probes.

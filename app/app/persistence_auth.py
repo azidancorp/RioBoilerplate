@@ -1410,9 +1410,6 @@ async def create_email_verification_token(
         conn,
         operation="Email verification token issuance",
     )
-    await persistence.get_user_by_id(user_id)
-    await clear_email_verification_tokens(persistence, user_id)
-
     cursor = persistence._get_cursor()
     token = ExpirableVerificationToken.create(
         user_id=user_id,
@@ -1420,19 +1417,41 @@ async def create_email_verification_token(
     )
     token_hash = _hash_one_time_token(token.token)
 
-    cursor.execute(
-        """
-        INSERT INTO email_verification_tokens (token_hash, user_id, created_at, valid_until)
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            token_hash,
-            str(token.user_id),
-            token.created_at.timestamp(),
-            token.valid_until.timestamp(),
-        ),
-    )
-    conn.commit()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            "SELECT 1 FROM users WHERE id = ?",
+            (str(user_id),),
+        )
+        if cursor.fetchone() is None:
+            raise KeyError(user_id)
+
+        cursor.execute(
+            "DELETE FROM email_verification_tokens WHERE user_id = ?",
+            (str(user_id),),
+        )
+        cursor.execute(
+            """
+            INSERT INTO email_verification_tokens (
+                token_hash,
+                user_id,
+                created_at,
+                valid_until
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                token_hash,
+                str(token.user_id),
+                token.created_at.timestamp(),
+                token.valid_until.timestamp(),
+            ),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
     return token
 
 

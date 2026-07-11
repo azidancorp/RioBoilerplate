@@ -55,7 +55,7 @@ decision not to change it.
 | OAuth account deletion | An OAuth-only user cannot complete self-service account deletion. | queued |
 | Browser token storage | The bearer token is exposed to normal browser-side code instead of using Rio's HTTP-only storage marker. | done — `Store browser sessions in HTTP-only cookies` |
 | OAuth handoffs | A deactivation race can leave a handoff usable after an account is reactivated. | done — `Serialize OAuth handoffs with account status` |
-| Verification tokens | Concurrent email-verification requests can leave more than one live token. | queued |
+| Verification tokens | Concurrent email-verification requests can leave more than one live token. | done — `Replace verification tokens atomically` |
 | Transaction ownership | Some persistence helpers can accidentally commit a caller's unrelated pending work. | done — `Protect caller-owned auth transactions` |
 | Expired auth data | Expired sessions and completed/expired OAuth handoffs accumulate indefinitely. | queued |
 | Currency rounding | A positive display amount can round to a zero-unit ledger adjustment. | queued |
@@ -180,3 +180,18 @@ decision not to change it.
   coverage.
 - Verification: `pytest app/tests/test_oauth_handoff_atomicity.py
   app/tests/test_oauth_google.py app/tests/test_admin_user_lifecycle.py -q`.
+
+### 2026-07-11 — Atomic email-verification token replacement
+
+- Replaced the old lookup → committed clear → committed insert sequence with one
+  `BEGIN IMMEDIATE` transaction. Concurrent issuers now serialize, and each
+  replacement rechecks the user, removes older tokens, and inserts exactly one
+  current token before committing.
+- A failed insertion rolls the deletion back, so a previously issued token is
+  not destroyed by a partial replacement.
+- Kept this entirely in current-schema application logic; no legacy cleanup,
+  unique-index migration, or backfill was added.
+- Added real two-writer coverage that proves one stored token and exactly one
+  usable returned token, plus forced-failure rollback coverage.
+- Verification: `pytest app/tests/test_email_verification_token_atomicity.py
+  app/tests/test_auth_email_flows.py app/tests/test_rate_limit_public_flows.py -q`.

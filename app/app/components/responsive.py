@@ -54,10 +54,8 @@ class ResponsiveComponent(rio.Component):
 
     _was_mobile: t.ClassVar[bool] = False
 
-    def _ensure_responsive_state(self) -> None:
-        # Lazily initialize per-instance state without relying on dataclass hooks.
-        if "_was_mobile" not in self.__dict__:
-            self._was_mobile = is_mobile(self.session)
+    def __post_init__(self) -> None:
+        self._was_mobile = is_mobile(self.session)
 
     @property
     def is_mobile(self) -> bool:
@@ -81,7 +79,6 @@ class ResponsiveComponent(rio.Component):
 
     @rio.event.on_window_size_change
     def on_window_size_change(self) -> None:
-        self._ensure_responsive_state()
         new_mobile = is_mobile(self.session)
         if new_mobile != self._was_mobile:
             self._was_mobile = new_mobile

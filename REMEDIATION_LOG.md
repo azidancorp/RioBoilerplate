@@ -344,3 +344,17 @@ decision not to change it.
   rendering/WebView implementation.
 - Verification: the robots/sitemap assertions and all 16 page-smoke tests passed
   as part of a 21-test HTTP/page run.
+
+### 2026-07-11 — First responsive breakpoint crossing
+
+- Initialized each responsive component's mobile/desktop state when Rio creates
+  it. Previously the state was initialized lazily on the first resize event,
+  which treated the new width as the baseline and missed that first real
+  mobile/desktop crossing.
+- Kept refreshes limited to actual breakpoint crossings; ordinary resizes on
+  the same side still do no rebuild work.
+- Relied on Rio's documented parent-first post-init behavior. `CenterComponent`
+  does not manually call the parent hook, which would initialize it twice.
+- Added both-direction and exact-boundary tests plus same-side no-refresh cases.
+- Verification: 7 responsive policy/behavior tests and all 16 page-smoke tests
+  passed (23 total).

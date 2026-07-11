@@ -1,7 +1,11 @@
-from fastapi.testclient import TestClient
+from xml.etree import ElementTree
+
 import pytest
+from fastapi.testclient import TestClient
 
 import app as app_module
+from app.config import config
+from app.navigation import PUBLIC_NAV_ROUTES
 from app.persistence import Persistence
 
 
@@ -83,3 +87,38 @@ def test_docs_and_openapi_describe_only_the_application_api_surface(client):
         for path in schema["paths"]
     )
     assert not any(path.startswith("/rio/") for path in schema["paths"])
+
+
+def test_robots_points_to_the_canonical_public_sitemap(client):
+    response = client.get("/robots.txt")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert f"Sitemap: {config.APP_URL.rstrip('/')}/sitemap.xml" in response.text
+    assert "/robots.txt/rio/sitemap.xml" not in response.text
+    for private_prefix in ("/app/", "/api/", "/auth/", "/rio/", "/login"):
+        assert f"Disallow: {private_prefix}" in response.text
+
+
+def test_sitemap_contains_only_public_marketing_pages(client):
+    public_sitemap = client.get("/sitemap.xml")
+    legacy_sitemap = client.get("/rio/sitemap.xml")
+
+    assert public_sitemap.status_code == 200
+    assert public_sitemap.headers["content-type"].startswith("application/xml")
+    assert legacy_sitemap.status_code == 200
+    assert legacy_sitemap.text == public_sitemap.text
+
+    root = ElementTree.fromstring(public_sitemap.text)
+    namespace = {"sitemap": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    locations = [
+        node.text
+        for node in root.findall("sitemap:url/sitemap:loc", namespace)
+    ]
+    expected = [
+        f"{config.APP_URL.rstrip('/')}{route.path}"
+        for route in PUBLIC_NAV_ROUTES
+        if route.path != "/login"
+    ]
+    assert locations == expected
+    assert all("/app/" not in location for location in locations)

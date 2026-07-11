@@ -328,3 +328,19 @@ decision not to change it.
   currency/page-smoke regression tests passed. A live Rio dev boot returned
   plain 404, JSON 404, Swagger HTML, and OpenAPI JSON for the four corresponding
   probes.
+
+### 2026-07-11 — Public-only robots and sitemap metadata
+
+- Replaced Rio's malformed robots sitemap URL with the canonical configured app
+  origin and a stable `/sitemap.xml` endpoint.
+- The sitemap now contains only public marketing pages. Login, every protected
+  `/app/*` page, API/auth endpoints, and Rio internals are excluded; robots also
+  tells crawlers not to visit those private/technical prefixes.
+- Rio's legacy `/rio/sitemap.xml` path returns the same public-only document, so
+  it can no longer reveal the protected route catalogue while old links settle.
+- Generated XML with the standard sitemap namespace and escaped URL text rather
+  than assembling XML with raw string interpolation.
+- This changes discovery metadata only and does not touch the excluded crawler
+  rendering/WebView implementation.
+- Verification: the robots/sitemap assertions and all 16 page-smoke tests passed
+  as part of a 21-test HTTP/page run.

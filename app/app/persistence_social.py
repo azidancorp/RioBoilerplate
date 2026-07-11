@@ -32,6 +32,17 @@ def _get_connection(persistence: SocialPersistence) -> sqlite3.Connection:
     return persistence.conn
 
 
+def _require_top_level_transaction(
+    conn: sqlite3.Connection,
+    *,
+    operation: str,
+) -> None:
+    if conn.in_transaction:
+        raise RuntimeError(
+            f"{operation} cannot run inside an existing transaction."
+        )
+
+
 def _normalize_provider(provider: str) -> str:
     provider = str(provider).strip().lower()
     if provider != "google":
@@ -73,34 +84,56 @@ async def create_oauth_handoff(
     ttl_minutes: int | None = None,
 ) -> str:
     provider = _normalize_provider(provider)
-    user = await persistence.get_user_by_id(user_id)
-    if not user.is_active:
-        raise ValueError("Cannot create an OAuth handoff for an inactive user.")
-
     now = datetime.now(timezone.utc)
-    ttl = ttl_minutes or config.OAUTH_HANDOFF_TTL_MINUTES
+    ttl = (
+        config.OAUTH_HANDOFF_TTL_MINUTES
+        if ttl_minutes is None
+        else ttl_minutes
+    )
+    if ttl <= 0:
+        raise ValueError("OAuth handoff lifetime must be positive.")
     valid_until = now + timedelta(minutes=ttl)
     token = secrets.token_hex(32).upper()
     token_hash = _hash_one_time_token(token)
 
     conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="OAuth handoff creation")
     cursor = persistence._get_cursor()
-    cursor.execute(
-        """
-        INSERT INTO oauth_login_handoffs (
-            token_hash, user_id, provider, created_at, valid_until, consumed_at
+    try:
+        # The writer lock establishes ordering against account deactivation.
+        # Re-read account state only after the lock is owned, then insert
+        # without yielding the transaction to another coroutine.
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            "SELECT is_active FROM users WHERE id = ?",
+            (str(user_id),),
         )
-        VALUES (?, ?, ?, ?, ?, NULL)
-        """,
-        (
-            token_hash,
-            str(user_id),
-            provider,
-            now.timestamp(),
-            valid_until.timestamp(),
-        ),
-    )
-    conn.commit()
+        user_row = cursor.fetchone()
+        if user_row is None:
+            raise KeyError(user_id)
+        if not bool(user_row[0]):
+            raise ValueError("Cannot create an OAuth handoff for an inactive user.")
+
+        cursor.execute(
+            """
+            INSERT INTO oauth_login_handoffs (
+                token_hash, user_id, provider, created_at, valid_until, consumed_at
+            )
+            VALUES (?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                token_hash,
+                str(user_id),
+                provider,
+                now.timestamp(),
+                valid_until.timestamp(),
+            ),
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
     return token
 
 
@@ -112,6 +145,7 @@ async def consume_oauth_handoff(
     now = datetime.now(timezone.utc)
     now_ts = now.timestamp()
     conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="OAuth handoff consumption")
     cursor = persistence._get_cursor()
 
     try:

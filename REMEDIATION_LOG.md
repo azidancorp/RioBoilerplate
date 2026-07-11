@@ -54,7 +54,7 @@ decision not to change it.
 | Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | done — `Apply one password policy to every flow` |
 | OAuth account deletion | An OAuth-only user cannot complete self-service account deletion. | queued |
 | Browser token storage | The bearer token is exposed to normal browser-side code instead of using Rio's HTTP-only storage marker. | done — `Store browser sessions in HTTP-only cookies` |
-| OAuth handoffs | A deactivation race can leave a handoff usable after an account is reactivated. | queued |
+| OAuth handoffs | A deactivation race can leave a handoff usable after an account is reactivated. | done — `Serialize OAuth handoffs with account status` |
 | Verification tokens | Concurrent email-verification requests can leave more than one live token. | queued |
 | Transaction ownership | Some persistence helpers can accidentally commit a caller's unrelated pending work. | done — `Protect caller-owned auth transactions` |
 | Expired auth data | Expired sessions and completed/expired OAuth handoffs accumulate indefinitely. | queued |
@@ -166,3 +166,17 @@ decision not to change it.
 - Verification: `pytest app/tests/test_auth_transaction_ownership.py
   app/tests/test_password_reset_token_lifecycle.py app/tests/test_auth_email_flows.py
   app/tests/test_live_session_revalidation.py -q`.
+
+### 2026-07-11 — OAuth handoff/account-status ordering
+
+- OAuth handoff creation now takes SQLite's writer lock before re-reading the
+  account's active state, then inserts without yielding. Whichever
+  commits first—handoff creation or account deactivation—therefore determines a
+  safe result: deactivation either blocks creation or deletes the new handoff.
+- Added explicit transaction ownership to both handoff creation and consumption,
+  and rejected non-positive handoff lifetimes.
+- Added deterministic ordering tests that recreate the original stale-read
+  window with a held writer lock, plus caller-transaction and opposite-order
+  coverage.
+- Verification: `pytest app/tests/test_oauth_handoff_atomicity.py
+  app/tests/test_oauth_google.py app/tests/test_admin_user_lifecycle.py -q`.

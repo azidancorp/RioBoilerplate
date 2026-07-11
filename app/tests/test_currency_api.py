@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,53 @@ def test_balance_and_adjust_endpoint(api_test_setup):
     assert response_after.status_code == 200
     data_after = response_after.json()
     assert data_after["balance_minor"] == 25
+
+
+def test_api_rejects_session_past_its_absolute_lifetime(
+    api_test_setup,
+    monkeypatch,
+):
+    client, persistence = api_test_setup
+    config.PRIMARY_CURRENCY_INITIAL_BALANCE = 0
+    monkeypatch.setattr(config, "SESSION_ABSOLUTE_MAX_DAYS", 1)
+    user, token = asyncio.run(
+        _create_user_with_session(persistence, "absolute-api-session@example.com")
+    )
+    now = datetime.now(timezone.utc)
+    persistence.conn.execute(
+        """
+        UPDATE user_sessions
+        SET created_at = ?, valid_until = ?
+        WHERE id = ?
+        """,
+        (
+            (now - timedelta(days=2)).timestamp(),
+            (now + timedelta(days=1)).timestamp(),
+            persistence._hash_one_time_token(token),
+        ),
+    )
+    persistence.conn.commit()
+
+    read_response = client.get(
+        "/api/currency/balance",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    mutation_response = client.post(
+        "/api/currency/adjust",
+        json={
+            "target_user_id": str(user.id),
+            "amount": "25",
+            "reason": "must not use absolute-expired session",
+            "step_up": {"password": "secret"},
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert read_response.status_code == 401
+    assert mutation_response.status_code == 401
+    assert asyncio.run(
+        persistence.get_user_by_id(user.id)
+    ).primary_currency_balance == 0
 
 
 def test_adjust_endpoint_requires_actor_step_up(api_test_setup):

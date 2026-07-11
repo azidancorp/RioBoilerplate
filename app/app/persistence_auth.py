@@ -537,6 +537,7 @@ def _get_valid_session_by_auth_token(
     auth_token: str,
     *,
     now: datetime,
+    enforce_absolute_lifetime: bool = True,
 ) -> tuple[UserSession, AppUser]:
     cursor = persistence._get_cursor()
     cursor.execute(
@@ -561,9 +562,18 @@ def _get_valid_session_by_auth_token(
     if row is None:
         raise KeyError("No session found for the supplied auth token")
 
+    created_at = datetime.fromtimestamp(row[2], tz=timezone.utc)
     valid_until = datetime.fromtimestamp(row[3], tz=timezone.utc)
     if valid_until <= now:
         raise KeyError("Session expired for the supplied auth token")
+    if (
+        enforce_absolute_lifetime
+        and config.SESSION_ABSOLUTE_MAX_DAYS > 0
+        and created_at
+        + timedelta(days=config.SESSION_ABSOLUTE_MAX_DAYS)
+        <= now
+    ):
+        raise KeyError("Session exceeded its absolute lifetime")
 
     # The session columns occupy indices 0-4; the user columns follow, so the
     # user slice starts at row[5:].
@@ -575,7 +585,7 @@ def _get_valid_session_by_auth_token(
         # Raw token in, raw token out (row[0] is the stored hash).
         id=auth_token,
         user_id=uuid.UUID(row[1]),
-        created_at=datetime.fromtimestamp(row[2], tz=timezone.utc),
+        created_at=created_at,
         valid_until=valid_until,
         role=user.role,
     )
@@ -629,6 +639,9 @@ async def get_and_extend_valid_session_by_auth_token(
             persistence,
             auth_token,
             now=now,
+            # Renewal owns the transaction and deletes a terminally expired
+            # row below, so it must inspect the row before enforcing the cap.
+            enforce_absolute_lifetime=False,
         )
 
         renewed_until = now + valid_for

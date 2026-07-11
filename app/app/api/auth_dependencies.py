@@ -16,7 +16,6 @@ In Rio apps, token is stored in UserSettings.auth_token.
 """
 
 from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status, Header
@@ -105,20 +104,22 @@ async def get_current_session(
 
     # Validate the session token
     try:
-        user_session = await db.get_session_by_auth_token(token)
-    except KeyError:
+        user_session, _ = db.get_valid_session_by_auth_token(token)
+    except KeyError as exc:
+        validation_reason = str(exc).lower()
+        if "inactive" in validation_reason:
+            detail = "User account is inactive"
+        elif (
+            "expired" in validation_reason
+            or "absolute lifetime" in validation_reason
+        ):
+            detail = "Authentication token has expired"
+        else:
+            detail = "Invalid or expired authentication token"
         raise _auth_failure(
             request=request,
             db=db,
-            detail="Invalid or expired authentication token",
-        )
-
-    # Check if the session is still valid
-    if user_session.valid_until <= datetime.now(tz=timezone.utc):
-        raise _auth_failure(
-            request=request,
-            db=db,
-            detail="Authentication token has expired",
+            detail=detail,
         )
 
     return user_session

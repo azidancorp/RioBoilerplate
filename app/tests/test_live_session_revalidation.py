@@ -402,7 +402,7 @@ def test_session_renewal_rejects_elapsed_absolute_deadline(
         # This represents a legacy row created before a shorter absolute limit
         # was configured: the sliding expiry is still in the future, but its
         # absolute lifetime has already elapsed.
-        temp_db.get_valid_session_by_auth_token(created_session.id)
+        await temp_db.get_session_by_auth_token(created_session.id)
         with pytest.raises(KeyError):
             await temp_db.get_and_extend_valid_session_by_auth_token(
                 created_session.id,
@@ -417,6 +417,36 @@ def test_session_renewal_rejects_elapsed_absolute_deadline(
         assert _session_row_count(temp_db, created_session.id) == 0
         with pytest.raises(KeyError):
             await temp_db.get_session_by_auth_token(created_session.id)
+
+    asyncio.run(scenario())
+
+
+def test_session_validation_enforces_elapsed_absolute_deadline(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        monkeypatch.setattr(config, "SESSION_ABSOLUTE_MAX_DAYS", 1)
+        _, created_session = await _create_root_session(temp_db)
+        now = datetime.now(timezone.utc)
+        temp_db.conn.execute(
+            """
+            UPDATE user_sessions
+            SET created_at = ?, valid_until = ?
+            WHERE id = ?
+            """,
+            (
+                (now - timedelta(days=2)).timestamp(),
+                (now + timedelta(days=1)).timestamp(),
+                temp_db._hash_one_time_token(created_session.id),
+            ),
+        )
+        temp_db.conn.commit()
+
+        raw_session = await temp_db.get_session_by_auth_token(created_session.id)
+        assert raw_session.valid_until > now
+        with pytest.raises(KeyError, match="absolute lifetime"):
+            temp_db.get_valid_session_by_auth_token(created_session.id)
 
     asyncio.run(scenario())
 

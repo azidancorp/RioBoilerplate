@@ -50,7 +50,7 @@ decision not to change it.
 | Profile privacy | A signed-in user can read another user's private profile fields. | done — `Restrict private profile reads` |
 | Profile read hierarchy | Admin profile reads can expose root/peer private data outside the role hierarchy. | done — `Apply role hierarchy to profile reads` |
 | Profile mutations | Cross-user profile edits do not consistently enforce the live role hierarchy inside the write transaction. | done — `Authorize profile writes atomically` |
-| Session lifetime | API bearer authentication accepts a session beyond its absolute maximum lifetime. | queued |
+| Session lifetime | API bearer authentication accepts a session beyond its absolute maximum lifetime. | done — `Enforce absolute session lifetime everywhere` |
 | Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | queued |
 | OAuth account deletion | An OAuth-only user cannot complete self-service account deletion. | queued |
 | Browser token storage | The bearer token is exposed to normal browser-side code instead of using Rio's HTTP-only storage marker. | queued |
@@ -103,3 +103,16 @@ decision not to change it.
   snapshot, so a role change cannot be interleaved between the permission check
   and the sensitive read.
 - Verification: `pytest app/tests/test_profiles_api.py -q`.
+
+### 2026-07-11 — Absolute session lifetime
+
+- Made the shared definition of a valid session enforce both the sliding expiry
+  and the configured absolute lifetime. API authentication, admin mutations,
+  profile operations, and protected-page revalidation all use this definition.
+- Preserved renewal's existing ability to delete a row whose absolute deadline
+  has elapsed rather than leaving it behind after a failed renewal.
+- Added regression coverage for a session whose ordinary expiry is still in the
+  future but whose absolute lifetime has elapsed, including a privileged API
+  mutation that must leave the target balance unchanged.
+- Verification: `pytest app/tests/test_live_session_revalidation.py
+  app/tests/test_currency_api.py -q`.

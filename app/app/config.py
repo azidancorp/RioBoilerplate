@@ -10,6 +10,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+
+# Load true secrets before constructing the global configuration instance.
+load_dotenv()
+
 
 @dataclass
 class AppConfig:

@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import typing as t
-from dataclasses import KW_ONLY, field
-
 from app.components.center_component import CenterComponent
 from app.components.testimonial import Testimonial
 from app.scripts.utils import load_from_html

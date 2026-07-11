@@ -3,25 +3,21 @@ from __future__ import annotations
 import sys
 from datetime import timedelta
 from pathlib import Path
-from dotenv import load_dotenv
-
-# Load secret values from .env file.
-load_dotenv()
 
 import rio
+from starlette.middleware.sessions import SessionMiddleware
 
-from app.persistence import Persistence
-from app.data_models import UserSettings
 from app.config import config
 import app.theme as theme
-from app.components.root_component import RootComponent
-from app.api.example import router as example_router
-from app.api.profiles import router as profile_router
 from app.api.currency import router as currency_router
+from app.api.example import router as example_router
 from app.api.health import router as health_router
 from app.api.oauth import router as oauth_router
+from app.api.profiles import router as profile_router
+from app.components.root_component import RootComponent
+from app.data_models import UserSettings
 from app.http_surface import install_http_surface
-from starlette.middleware.sessions import SessionMiddleware
+from app.persistence import Persistence
 
 
 async def on_app_start(app: rio.App) -> None:

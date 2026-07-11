@@ -407,3 +407,14 @@ decision not to change it.
 - Verification: 73 user-listing/admin/rate-limit/bootstrap/page-smoke tests
   passed. A live
   Rio dev boot returned the protected Admin route's expected Login redirect.
+
+### 2026-07-11 — Repository-wide Ruff cleanup
+
+- Moved `.env` loading into `config.py`, before the global configuration object
+  is constructed. This preserves early secret loading for every import path
+  without executing code between imports in the application entrypoint.
+- Removed four genuinely unused imports from the home and audit-log pages.
+- Reduced the full repository Ruff result from 17 errors to zero; no rule was
+  disabled and no dependency or lint configuration was changed.
+- Verification: `ruff check .` passed, followed by 42 health/OAuth/page-smoke
+  regression tests.

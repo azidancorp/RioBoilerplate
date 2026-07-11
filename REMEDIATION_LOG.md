@@ -57,7 +57,7 @@ decision not to change it.
 | OAuth handoffs | A deactivation race can leave a handoff usable after an account is reactivated. | done — `Serialize OAuth handoffs with account status` |
 | Verification tokens | Concurrent email-verification requests can leave more than one live token. | done — `Replace verification tokens atomically` |
 | Transaction ownership | Some persistence helpers can accidentally commit a caller's unrelated pending work. | done — `Protect caller-owned auth transactions` |
-| Expired auth data | Expired sessions and completed/expired OAuth handoffs accumulate indefinitely. | queued |
+| Expired auth data | Expired sessions and completed/expired OAuth handoffs accumulate indefinitely. | done — `Bound stale authentication data` |
 | Currency rounding | A positive display amount can round to a zero-unit ledger adjustment. | queued |
 | Currency idempotency | Retrying the same adjustment can apply it twice. | queued |
 | Protected deep links | Logged-out users lose the protected destination they originally requested. | queued |
@@ -195,3 +195,18 @@ decision not to change it.
   usable returned token, plus forced-failure rollback coverage.
 - Verification: `pytest app/tests/test_email_verification_token_atomicity.py
   app/tests/test_auth_email_flows.py app/tests/test_rate_limit_public_flows.py -q`.
+
+### 2026-07-11 — Bounded stale authentication data
+
+- Session creation now removes rows past either their sliding expiry or their
+  absolute lifetime inside the same transaction as the new session.
+- OAuth handoff creation removes expired/previously consumed handoffs before
+  inserting, and a successful consumption now deletes its one-time row instead
+  of retaining a permanent consumed marker.
+- Cleanup and issuance are one transaction, so an insertion failure restores
+  any rows selected for cleanup. Live rows for other users are preserved.
+- Kept this as current application behavior without adding schema/index
+  migration work.
+- Verification: `pytest app/tests/test_auth_state_cleanup.py
+  app/tests/test_live_session_revalidation.py app/tests/test_oauth_google.py
+  app/tests/test_oauth_handoff_atomicity.py -q`.

@@ -448,6 +448,24 @@ async def create_session(
         # before re-reading account state. Keep this transaction free of awaits.
         conn.execute("BEGIN IMMEDIATE")
         now = datetime.now(tz=timezone.utc)
+        absolute_cutoff = (
+            now - timedelta(days=config.SESSION_ABSOLUTE_MAX_DAYS)
+            if config.SESSION_ABSOLUTE_MAX_DAYS > 0
+            else None
+        )
+        if absolute_cutoff is None:
+            cursor.execute(
+                "DELETE FROM user_sessions WHERE valid_until <= ?",
+                (now.timestamp(),),
+            )
+        else:
+            cursor.execute(
+                """
+                DELETE FROM user_sessions
+                WHERE valid_until <= ? OR created_at <= ?
+                """,
+                (now.timestamp(), absolute_cutoff.timestamp()),
+            )
         cursor.execute(
             "SELECT is_active, role FROM users WHERE id = ?",
             (str(user_id),),

@@ -105,6 +105,13 @@ async def create_oauth_handoff(
         # without yielding the transaction to another coroutine.
         conn.execute("BEGIN IMMEDIATE")
         cursor.execute(
+            """
+            DELETE FROM oauth_login_handoffs
+            WHERE valid_until <= ? OR consumed_at IS NOT NULL
+            """,
+            (now.timestamp(),),
+        )
+        cursor.execute(
             "SELECT is_active FROM users WHERE id = ?",
             (str(user_id),),
         )
@@ -143,7 +150,6 @@ async def consume_oauth_handoff(
 ) -> AppUser:
     token_hash = _hash_one_time_token(token)
     now = datetime.now(timezone.utc)
-    now_ts = now.timestamp()
     conn = _get_connection(persistence)
     _require_top_level_transaction(conn, operation="OAuth handoff consumption")
     cursor = persistence._get_cursor()
@@ -187,12 +193,8 @@ async def consume_oauth_handoff(
             raise KeyError("OAuth handoff belongs to an inactive or missing user.")
 
         cursor.execute(
-            """
-            UPDATE oauth_login_handoffs
-            SET consumed_at = ?
-            WHERE token_hash = ? AND consumed_at IS NULL
-            """,
-            (now_ts, token_hash),
+            "DELETE FROM oauth_login_handoffs WHERE token_hash = ?",
+            (token_hash,),
         )
         if cursor.rowcount != 1:
             conn.rollback()

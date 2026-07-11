@@ -1094,8 +1094,17 @@ class Persistence:
             ttl_minutes=ttl_minutes,
         )
 
-    async def list_users(self) -> list[AppUser]:
-        return await persistence_users.list_users(self)
+    async def list_users(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[AppUser]:
+        return await persistence_users.list_users(
+            self,
+            limit=limit,
+            offset=offset,
+        )
 
     async def get_currency_balance(self, user_id: uuid.UUID) -> int:
         return await persistence_currency.get_currency_balance(self, user_id)

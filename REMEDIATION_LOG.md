@@ -387,3 +387,23 @@ decision not to change it.
 - Tightened the lifecycle test to reject the word “sent” while still proving the
   intended recipient, token issuance, and delivery helper call.
 - Verification: all 29 admin lifecycle tests passed.
+
+### 2026-07-11 — Bounded, paginated admin user table
+
+- Added stable newest-first `limit`/`offset` support to user listing, with ID as
+  a deterministic tie-breaker and explicit rejection of invalid page bounds.
+  Existing callers can still request the full list by omitting both arguments.
+- The Admin page now counts users, loads only 50 rows at a time, and displays
+  bounded Previous/Next controls with page and total counts. It clamps back to
+  a valid page after mutations such as deleting the final row on the last page.
+- Only the visible page is converted to pandas/Table state. Admin actions still
+  resolve targets directly from persistence, so users do not have to be on the
+  visible page to be managed.
+- Updated the currency listing CLI to pass its existing `--limit` into SQLite
+  rather than reading every user and slicing in memory.
+- Added persistence tests for stable/non-overlapping pages and invalid bounds,
+  Admin state/control tests for forward/back/bounded/clamped navigation, and a
+  CLI limit-propagation test.
+- Verification: 73 user-listing/admin/rate-limit/bootstrap/page-smoke tests
+  passed. A live
+  Rio dev boot returned the protected Admin route's expected Login redirect.

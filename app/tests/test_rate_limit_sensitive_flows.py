@@ -139,6 +139,8 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.users = []
     component.selected_role = {}
     component.df = None
+    component.user_page_index = 0
+    component.user_total_count = 0
     component.change_role_identifier = ""
     component.change_role_new_role = "user"
     component.change_role_error = ""

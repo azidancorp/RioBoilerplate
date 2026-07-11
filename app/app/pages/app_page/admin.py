@@ -63,11 +63,15 @@ class AdminPage(ResponsiveComponent):
     Only accessible to users with admin or root roles.
     """
 
+    USER_PAGE_SIZE: t.ClassVar[int] = 50
+
     # Keep track of users and their current roles
     users: t.List[AppUser] = field(default_factory=list)
     selected_role: t.Dict[str, str] = field(default_factory=dict)
     current_user: AppUser | None = None
     df: pd.DataFrame | None = None
+    user_page_index: int = 0
+    user_total_count: int = 0
 
     # User change role fields
     change_role_identifier: str = ""
@@ -154,6 +158,8 @@ class AdminPage(ResponsiveComponent):
         self.users = []
         self.selected_role = {}
         self.df = pd.DataFrame([])
+        self.user_page_index = 0
+        self.user_total_count = 0
 
     def _reject_stale_auth_session(self) -> None:
         reject_stale_user_session(self.session)
@@ -963,7 +969,15 @@ class AdminPage(ResponsiveComponent):
             return
 
         persistence = self.session[Persistence]
-        self.users = await persistence.list_users()
+        self.user_total_count = persistence.get_user_count()
+        self.user_page_index = min(
+            max(0, self.user_page_index),
+            self._user_page_count() - 1,
+        )
+        self.users = await persistence.list_users(
+            limit=self.USER_PAGE_SIZE,
+            offset=self.user_page_index * self.USER_PAGE_SIZE,
+        )
         self.selected_role = {str(user.id): user.role for user in self.users}
 
         data = []
@@ -983,6 +997,33 @@ class AdminPage(ResponsiveComponent):
             })
 
         self.df = pd.DataFrame(data)
+
+    def _user_page_count(self) -> int:
+        return max(
+            1,
+            (self.user_total_count + self.USER_PAGE_SIZE - 1)
+            // self.USER_PAGE_SIZE,
+        )
+
+    def _has_previous_user_page(self) -> bool:
+        return self.user_page_index > 0
+
+    def _has_next_user_page(self) -> bool:
+        return self.user_page_index + 1 < self._user_page_count()
+
+    async def _on_previous_user_page_pressed(self) -> None:
+        if not self._has_previous_user_page():
+            return
+        self.user_page_index -= 1
+        await self._load_user_data()
+        self.force_refresh()
+
+    async def _on_next_user_page_pressed(self) -> None:
+        if not self._has_next_user_page():
+            return
+        self.user_page_index += 1
+        await self._load_user_data()
+        self.force_refresh()
 
     async def _on_change_role_pressed(self) -> None:
         identifier = (self.change_role_identifier or "").strip()
@@ -1887,6 +1928,31 @@ class AdminPage(ResponsiveComponent):
                         scroll_x="auto",
                         scroll_y="auto",
                         min_height=17,
+                    ),
+
+                    self._responsive_form_layout(
+                        rio.Button(
+                            "Previous",
+                            on_press=self._on_previous_user_page_pressed,
+                            is_sensitive=self._has_previous_user_page(),
+                            shape="rounded",
+                            style="minor",
+                        ),
+                        rio.Text(
+                            f"Page {self.user_page_index + 1} of "
+                            f"{self._user_page_count()} "
+                            f"({self.user_total_count} users)",
+                            justify="center",
+                            overflow="wrap",
+                        ),
+                        rio.Button(
+                            "Next",
+                            on_press=self._on_next_user_page_pressed,
+                            is_sensitive=self._has_next_user_page(),
+                            shape="rounded",
+                            style="minor",
+                        ),
+                        proportions=[1, 2, 1],
                     ),
 
                     margin=2,

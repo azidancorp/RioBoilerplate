@@ -59,14 +59,14 @@ async def _get_user_by_identifier(pers: Persistence, identifier: str) -> AppUser
 async def cmd_list(args: argparse.Namespace) -> None:
     pers = Persistence()
     try:
-        users = await pers.list_users()
+        users = await pers.list_users(limit=args.limit)
     finally:
         pers.close()
 
     cfg = get_currency_config()
     print(f"Listing up to {args.limit} users (currency: {cfg.name_plural})")
     print("-" * 72)
-    for user in users[: args.limit]:
+    for user in users:
         balance_text = attach_currency_name(
             format_minor_amount(user.primary_currency_balance),
             quantity_minor_units=user.primary_currency_balance,

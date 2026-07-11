@@ -148,6 +148,8 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.users = []
     component.selected_role = {}
     component.df = None
+    component.user_page_index = 0
+    component.user_total_count = 0
     component.change_role_identifier = ""
     component.change_role_new_role = "user"
     component.change_role_error = ""
@@ -794,6 +796,63 @@ def test_authenticated_admin_page_builds_lifecycle_controls(temp_db: Persistence
         assert page.df is not None
         assert "Active" in page.df.columns
         assert "build-visible-user@example.com" in set(page.df["Email"])
+
+    asyncio.run(scenario())
+
+
+def test_admin_user_table_loads_bounded_pages(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        monkeypatch.setattr(AdminPage, "USER_PAGE_SIZE", 2)
+        root, root_session = await _create_root_session(temp_db)
+        first_target = await temp_db.admin_create_user(
+            email="paged-first@example.com",
+            password=PASSWORD,
+            role="user",
+            admin_context=_admin_context(root_session),
+        )
+        second_target = await temp_db.admin_create_user(
+            email="paged-second@example.com",
+            password=PASSWORD,
+            role="user",
+            admin_context=_admin_context(root_session),
+        )
+        session = _FakeSession(temp_db, root_session, root)
+        page = _mount_admin(session)
+
+        await AdminPage._load_user_data(page)
+        first_page_ids = {user.id for user in page.users}
+        assert page.user_total_count == 3
+        assert page.user_page_index == 0
+        assert page._user_page_count() == 2
+        assert len(page.users) == 2
+        assert page._has_previous_user_page() is False
+        assert page._has_next_user_page() is True
+
+        await page._on_next_user_page_pressed()
+        second_page_ids = {user.id for user in page.users}
+        assert page.user_page_index == 1
+        assert len(page.users) == 1
+        assert first_page_ids.isdisjoint(second_page_ids)
+        assert first_page_ids | second_page_ids == {
+            root.id,
+            first_target.id,
+            second_target.id,
+        }
+        assert page._has_previous_user_page() is True
+        assert page._has_next_user_page() is False
+
+        await page._on_next_user_page_pressed()
+        assert page.user_page_index == 1
+        await page._on_previous_user_page_pressed()
+        assert page.user_page_index == 0
+
+        page.user_page_index = 999
+        await AdminPage._load_user_data(page)
+        assert page.user_page_index == 1
+        assert len(page.users) == 1
 
     asyncio.run(scenario())
 

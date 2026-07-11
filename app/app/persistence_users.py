@@ -231,21 +231,36 @@ async def get_user_by_id(
     raise KeyError(id)
 
 
-async def list_users(persistence: UsersPersistence) -> list[AppUser]:
+async def list_users(
+    persistence: UsersPersistence,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[AppUser]:
     """
-    Retrieve all users from the database.
+    Retrieve a stable page of users from the database.
 
     Returns:
-        list[AppUser]: List of users ordered by creation time.
+        list[AppUser]: Users ordered newest-first, then by ID.
     """
+    if limit is not None and limit < 1:
+        raise ValueError("User list limit must be at least 1.")
+    if offset < 0:
+        raise ValueError("User list offset cannot be negative.")
+    if limit is None and offset:
+        raise ValueError("User list offset requires a limit.")
+
     cursor = persistence._get_cursor()
-    cursor.execute(
-        f"""
+    query = f"""
         SELECT {USER_SELECT_COLUMNS}
         FROM users
-        ORDER BY created_at DESC
-        """
-    )
+        ORDER BY created_at DESC, id DESC
+    """
+    parameters: tuple[int, ...] = ()
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        parameters = (limit, offset)
+    cursor.execute(query, parameters)
 
     rows = cursor.fetchall()
     return [_row_to_app_user(row) for row in rows]

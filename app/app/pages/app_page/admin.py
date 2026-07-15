@@ -9,8 +9,9 @@ import typing as t
 import pandas as pd
 
 import rio
+from fastapi import HTTPException
 from app.config import config
-from app.password_policy import evaluate_new_password
+from app.password_policy import account_password_context, evaluate_new_password
 from app.persistence import AdminMutationContext, Persistence
 from app.data_models import AppUser, UserSession
 from app.permissions import (
@@ -32,6 +33,8 @@ from app.currency import major_to_minor, format_minor_amount, attach_currency_na
 from app.validation import SecuritySanitizer
 from app.scripts.message_utils import send_password_reset_email
 from app.scripts.utils import (
+    build_password_warning_acknowledgement,
+    get_password_policy_decision,
     get_password_strength,
     get_password_strength_color,
     get_password_strength_status,
@@ -85,6 +88,7 @@ class AdminPage(ResponsiveComponent):
     create_user_password: str = ""
     create_user_password_strength: int = 0
     create_user_acknowledge_weak_password: bool = False
+    create_user_password_policy_error_visible: bool = False
     create_user_role: str = field(default_factory=get_default_role)
     create_user_is_verified: bool = False
     create_user_step_up_password: str = ""
@@ -378,6 +382,7 @@ class AdminPage(ResponsiveComponent):
         return f"Error {action}. Please check the input and try again."
 
     async def _on_create_user_pressed(self, _: rio.TextInputConfirmEvent | None = None) -> None:
+        self.create_user_password_policy_error_visible = False
         if not self._refresh_current_user_authorization():
             self._clear_create_step_up_fields()
             return
@@ -407,11 +412,13 @@ class AdminPage(ResponsiveComponent):
         password_policy = evaluate_new_password(
             password,
             acknowledged_weak=self.create_user_acknowledge_weak_password,
+            expected_passwords=self._create_user_password_context(),
         )
         if not password_policy.ok:
             self.create_user_error = (
                 password_policy.message or "Password is not allowed."
             )
+            self.create_user_password_policy_error_visible = True
             self.create_user_success = ""
             self._clear_create_step_up_fields()
             self.force_refresh()
@@ -527,6 +534,7 @@ class AdminPage(ResponsiveComponent):
         self.create_user_password = ""
         self.create_user_password_strength = 0
         self.create_user_acknowledge_weak_password = False
+        self.create_user_password_policy_error_visible = False
         self.create_user_role = get_default_role()
         self.create_user_is_verified = False
         self._clear_create_step_up_fields()
@@ -1590,10 +1598,64 @@ class AdminPage(ResponsiveComponent):
         self.create_user_is_verified = event.is_on
         self.force_refresh()
 
+    def _create_user_password_context(self) -> tuple[str, ...]:
+        email = (self.create_user_email or "").strip()
+        username = (self.create_user_username or "").strip() or None
+
+        try:
+            email = SecuritySanitizer.validate_email_format(
+                email,
+                require_valid=config.REQUIRE_VALID_EMAIL,
+            )
+        except HTTPException:
+            pass
+
+        if username is not None:
+            try:
+                username = SecuritySanitizer.sanitize_string(username, 100)
+            except HTTPException:
+                pass
+
+        return account_password_context(email=email, username=username)
+
+    def _refresh_create_password_strength(self) -> None:
+        self.create_user_password_strength = get_password_strength(
+            self.create_user_password,
+            expected_passwords=self._create_user_password_context(),
+        )
+
+    def _on_create_email_change(self, event: rio.TextInputChangeEvent) -> None:
+        self.create_user_email = event.text
+        self.create_user_acknowledge_weak_password = False
+        self.create_user_password_policy_error_visible = False
+        self._refresh_create_password_strength()
+        self.create_user_error = ""
+        self.force_refresh()
+
+    def _on_create_username_change(self, event: rio.TextInputChangeEvent) -> None:
+        self.create_user_username = event.text
+        self.create_user_acknowledge_weak_password = False
+        self.create_user_password_policy_error_visible = False
+        self._refresh_create_password_strength()
+        self.create_user_error = ""
+        self.force_refresh()
+
     def _on_create_password_change(self, event: rio.TextInputChangeEvent) -> None:
         self.create_user_password = event.text
-        self.create_user_password_strength = get_password_strength(event.text)
         self.create_user_acknowledge_weak_password = False
+        self.create_user_password_policy_error_visible = False
+        self._refresh_create_password_strength()
+        self.create_user_error = ""
+        self.force_refresh()
+
+    def _on_create_password_acknowledgement_change(
+        self,
+        event: rio.SwitchChangeEvent,
+    ) -> None:
+        self.create_user_acknowledge_weak_password = event.is_on
+        if event.is_on and self.create_user_password_policy_error_visible:
+            self.create_user_error = ""
+            self.create_user_password_policy_error_visible = False
         self.force_refresh()
 
     def _on_create_role_change(self, event: rio.DropdownChangeEvent) -> None:
@@ -1610,12 +1672,11 @@ class AdminPage(ResponsiveComponent):
         *children: rio.Component,
         proportions: list[int],
     ) -> rio.Component:
-        """Render equal-width rows on desktop and wrapping layouts on mobile."""
+        """Render equal-width rows on desktop and stacked controls on mobile."""
         if self.is_mobile:
-            return rio.FlowContainer(
+            return rio.Column(
                 *children,
-                row_spacing=self.flow_spacing,
-                column_spacing=self.flow_spacing,
+                spacing=self.flow_spacing,
             )
 
         return rio.Row(
@@ -1742,6 +1803,10 @@ class AdminPage(ResponsiveComponent):
         if not self.current_user or self.df is None:
             return rio.Text("Error: Could not load user information")
 
+        create_password_policy = get_password_policy_decision(
+            self.create_user_password,
+            expected_passwords=self._create_user_password_context(),
+        )
         requires_step_up_password = self.current_user.auth_provider == "password"
         requires_step_up_2fa = self.current_user.two_factor_enabled
         step_up_unavailable_message = self._step_up_unavailable_message()
@@ -1970,10 +2035,12 @@ class AdminPage(ResponsiveComponent):
                 rio.TextInput(
                     label="Email",
                     text=self.bind().create_user_email,
+                    on_change=self._on_create_email_change,
                 ),
                 rio.TextInput(
                     label="Username (optional)",
                     text=self.bind().create_user_username,
+                    on_change=self._on_create_username_change,
                 ),
                 rio.TextInput(
                     label="Full Name (optional)",
@@ -1984,7 +2051,7 @@ class AdminPage(ResponsiveComponent):
 
             self._responsive_form_layout(
                 rio.TextInput(
-                    label="Temporary Password",
+                    label="Initial Password",
                     text=self.bind().create_user_password,
                     is_secret=True,
                     on_change=self._on_create_password_change,
@@ -2030,29 +2097,16 @@ class AdminPage(ResponsiveComponent):
             ),
             *(
                 [
-                    rio.Row(
-                        rio.Switch(
-                            is_on=self.bind().create_user_acknowledge_weak_password,
-                        ),
-                        rio.Text(
-                            "I acknowledge this temporary password is weak",
-                            style=rio.TextStyle(
-                                fill=rio.Color.from_rgb(1, 0.6, 0, srgb=True),
-                            ),
-                        ),
-                        spacing=1,
-                        align_x=0,
+                    build_password_warning_acknowledgement(
+                        create_password_policy,
+                        is_on=self.bind().create_user_acknowledge_weak_password,
+                        on_change=self._on_create_password_acknowledgement_change,
                     )
                 ]
-                if (
-                    config.ALLOW_WEAK_PASSWORDS
-                    and self.create_user_password
-                    and self.create_user_password_strength
-                    < config.MIN_PASSWORD_STRENGTH
-                )
+                if self.create_user_password
+                and create_password_policy.requires_acknowledgement
                 else []
             ),
-
             create_step_up_row,
 
             rio.Banner(

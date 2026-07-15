@@ -112,8 +112,12 @@ class AppUser:
         referral_code: str = "",
     ) -> AppUser:
         """
-        Create a new user with the given email and password, filling in
-        reasonable defaults for the other fields.
+        Build a password-backed user and fill in defaults for the other fields.
+
+        This hashes but does not authorize the password. Production registration
+        must go through a policy-enforcing Persistence method. The unchecked
+        construction path remains available for trusted fixtures and legacy-data
+        tests which deliberately model credentials that predate current policy.
         
         Parameters:
             email: The email address for the new user. Acts as the primary identifier.

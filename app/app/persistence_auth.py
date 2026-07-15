@@ -11,7 +11,6 @@ from typing import Protocol
 import pyotp
 
 from app import passwords as password_utils
-from app.password_policy import require_new_password
 from app.config import config
 from app.data_models import (
     AppUser,
@@ -19,6 +18,7 @@ from app.data_models import (
     RecoveryCodeRecord,
     UserSession,
 )
+from app.password_policy import account_password_context, require_new_password
 from app.persistence_users import get_user_select_columns, _row_to_app_user
 from app.validation import SecuritySanitizer
 
@@ -37,6 +37,14 @@ class TwoFactorFailure(str, Enum):
 
 class TwoFactorStateConflict(RuntimeError):
     """Raised when an MFA mutation no longer matches the user's current state."""
+
+
+class PasswordChangeSessionInvalidError(PermissionError):
+    """Raised when a self-service password change loses its live session."""
+
+
+class PasswordChangeCurrentPasswordError(ValueError):
+    """Raised when a self-service password change has the wrong current password."""
 
 
 @dataclass(frozen=True)
@@ -1017,12 +1025,17 @@ async def update_password(
     acknowledged_weak: bool = False,
 ) -> None:
     """
-    Update a user's password and invalidate their sessions and reset tokens.
+    Update a user's password for a trusted lifecycle operation.
+
+    Interactive callers must use ``change_password_for_session`` so the
+    credential change remains bound to a live bearer session and fresh step-up
+    verification.
 
     ## Parameters
 
     `user_id`: The UUID of the user whose password to update
     `new_password`: The new password to set
+    `acknowledged_weak`: Whether the caller explicitly accepted policy warnings
 
     ## Raises
 
@@ -1031,7 +1044,8 @@ async def update_password(
     conn = _get_connection(persistence)
     _require_top_level_transaction(conn, operation="Password update")
 
-    # Generate new password hash and salt using the current password scheme.
+    # Reject context-free policy failures before paying the Argon2 cost. Account
+    # identifiers are checked again from live state under the writer lock.
     require_new_password(
         new_password,
         acknowledged_weak=acknowledged_weak,
@@ -1041,6 +1055,34 @@ async def update_password(
 
     try:
         conn.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            """
+            SELECT email, username, is_active, auth_provider
+            FROM users
+            WHERE id = ?
+            """,
+            (str(user_id),),
+        )
+        user_row = cursor.fetchone()
+        if user_row is None:
+            raise KeyError(user_id)
+        if not bool(user_row[2]):
+            raise ValueError("Inactive users cannot update their password.")
+        if str(user_row[3]) != "password":
+            raise ValueError("External-auth users do not have a local password.")
+
+        require_new_password(
+            new_password,
+            acknowledged_weak=acknowledged_weak,
+            expected_passwords=account_password_context(
+                email=str(user_row[0]),
+                username=(
+                    str(user_row[1])
+                    if user_row[1] is not None
+                    else None
+                ),
+            ),
+        )
         cursor.execute(
             """
             UPDATE users
@@ -1061,6 +1103,144 @@ async def update_password(
             (str(user_id),),
         )
         conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+
+async def change_password_for_session(
+    persistence: AuthPersistence,
+    *,
+    auth_token: str,
+    current_password: str,
+    new_password: str,
+    two_factor_code: str | None = None,
+    acknowledged_weak: bool = False,
+) -> TwoFactorChallengeResult:
+    """Change a password atomically for the user owning a live bearer session."""
+    conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="Session-bound password change")
+
+    try:
+        preflight_session, preflight_user = get_valid_session_by_auth_token(
+            persistence,
+            auth_token,
+        )
+    except KeyError as exc:
+        raise PasswordChangeSessionInvalidError(
+            "Your session is no longer valid."
+        ) from exc
+
+    if preflight_session.user_id != preflight_user.id:
+        raise PasswordChangeSessionInvalidError(
+            "Your session is no longer valid."
+        )
+    if preflight_user.auth_provider != "password":
+        raise ValueError("External-auth users do not have a local password.")
+    if not preflight_user.verify_password(current_password):
+        raise PasswordChangeCurrentPasswordError(
+            "Current password is incorrect"
+        )
+
+    credential_snapshot = (
+        preflight_user.password_hash,
+        preflight_user.password_salt,
+        preflight_user.password_scheme,
+    )
+    two_factor_secret_snapshot = preflight_user.two_factor_secret
+
+    # Keep both Argon2 operations outside the SQLite writer lock. Live session,
+    # credential, account-context, and MFA state are revalidated after the lock
+    # is acquired, before any security state is changed.
+    require_new_password(
+        new_password,
+        acknowledged_weak=acknowledged_weak,
+        expected_passwords=account_password_context(
+            email=preflight_user.email,
+            username=preflight_user.username,
+        ),
+    )
+    password_hash, password_salt, password_scheme = password_utils.hash_password(
+        new_password
+    )
+    cursor = persistence._get_cursor()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            live_session, live_user = get_valid_session_by_auth_token(
+                persistence,
+                auth_token,
+            )
+        except KeyError as exc:
+            raise PasswordChangeSessionInvalidError(
+                "Your session is no longer valid."
+            ) from exc
+
+        if (
+            live_session.user_id != preflight_session.user_id
+            or live_user.id != preflight_user.id
+            or live_user.auth_provider != "password"
+            or (
+                live_user.password_hash,
+                live_user.password_salt,
+                live_user.password_scheme,
+            )
+            != credential_snapshot
+        ):
+            raise PasswordChangeSessionInvalidError(
+                "Your session is no longer valid."
+            )
+        if live_user.two_factor_secret != two_factor_secret_snapshot:
+            raise TwoFactorStateConflict(
+                "Two-factor authentication changed. Please try again."
+            )
+
+        require_new_password(
+            new_password,
+            acknowledged_weak=acknowledged_weak,
+            expected_passwords=account_password_context(
+                email=live_user.email,
+                username=live_user.username,
+            ),
+        )
+        two_factor_result = verify_two_factor_challenge_in_transaction(
+            persistence,
+            live_user.id,
+            two_factor_code,
+        )
+        if not two_factor_result.ok:
+            conn.rollback()
+            return two_factor_result
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, password_salt = ?, password_scheme = ?
+            WHERE id = ?
+            """,
+            (
+                password_hash,
+                password_salt,
+                password_scheme,
+                str(live_user.id),
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise PasswordChangeSessionInvalidError(
+                "Your session is no longer valid."
+            )
+        cursor.execute(
+            "DELETE FROM password_reset_tokens WHERE user_id = ?",
+            (str(live_user.id),),
+        )
+        cursor.execute(
+            "DELETE FROM user_sessions WHERE user_id = ?",
+            (str(live_user.id),),
+        )
+        conn.commit()
+        return two_factor_result
     except Exception:
         if conn.in_transaction:
             conn.rollback()
@@ -1136,14 +1316,77 @@ async def consume_reset_token_and_update_password(
     conn = _get_connection(persistence)
     _require_top_level_transaction(conn, operation="Password reset completion")
 
+    # Apply the context-free policy before any database work. The account-bound
+    # portion is repeated from live state inside the write transaction.
     require_new_password(
         new_password,
         acknowledged_weak=acknowledged_weak,
     )
-    password_hash, password_salt, password_scheme = password_utils.hash_password(new_password)
     token_hash = _hash_one_time_token(token)
-    now = datetime.now(timezone.utc)
     cursor = persistence._get_cursor()
+
+    # Avoid an Argon2 hash for a wholly missing token. This read is only an
+    # optimization; ownership, expiry, and account state are authoritative only
+    # after BEGIN IMMEDIATE below.
+    cursor.execute(
+        """
+        SELECT user_id, valid_until
+        FROM password_reset_tokens
+        WHERE token_hash = ?
+        """,
+        (token_hash,),
+    )
+    preflight_row = cursor.fetchone()
+    if preflight_row is None:
+        return False
+
+    preflight_user_id = uuid.UUID(preflight_row[0])
+    preflight_valid_until = datetime.fromtimestamp(
+        preflight_row[1],
+        tz=timezone.utc,
+    )
+    if (
+        preflight_user_id != user_id
+        or preflight_valid_until <= datetime.now(timezone.utc)
+    ):
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                """
+                SELECT user_id, valid_until
+                FROM password_reset_tokens
+                WHERE token_hash = ?
+                """,
+                (token_hash,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                conn.rollback()
+                return False
+
+            token_user_id = uuid.UUID(row[0])
+            valid_until = datetime.fromtimestamp(row[1], tz=timezone.utc)
+            if (
+                token_user_id != user_id
+                or valid_until <= datetime.now(timezone.utc)
+            ):
+                cursor.execute(
+                    "DELETE FROM password_reset_tokens WHERE token_hash = ?",
+                    (token_hash,),
+                )
+                conn.commit()
+                return False
+
+            # A direct database writer replaced the token between the preflight
+            # and lock acquisition. Drop the read transaction and continue with
+            # the now-current valid row through the normal path below.
+            conn.rollback()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+    password_hash, password_salt, password_scheme = password_utils.hash_password(new_password)
 
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -1162,7 +1405,7 @@ async def consume_reset_token_and_update_password(
 
         token_user_id = uuid.UUID(row[0])
         valid_until = datetime.fromtimestamp(row[1], tz=timezone.utc)
-        if token_user_id != user_id or valid_until <= now:
+        if token_user_id != user_id or valid_until <= datetime.now(timezone.utc):
             cursor.execute(
                 "DELETE FROM password_reset_tokens WHERE token_hash = ?",
                 (token_hash,),
@@ -1171,14 +1414,18 @@ async def consume_reset_token_and_update_password(
             return False
 
         cursor.execute(
-            "SELECT is_active, auth_provider FROM users WHERE id = ?",
+            """
+            SELECT email, username, is_active, auth_provider
+            FROM users
+            WHERE id = ?
+            """,
             (str(user_id),),
         )
         user_row = cursor.fetchone()
         if (
             user_row is None
-            or not bool(user_row[0])
-            or str(user_row[1]) != "password"
+            or not bool(user_row[2])
+            or str(user_row[3]) != "password"
         ):
             cursor.execute(
                 "DELETE FROM password_reset_tokens WHERE token_hash = ?",
@@ -1187,6 +1434,18 @@ async def consume_reset_token_and_update_password(
             conn.commit()
             return False
 
+        require_new_password(
+            new_password,
+            acknowledged_weak=acknowledged_weak,
+            expected_passwords=account_password_context(
+                email=str(user_row[0]),
+                username=(
+                    str(user_row[1])
+                    if user_row[1] is not None
+                    else None
+                ),
+            ),
+        )
         cursor.execute(
             """
             UPDATE users

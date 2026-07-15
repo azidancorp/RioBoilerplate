@@ -1,13 +1,15 @@
 import asyncio
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import rio
 import pyotp
 import pytest
 
-from app.config import config
-from app.data_models import AppUser, UserSettings, UserSession
+import app.persistence_auth as persistence_auth
 from app.components.navbar import Navbar
+from app.data_models import AppUser, RecoveryCodeUsage, UserSettings, UserSession
 from app.pages.app_page.dashboard import Overview
 from app.pages.app_page.disable_mfa import DisableMFA
 from app.pages.app_page.enable_mfa import EnableMFA
@@ -18,7 +20,9 @@ from app.persistence import Persistence
 
 
 PASSWORD = "OldPass!234"
-NEW_PASSWORD = "NewPass!234"
+NEW_PASSWORD = "NewVeryStrongPass!234"
+WINNING_PASSWORD = "WinningStrongPass!567"
+LOW_SCORE_PASSPHRASE = "alllowercasephrase"
 
 
 @pytest.fixture
@@ -117,6 +121,8 @@ def _mount_settings(session: _FakeSession, **attributes) -> Settings:
     component.error_message = ""
     component.profile_success_message = ""
     component.recovery_code_notice = ""
+    component.account_email = ""
+    component.account_username = ""
     component.change_password_current_password = ""
     component.change_password_new_password = ""
     component.change_password_confirm_password = ""
@@ -124,6 +130,7 @@ def _mount_settings(session: _FakeSession, **attributes) -> Settings:
     component.change_password_new_password_strength = 0
     component.change_password_passwords_match = False
     component.change_password_acknowledge_weak_password = False
+    component.change_password_policy_error_visible = False
     component.delete_account_password = ""
     component.delete_account_2fa = ""
     component.delete_account_confirmation = ""
@@ -295,15 +302,171 @@ def test_successful_mounted_password_change_logs_out_invalidated_session(temp_db
     asyncio.run(scenario())
 
 
-def test_settings_password_change_honors_strict_policy(
+def test_in_flight_revoked_session_cannot_overwrite_winning_password_change(
     temp_db: Persistence,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     async def scenario():
-        monkeypatch.setattr(config, "ALLOW_WEAK_PASSWORDS", False)
         user, user_session, session = await _create_user_with_session(
             temp_db,
-            "strict-settings-password@example.com",
+            "raced-mounted-password@example.com",
+        )
+        reset_token = await temp_db.create_reset_token(user.id)
+        page = _mount_settings(
+            session,
+            change_password_current_password=PASSWORD,
+            change_password_new_password=NEW_PASSWORD,
+            change_password_confirm_password=NEW_PASSWORD,
+            change_password_passwords_match=True,
+        )
+        original_hash_password = persistence_auth.password_utils.hash_password
+        race_triggered = False
+
+        def commit_winning_change() -> None:
+            other = Persistence(db_path=temp_db.db_path)
+            try:
+                asyncio.run(other.update_password(user.id, WINNING_PASSWORD))
+            finally:
+                other.close()
+
+        def revoke_session_during_hash(password: str):
+            nonlocal race_triggered
+            if password == NEW_PASSWORD and not race_triggered:
+                race_triggered = True
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    executor.submit(commit_winning_change).result()
+            return original_hash_password(password)
+
+        monkeypatch.setattr(
+            persistence_auth.password_utils,
+            "hash_password",
+            revoke_session_during_hash,
+        )
+
+        await Settings._on_confirm_password_change_pressed(page)
+
+        refreshed = await temp_db.get_user_by_id(user.id)
+        assert race_triggered is True
+        assert refreshed.verify_password(WINNING_PASSWORD)
+        assert not refreshed.verify_password(NEW_PASSWORD)
+        assert not refreshed.verify_password(PASSWORD)
+        with pytest.raises(KeyError):
+            await temp_db.get_session_by_auth_token(user_session.id)
+        with pytest.raises(KeyError):
+            await temp_db.get_user_by_reset_token(reset_token.token)
+        assert temp_db.conn.execute(
+            "SELECT COUNT(*) FROM user_sessions WHERE user_id = ?",
+            (str(user.id),),
+        ).fetchone() == (0,)
+        assert temp_db.conn.in_transaction is False
+        _assert_logged_out(session)
+
+    asyncio.run(scenario())
+
+
+def test_in_flight_mfa_change_aborts_password_change(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        user, user_session, session = await _create_user_with_session(
+            temp_db,
+            "raced-mfa-password@example.com",
+        )
+        page = _mount_settings(
+            session,
+            change_password_current_password=PASSWORD,
+            change_password_new_password=NEW_PASSWORD,
+            change_password_confirm_password=NEW_PASSWORD,
+            change_password_passwords_match=True,
+        )
+        original_hash_password = persistence_auth.password_utils.hash_password
+        race_triggered = False
+
+        def enable_mfa_during_hash(password: str):
+            nonlocal race_triggered
+            if password == NEW_PASSWORD and not race_triggered:
+                race_triggered = True
+                other = Persistence(db_path=temp_db.db_path)
+                try:
+                    other.enroll_two_factor(
+                        user.id,
+                        pyotp.random_base32(),
+                        count=1,
+                    )
+                finally:
+                    other.close()
+            return original_hash_password(password)
+
+        monkeypatch.setattr(
+            persistence_auth.password_utils,
+            "hash_password",
+            enable_mfa_during_hash,
+        )
+
+        await Settings._on_confirm_password_change_pressed(page)
+
+        refreshed = await temp_db.get_user_by_id(user.id)
+        assert race_triggered is True
+        assert refreshed.verify_password(PASSWORD)
+        assert not refreshed.verify_password(NEW_PASSWORD)
+        assert page.error_message == (
+            "Two-factor authentication changed. Please try again."
+        )
+        assert session[UserSession].id == user_session.id
+        assert session[UserSettings].auth_token == user_session.id
+        assert (
+            await temp_db.get_session_by_auth_token(user_session.id)
+        ).user_id == user.id
+        assert temp_db.get_recovery_codes_summary(user.id)["remaining"] == 1
+        assert temp_db.conn.in_transaction is False
+
+    asyncio.run(scenario())
+
+
+def test_session_bound_password_change_commits_recovery_code_use(
+    temp_db: Persistence,
+):
+    async def scenario():
+        user, _, session = await _create_user_with_session(
+            temp_db,
+            "recovery-mounted-password@example.com",
+        )
+        recovery_code = temp_db.enroll_two_factor(
+            user.id,
+            pyotp.random_base32(),
+            count=1,
+        )[0]
+        page = _mount_settings(
+            session,
+            change_password_current_password=PASSWORD,
+            change_password_new_password=NEW_PASSWORD,
+            change_password_confirm_password=NEW_PASSWORD,
+            change_password_2fa=recovery_code,
+            change_password_passwords_match=True,
+        )
+
+        await Settings._on_confirm_password_change_pressed(page)
+
+        refreshed = await temp_db.get_user_by_id(user.id)
+        assert refreshed.verify_password(NEW_PASSWORD)
+        assert temp_db.get_recovery_codes_summary(user.id)["remaining"] == 0
+        assert session[RecoveryCodeUsage].used_in_settings is True
+        assert page.recovery_code_notice == (
+            "A recovery code was used. Generate a new set to stay protected."
+        )
+        _assert_logged_out(session)
+
+    asyncio.run(scenario())
+
+
+def test_settings_password_change_requires_acknowledgement_for_short_password(
+    temp_db: Persistence,
+):
+    async def scenario():
+        user, user_session, session = await _create_user_with_session(
+            temp_db,
+            "short-settings-password@example.com",
         )
         page = _mount_settings(
             session,
@@ -311,12 +474,12 @@ def test_settings_password_change_honors_strict_policy(
             change_password_new_password="weak",
             change_password_confirm_password="weak",
             change_password_passwords_match=True,
-            change_password_acknowledge_weak_password=True,
         )
 
         await Settings._on_confirm_password_change_pressed(page)
 
-        assert "too weak" in page.error_message
+        assert "acknowledge" in page.error_message.lower()
+        assert "shorter" in page.error_message.lower()
         refreshed = await temp_db.get_user_by_id(user.id)
         assert refreshed.verify_password(PASSWORD)
         assert not refreshed.verify_password("weak")
@@ -325,32 +488,147 @@ def test_settings_password_change_honors_strict_policy(
     asyncio.run(scenario())
 
 
-def test_settings_password_change_requires_weak_acknowledgement_when_allowed(
+def test_settings_password_change_requires_and_accepts_warning_acknowledgement(
     temp_db: Persistence,
-    monkeypatch,
 ):
     async def scenario():
-        monkeypatch.setattr(config, "ALLOW_WEAK_PASSWORDS", True)
         user, _, session = await _create_user_with_session(
             temp_db,
-            "acknowledged-settings-password@example.com",
+            "passphrase-settings-password@example.com",
         )
         page = _mount_settings(
             session,
             change_password_current_password=PASSWORD,
-            change_password_new_password="weak",
-            change_password_confirm_password="weak",
+            change_password_new_password=LOW_SCORE_PASSPHRASE,
+            change_password_confirm_password=LOW_SCORE_PASSPHRASE,
             change_password_passwords_match=True,
         )
 
         await Settings._on_confirm_password_change_pressed(page)
-        assert "acknowledge" in page.error_message
+        assert "acknowledge" in page.error_message.lower()
         assert (await temp_db.get_user_by_id(user.id)).verify_password(PASSWORD)
 
         page.change_password_acknowledge_weak_password = True
         await Settings._on_confirm_password_change_pressed(page)
+        assert (await temp_db.get_user_by_id(user.id)).verify_password(
+            LOW_SCORE_PASSPHRASE
+        )
+        _assert_logged_out(session)
 
-        assert (await temp_db.get_user_by_id(user.id)).verify_password("weak")
+    asyncio.run(scenario())
+
+
+def test_settings_password_edit_clears_stale_policy_error(
+    temp_db: Persistence,
+):
+    async def scenario():
+        _, _, session = await _create_user_with_session(
+            temp_db,
+            "settings-policy-error@example.com",
+        )
+        page = _mount_settings(
+            session,
+            account_email="settings-policy-error@example.com",
+            account_username=NEW_PASSWORD,
+            change_password_confirm_password=NEW_PASSWORD,
+            change_password_acknowledge_weak_password=True,
+            error_message="Password is too weak.",
+        )
+
+        await Settings.on_change_new_password(
+            page,
+            rio.TextInputChangeEvent(NEW_PASSWORD),
+        )
+
+        assert page.change_password_new_password == NEW_PASSWORD
+        assert page.change_password_passwords_match is True
+        assert page.change_password_new_password_strength < 50
+        assert page.change_password_acknowledge_weak_password is False
+        assert page.error_message == ""
+
+    asyncio.run(scenario())
+
+
+def test_settings_acknowledgement_handler_clears_only_policy_error(
+    temp_db: Persistence,
+):
+    async def scenario():
+        _, _, session = await _create_user_with_session(
+            temp_db,
+            "settings-ack-handler@example.com",
+        )
+        page = _mount_settings(
+            session,
+            error_message="Please acknowledge these warnings.",
+            change_password_policy_error_visible=True,
+        )
+
+        Settings.on_change_password_acknowledgement(
+            page,
+            rio.SwitchChangeEvent(True),
+        )
+        assert page.change_password_acknowledge_weak_password is True
+        assert page.error_message == ""
+        assert page.change_password_policy_error_visible is False
+
+        page.error_message = "Current password is incorrect"
+        Settings.on_change_password_acknowledgement(
+            page,
+            rio.SwitchChangeEvent(True),
+        )
+        assert page.error_message == "Current password is incorrect"
+
+    asyncio.run(scenario())
+
+
+def test_settings_password_change_refreshes_live_policy_context(
+    temp_db: Persistence,
+):
+    async def scenario():
+        user, user_session, session = await _create_user_with_session(
+            temp_db,
+            "live-settings-context@example.com",
+        )
+        live_username = "LiveSettingsContextIdentifier2026"
+        temp_db.conn.execute(
+            "UPDATE users SET username = ? WHERE id = ?",
+            (live_username, str(user.id)),
+        )
+        temp_db.conn.commit()
+        page = _mount_settings(
+            session,
+            account_email=user.email,
+            account_username="",
+            change_password_current_password=PASSWORD,
+            change_password_new_password=live_username,
+            change_password_confirm_password=live_username,
+            change_password_passwords_match=True,
+            change_password_acknowledge_weak_password=True,
+        )
+
+        await Settings._on_confirm_password_change_pressed(page)
+
+        assert page.account_username == live_username
+        assert page.change_password_acknowledge_weak_password is False
+        assert page.change_password_policy_error_visible is True
+        assert page.change_password_new_password_strength < 50
+        assert "account identifier" in page.error_message
+        refreshed = await temp_db.get_user_by_id(user.id)
+        assert refreshed.verify_password(PASSWORD)
+        assert not refreshed.verify_password(live_username)
+        assert (
+            await temp_db.get_session_by_auth_token(user_session.id)
+        ).user_id == user.id
+
+        Settings.on_change_password_acknowledgement(
+            page,
+            rio.SwitchChangeEvent(True),
+        )
+        assert page.error_message == ""
+
+        await Settings._on_confirm_password_change_pressed(page)
+        refreshed = await temp_db.get_user_by_id(user.id)
+        assert refreshed.verify_password(live_username)
         _assert_logged_out(session)
 
     asyncio.run(scenario())

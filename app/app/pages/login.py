@@ -15,6 +15,8 @@ from app.permissions import check_access
 from app.components.center_component import CenterComponent
 from app.components.responsive import WIDTH_NARROW
 from app.scripts.utils import (
+    build_password_warning_acknowledgement,
+    get_password_policy_decision,
     get_password_strength,
     get_password_strength_color,
     get_password_strength_status,
@@ -44,7 +46,7 @@ from app.rate_limits import (
 )
 from app.validation import SecuritySanitizer
 from app.config import config
-from app.password_policy import evaluate_new_password
+from app.password_policy import account_password_context, evaluate_new_password
 
 
 def guard(event: rio.GuardEvent) -> str | None:
@@ -508,6 +510,7 @@ class SignUpForm(rio.Component):
     password_strength: int = 0
     do_passwords_match: bool = False
     acknowledge_weak_password: bool = False
+    password_policy_error_visible: bool = False
 
     # We'll expose an event so that the parent page can toggle forms
     on_toggle_form: t.Callable[[str], None] | None = None
@@ -520,6 +523,8 @@ class SignUpForm(rio.Component):
         the user does not exist and the passwords match, a new user will be
         created and stored in the database.
         """
+        self.password_policy_error_visible = False
+
         # Get the persistence instance. It was attached to the session earlier,
         # so we can easily access it from anywhere.
         pers = self.session[Persistence]
@@ -561,10 +566,12 @@ class SignUpForm(rio.Component):
         password_policy = evaluate_new_password(
             self.password,
             acknowledged_weak=self.acknowledge_weak_password,
+            expected_passwords=account_password_context(email=self.email),
         )
         if not password_policy.ok:
             self.banner_style = "danger"
             self.error_message = password_policy.message or "Password is not allowed."
+            self.password_policy_error_visible = True
             return
 
         if pers.get_user_count() == 0:
@@ -603,17 +610,17 @@ class SignUpForm(rio.Component):
             # Good news, we can create the user.
             pass
 
-        # Create a new user
-        user_info = AppUser.create_new_user_with_default_settings(
-            email=self.email,
-            password=self.password,
-            referral_code=self.referral_code,
-        )
-
-        # Store the user in the database
+        # Create and store the user through the policy-enforcing plaintext
+        # boundary. AppUser instances only contain hashes, which cannot be
+        # checked against the current password policy after construction.
         try:
-            await pers.create_user(user_info)
-        except BootstrapRequiredError as exc:
+            user_info = await pers.create_password_user(
+                email=self.email,
+                password=self.password,
+                referral_code=self.referral_code,
+                acknowledged_weak=self.acknowledge_weak_password,
+            )
+        except (BootstrapRequiredError, ValueError) as exc:
             self.banner_style = "danger"
             self.error_message = str(exc)
             return
@@ -670,6 +677,7 @@ class SignUpForm(rio.Component):
         self.password = ""
         self.confirm_password = ""
         self.referral_code = ""
+        self.acknowledge_weak_password = False
         self.error_message = ""
 
         # Return to the login form
@@ -705,13 +713,27 @@ class SignUpForm(rio.Component):
     async def update_email(self, event: rio.TextInputChangeEvent):
         self.email = event.text
         self.validate_email(self.email)
+        self.acknowledge_weak_password = False
+        self.password_strength = get_password_strength(
+            self.password,
+            expected_passwords=account_password_context(email=self.email),
+        )
+        if self.password_policy_error_visible:
+            self.error_message = ""
+            self.password_policy_error_visible = False
         self.force_refresh()
 
     async def update_password(self, event: rio.TextInputChangeEvent):
         self.password = event.text
-        self.password_strength = get_password_strength(self.password)
-        self.do_passwords_match = self.password == self.confirm_password
         self.acknowledge_weak_password = False
+        self.password_strength = get_password_strength(
+            self.password,
+            expected_passwords=account_password_context(email=self.email),
+        )
+        self.do_passwords_match = self.password == self.confirm_password
+        if self.password_policy_error_visible:
+            self.error_message = ""
+            self.password_policy_error_visible = False
         self.force_refresh()
 
     async def update_confirm_password(self, event: rio.TextInputChangeEvent):
@@ -723,6 +745,16 @@ class SignUpForm(rio.Component):
         self.referral_code = event.text
         self.force_refresh()
 
+    def on_acknowledge_weak_password_change(
+        self,
+        event: rio.SwitchChangeEvent,
+    ) -> None:
+        self.acknowledge_weak_password = event.is_on
+        if event.is_on and self.password_policy_error_visible:
+            self.error_message = ""
+            self.password_policy_error_visible = False
+        self.force_refresh()
+
     def password_strength_progress(self) -> rio.Component:
         return rio.ProgressBar(
             progress=max(0, min(self.password_strength / 100, 1)),
@@ -730,6 +762,10 @@ class SignUpForm(rio.Component):
         )
 
     def build(self) -> rio.Component:
+        password_policy = get_password_policy_decision(
+            self.password,
+            expected_passwords=account_password_context(email=self.email),
+        )
         social_signup_components: list[rio.Component] = []
         if config.ENABLE_GOOGLE_LOGIN:
             social_signup_components.extend(
@@ -804,21 +840,14 @@ class SignUpForm(rio.Component):
                 self.password_strength_progress(),
                 *(
                     [
-                        rio.Row(
-                            rio.Switch(
-                                is_on=self.bind().acknowledge_weak_password,
-                            ),
-                            rio.Text(
-                                "I acknowledge my password is weak",
-                                style=rio.TextStyle(
-                                    fill=rio.Color.from_rgb(1, 0.6, 0, srgb=True),
-                                ),
-                            ),
-                            spacing=1,
-                            align_x=0,
-                        ),
+                        build_password_warning_acknowledgement(
+                            password_policy,
+                            is_on=self.bind().acknowledge_weak_password,
+                            on_change=self.on_acknowledge_weak_password_change,
+                        )
                     ]
-                    if config.ALLOW_WEAK_PASSWORDS and self.password and self.password_strength < config.MIN_PASSWORD_STRENGTH
+                    if self.password
+                    and password_policy.requires_acknowledgement
                     else []
                 ),
                 rio.FlowContainer(
@@ -980,7 +1009,9 @@ class ResetPasswordForm(rio.Component):
     password_strength: int = 0
     do_passwords_match: bool = False
     acknowledge_weak_password: bool = False
+    password_policy_error_visible: bool = False
     prefilled_email: str = ""
+    prefilled_username: str = ""
     prefilled_reset_token: str = ""
     prefilled_message: str = ""
     prefilled_message_style: str = "success"
@@ -1002,10 +1033,12 @@ class ResetPasswordForm(rio.Component):
         if self.prefilled_message:
             self.banner_style = self.prefilled_message_style
             self.error_message = self.prefilled_message
+            self.password_policy_error_visible = False
 
     def _set_banner(self, style: str, message: str) -> None:
         self.banner_style = style
         self.error_message = message
+        self.password_policy_error_visible = False
 
     def _show_reset_token_entry(self, sanitized_email: str) -> None:
         self.email = sanitized_email
@@ -1015,7 +1048,23 @@ class ResetPasswordForm(rio.Component):
         self.new_password = ""
         self.confirm_password = ""
         self.verification_code = ""
+        self.password_strength = 0
+        self.do_passwords_match = False
+        self.acknowledge_weak_password = False
         self._set_banner("success", _generic_reset_message())
+
+    def _password_expected_values(self) -> tuple[str, ...]:
+        prefilled_email = self.prefilled_email.strip().casefold()
+        current_email = self.email.strip().casefold()
+        username = (
+            self.prefilled_username
+            if prefilled_email and prefilled_email == current_email
+            else None
+        )
+        return account_password_context(
+            email=self.email,
+            username=username,
+        )
 
     async def on_primary_action(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
@@ -1151,12 +1200,14 @@ class ResetPasswordForm(rio.Component):
         password_policy = evaluate_new_password(
             self.new_password,
             acknowledged_weak=self.acknowledge_weak_password,
+            expected_passwords=account_password_context(email=sanitized_email),
         )
         if not password_policy.ok:
             self._set_banner(
                 "danger",
                 password_policy.message or "Password is not allowed.",
             )
+            self.password_policy_error_visible = True
             return
 
         pers = self.session[Persistence]
@@ -1193,6 +1244,45 @@ class ResetPasswordForm(rio.Component):
             self._set_banner("danger", "Invalid or expired reset token. Please request a new one.")
             return
 
+        # A reset request starts from an email address, so the live username is
+        # not available until the token resolves. Re-evaluate with the complete
+        # account context before attempting MFA or consuming the token.
+        resolved_username = user.username or ""
+        self.prefilled_email = user.email
+        self.prefilled_username = resolved_username
+        resolved_unacknowledged_policy = evaluate_new_password(
+            self.new_password,
+            expected_passwords=account_password_context(
+                email=user.email,
+                username=user.username,
+            ),
+        )
+        prior_warning_codes = {
+            warning.code for warning in password_policy.warnings
+        }
+        resolved_warning_codes = {
+            warning.code
+            for warning in resolved_unacknowledged_policy.warnings
+        }
+        if resolved_warning_codes - prior_warning_codes:
+            self.acknowledge_weak_password = False
+        password_policy = evaluate_new_password(
+            self.new_password,
+            acknowledged_weak=self.acknowledge_weak_password,
+            expected_passwords=account_password_context(
+                email=user.email,
+                username=user.username,
+            ),
+        )
+        self.password_strength = password_policy.strength
+        if not password_policy.ok:
+            self._set_banner(
+                "danger",
+                password_policy.message or "Password is not allowed.",
+            )
+            self.password_policy_error_visible = True
+            return
+
         self.require_two_factor = bool(user.two_factor_secret)
 
         if user.two_factor_secret:
@@ -1224,6 +1314,10 @@ class ResetPasswordForm(rio.Component):
                 self.new_password,
                 acknowledged_weak=self.acknowledge_weak_password,
             )
+        except ValueError as exc:
+            self._set_banner("danger", str(exc))
+            self.password_policy_error_visible = True
+            return
         except Exception:
             self._set_banner("danger", "Failed to update password. Please request a new token and try again.")
             return
@@ -1242,6 +1336,7 @@ class ResetPasswordForm(rio.Component):
         self.new_password = ""
         self.confirm_password = ""
         self.verification_code = ""
+        self.acknowledge_weak_password = False
 
     def on_back_to_login_pressed(self):
         """
@@ -1250,16 +1345,44 @@ class ResetPasswordForm(rio.Component):
         if self.on_toggle_form:
             self.on_toggle_form("login")
 
+    async def update_email(self, event: rio.TextInputChangeEvent):
+        self.email = event.text
+        self.acknowledge_weak_password = False
+        self.password_strength = get_password_strength(
+            self.new_password,
+            expected_passwords=self._password_expected_values(),
+        )
+        if self.password_policy_error_visible:
+            self.error_message = ""
+            self.password_policy_error_visible = False
+        self.force_refresh()
+
     async def update_new_password(self, event: rio.TextInputChangeEvent):
         self.new_password = event.text
-        self.password_strength = get_password_strength(self.new_password)
-        self.do_passwords_match = self.new_password == self.confirm_password
         self.acknowledge_weak_password = False
+        self.password_strength = get_password_strength(
+            self.new_password,
+            expected_passwords=self._password_expected_values(),
+        )
+        self.do_passwords_match = self.new_password == self.confirm_password
+        if self.password_policy_error_visible:
+            self.error_message = ""
+            self.password_policy_error_visible = False
         self.force_refresh()
 
     async def update_confirm_password(self, event: rio.TextInputChangeEvent):
         self.confirm_password = event.text
         self.do_passwords_match = self.new_password == self.confirm_password
+        self.force_refresh()
+
+    def on_acknowledge_weak_password_change(
+        self,
+        event: rio.SwitchChangeEvent,
+    ) -> None:
+        self.acknowledge_weak_password = event.is_on
+        if event.is_on and self.password_policy_error_visible:
+            self.error_message = ""
+            self.password_policy_error_visible = False
         self.force_refresh()
 
     def password_strength_progress(self) -> rio.Component:
@@ -1269,6 +1392,10 @@ class ResetPasswordForm(rio.Component):
         )
 
     def build(self) -> rio.Component:
+        password_policy = get_password_policy_decision(
+            self.new_password,
+            expected_passwords=self._password_expected_values(),
+        )
         primary_label = "Update Password" if self.code_sent else "Send Reset Link"
 
         additional_inputs: list[rio.Component] = []
@@ -1325,23 +1452,14 @@ class ResetPasswordForm(rio.Component):
                 ]
             )
             if (
-                config.ALLOW_WEAK_PASSWORDS
-                and self.new_password
-                and self.password_strength < config.MIN_PASSWORD_STRENGTH
+                self.new_password
+                and password_policy.requires_acknowledgement
             ):
                 additional_inputs.append(
-                    rio.Row(
-                        rio.Switch(
-                            is_on=self.bind().acknowledge_weak_password,
-                        ),
-                        rio.Text(
-                            "I acknowledge my password is weak",
-                            style=rio.TextStyle(
-                                fill=rio.Color.from_rgb(1, 0.6, 0, srgb=True),
-                            ),
-                        ),
-                        spacing=1,
-                        align_x=0,
+                    build_password_warning_acknowledgement(
+                        password_policy,
+                        is_on=self.bind().acknowledge_weak_password,
+                        on_change=self.on_acknowledge_weak_password_change,
                     )
                 )
 
@@ -1383,6 +1501,7 @@ class ResetPasswordForm(rio.Component):
                 rio.TextInput(
                     text=self.bind().email,
                     label="Email",
+                    on_change=self.update_email,
                     on_confirm=self.on_primary_action,
                     is_sensitive=True,
                 ),
@@ -1418,6 +1537,7 @@ class LoginPage(rio.Component):
     page_message: str = ""
     page_message_style: str = "success"
     reset_prefilled_email: str = ""
+    reset_prefilled_username: str = ""
     reset_prefilled_token: str = ""
     reset_prefilled_message: str = ""
     reset_prefilled_message_style: str = "success"
@@ -1528,6 +1648,7 @@ class LoginPage(rio.Component):
 
             if not reset_token:
                 self.current_form = "reset"
+                self.reset_prefilled_username = ""
                 self._set_page_message("danger", "Reset link is invalid. Request a new password reset email.")
                 self.force_refresh()
                 return
@@ -1535,6 +1656,7 @@ class LoginPage(rio.Component):
             self.current_form = "reset"
             self.reset_prefilled_token = ""
             self.reset_prefilled_email = ""
+            self.reset_prefilled_username = ""
             self.reset_prefilled_message = (
                 "Reset link is invalid or expired. Request a new password reset email."
             )
@@ -1547,6 +1669,7 @@ class LoginPage(rio.Component):
             else:
                 self.reset_prefilled_token = reset_token
                 self.reset_prefilled_email = user.email
+                self.reset_prefilled_username = user.username or ""
                 self.reset_prefilled_message = "Reset link received. Enter your new password below."
                 self.reset_prefilled_message_style = "success"
                 self.reset_prefilled_require_two_factor = bool(user.two_factor_secret)
@@ -1561,6 +1684,7 @@ class LoginPage(rio.Component):
         self.current_form = form_name
         if form_name != "reset":
             self.reset_prefilled_email = ""
+            self.reset_prefilled_username = ""
             self.reset_prefilled_token = ""
             self.reset_prefilled_message = ""
             self.reset_prefilled_message_style = "success"
@@ -1579,6 +1703,7 @@ class LoginPage(rio.Component):
             form_to_show = ResetPasswordForm(
                 on_toggle_form=self.set_form,
                 prefilled_email=self.reset_prefilled_email,
+                prefilled_username=self.reset_prefilled_username,
                 prefilled_reset_token=self.reset_prefilled_token,
                 prefilled_message=self.reset_prefilled_message,
                 prefilled_message_style=self.reset_prefilled_message_style,

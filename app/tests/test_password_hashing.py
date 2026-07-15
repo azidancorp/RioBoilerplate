@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pyotp
 import pytest
+from pwdlib import PasswordHash
 
 from app import passwords as password_utils
 from app.data_models import AppUser, UserSettings
@@ -33,6 +34,88 @@ def test_password_service_hashes_and_verifies_argon2id():
         password_salt,
         password_scheme,
     ).ok
+
+
+@pytest.mark.parametrize(
+    "password",
+    [
+        "     ",
+        "\x00" * 15,
+        "\u200b" * 15,
+        "x" * 1025,
+    ],
+)
+def test_acknowledgeable_quality_warnings_are_technically_hashable(
+    password: str,
+):
+    password_hash, password_salt, password_scheme = password_utils.hash_password(
+        password
+    )
+
+    assert password_utils.verify_password(
+        password,
+        password_hash,
+        password_salt,
+        password_scheme,
+    ).ok
+
+
+def test_new_hashes_use_nfc_and_accept_canonically_equivalent_input():
+    decomposed = "Cafe\u0301-Utilisateur!2026"
+    composed = "Café-Utilisateur!2026"
+
+    password_hash, password_salt, password_scheme = password_utils.hash_password(
+        decomposed
+    )
+
+    decomposed_result = password_utils.verify_password(
+        decomposed,
+        password_hash,
+        password_salt,
+        password_scheme,
+    )
+    composed_result = password_utils.verify_password(
+        composed,
+        password_hash,
+        password_salt,
+        password_scheme,
+    )
+    assert decomposed_result.ok and not decomposed_result.needs_rehash
+    assert composed_result.ok and not composed_result.needs_rehash
+
+
+def test_pre_normalization_argon2_hash_has_compatible_rehash_path():
+    decomposed = "Cafe\u0301-Utilisateur!2026"
+    raw_legacy_hash = PasswordHash.recommended().hash(decomposed).encode("utf-8")
+
+    result = password_utils.verify_password(
+        decomposed,
+        raw_legacy_hash,
+        None,
+        password_utils.HASH_SCHEME_ARGON2ID,
+    )
+
+    assert result.ok
+    assert result.needs_rehash
+
+
+def test_pre_normalization_pbkdf2_hash_has_compatible_rehash_path():
+    decomposed = "Cafe\u0301-Utilisateur!2026"
+    password_salt = b"pre-normalization-salt"
+    raw_legacy_hash = password_utils.legacy_pbkdf2_password_hash(
+        decomposed,
+        password_salt,
+    )
+
+    result = password_utils.verify_password(
+        decomposed,
+        raw_legacy_hash,
+        password_salt,
+        password_utils.HASH_SCHEME_PBKDF2_SHA256,
+    )
+
+    assert result.ok
+    assert result.needs_rehash
 
 
 def test_password_service_verifies_legacy_pbkdf2_and_marks_for_rehash():
@@ -280,12 +363,12 @@ def test_update_password_stores_argon2id_and_invalidates_sessions(tmp_path: Path
             await persistence._create_user_unchecked(user)
             session = await persistence.create_session(user.id)
 
-            await persistence.update_password(user.id, "NewPass!123")
+            await persistence.update_password(user.id, "NewVeryStrongPass!123")
 
             stored = await persistence.get_user_by_id(user.id)
             assert stored.password_scheme == password_utils.HASH_SCHEME_ARGON2ID
             assert stored.password_salt is None
-            assert stored.verify_password("NewPass!123")
+            assert stored.verify_password("NewVeryStrongPass!123")
             assert not stored.verify_password("OldPass!123")
 
             with pytest.raises(KeyError):
@@ -313,14 +396,14 @@ def test_reset_token_success_updates_password_consumes_token_and_invalidates_ses
             consumed = await persistence.consume_reset_token_and_update_password(
                 reset_token.token,
                 user.id,
-                "NewPass!123",
+                "NewVeryStrongPass!123",
             )
 
             stored = await persistence.get_user_by_id(user.id)
             assert consumed is True
             assert stored.password_scheme == password_utils.HASH_SCHEME_ARGON2ID
             assert stored.password_salt is None
-            assert stored.verify_password("NewPass!123")
+            assert stored.verify_password("NewVeryStrongPass!123")
             assert not stored.verify_password("OldPass!123")
 
             assert await persistence.consume_reset_token_and_update_password(
@@ -365,14 +448,14 @@ def test_reset_token_success_with_mfa_updates_password_after_challenge(tmp_path:
             consumed = await persistence.consume_reset_token_and_update_password(
                 reset_token.token,
                 user.id,
-                "NewPass!123",
+                "NewVeryStrongPass!123",
             )
 
             stored = await persistence.get_user_by_id(user.id)
             assert consumed is True
             assert stored.password_scheme == password_utils.HASH_SCHEME_ARGON2ID
             assert stored.password_salt is None
-            assert stored.verify_password("NewPass!123")
+            assert stored.verify_password("NewVeryStrongPass!123")
             assert not stored.verify_password("OldPass!123")
         finally:
             persistence.close()
@@ -403,7 +486,7 @@ def test_reset_token_password_update_is_transactional_on_hash_failure(
                 await persistence.consume_reset_token_and_update_password(
                     reset_token.token,
                     user.id,
-                    "NewPass!123",
+                    "NewVeryStrongPass!123",
                 )
                 failed = False
             except RuntimeError:

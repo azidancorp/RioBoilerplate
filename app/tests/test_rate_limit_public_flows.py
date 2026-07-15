@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pyotp
 import pytest
+import rio
 
 from app.config import config
 from app.data_models import AppUser, UserSettings
@@ -112,13 +113,25 @@ def _mount_component(component_cls, session: _FakeSession, **attributes):
         component.verification_code = ""
         component.error_message = ""
         component.banner_style = "danger"
+        component.password_strength = 0
+        component.do_passwords_match = False
         component.acknowledge_weak_password = False
+        component.password_policy_error_visible = False
+        component.prefilled_email = ""
+        component.prefilled_username = ""
     if component_cls is SignUpForm:
+        component.email = ""
+        component.password = ""
+        component.confirm_password = ""
+        component.referral_code = ""
         component.error_message = ""
         component.banner_style = "danger"
         component.is_email_valid = False
         component.passwords_valid = False
+        component.password_strength = 0
+        component.do_passwords_match = False
         component.acknowledge_weak_password = False
+        component.password_policy_error_visible = False
     for key, value in attributes.items():
         setattr(component, key, value)
     return component
@@ -128,10 +141,298 @@ async def _create_user(
     persistence: Persistence,
     email: str,
     password: str = "VeryStrongPass!9",
+    *,
+    username: str | None = None,
 ) -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
+    user.username = username
     await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
+
+
+def test_signup_strength_meter_tracks_live_email_context(temp_db: Persistence):
+    async def scenario():
+        password = "signup-meter@example.com"
+        form = _mount_component(
+            SignUpForm,
+            _FakeSession(temp_db),
+            email="unrelated@example.com",
+        )
+
+        await SignUpForm.update_password(
+            form,
+            rio.TextInputChangeEvent(password),
+        )
+        assert form.password_strength >= config.PASSWORD_STRENGTH_WARNING_THRESHOLD
+
+        form.acknowledge_weak_password = True
+        await SignUpForm.update_email(
+            form,
+            rio.TextInputChangeEvent(password),
+        )
+        assert form.acknowledge_weak_password is False
+        assert form.password_strength < config.PASSWORD_STRENGTH_WARNING_THRESHOLD
+
+    asyncio.run(scenario())
+
+
+def test_reset_strength_meter_tracks_live_identifier_context(
+    temp_db: Persistence,
+):
+    async def scenario():
+        password = "reset-meter@example.com"
+        form = _mount_component(
+            ResetPasswordForm,
+            _FakeSession(temp_db),
+            code_sent=True,
+            email="unrelated@example.com",
+        )
+
+        await ResetPasswordForm.update_new_password(
+            form,
+            rio.TextInputChangeEvent(password),
+        )
+        assert form.password_strength >= config.PASSWORD_STRENGTH_WARNING_THRESHOLD
+
+        form.acknowledge_weak_password = True
+        await ResetPasswordForm.update_email(
+            form,
+            rio.TextInputChangeEvent(password),
+        )
+        assert form.acknowledge_weak_password is False
+        assert form.password_strength < config.PASSWORD_STRENGTH_WARNING_THRESHOLD
+
+        username_password = "ResetUsernameMeter2026"
+        form.email = "reset-owner@example.com"
+        form.prefilled_email = form.email
+        form.prefilled_username = username_password
+        await ResetPasswordForm.update_new_password(
+            form,
+            rio.TextInputChangeEvent(username_password),
+        )
+        assert form.password_strength < config.PASSWORD_STRENGTH_WARNING_THRESHOLD
+
+    asyncio.run(scenario())
+
+
+def test_reset_resolved_username_policy_error_precedes_mfa(
+    temp_db: Persistence,
+):
+    async def scenario():
+        username = "ResetUsernameContext2026"
+        user = await _create_user(
+            temp_db,
+            "reset-username-context@example.com",
+            username=username,
+        )
+        temp_db.set_2fa_secret(user.id, pyotp.random_base32())
+        reset_token = await temp_db.create_reset_token(user.id)
+        form = _mount_component(
+            ResetPasswordForm,
+            _FakeSession(temp_db),
+            code_sent=True,
+            email=user.email,
+            reset_token=reset_token.token,
+            new_password=username,
+            confirm_password=username,
+            acknowledge_weak_password=True,
+        )
+
+        await ResetPasswordForm._update_password(form)
+
+        assert "account identifier" in form.error_message
+        assert "predictable" in form.error_message
+        assert "2FA" not in form.error_message
+        assert form.acknowledge_weak_password is False
+        assert form.password_strength < config.PASSWORD_STRENGTH_WARNING_THRESHOLD
+        assert (await temp_db.get_user_by_id(user.id)).verify_password(username) is False
+        assert (await temp_db.get_user_by_reset_token(reset_token.token)).id == user.id
+
+    asyncio.run(scenario())
+
+
+def test_public_password_edits_clear_only_policy_banners(
+    temp_db: Persistence,
+):
+    async def scenario():
+        signup = _mount_component(
+            SignUpForm,
+            _FakeSession(temp_db),
+            email="signup-banner@example.com",
+            error_message="This password is too common or predictable.",
+            acknowledge_weak_password=True,
+            password_policy_error_visible=True,
+        )
+        await SignUpForm.update_password(
+            signup,
+            rio.TextInputChangeEvent("ChangedSignupPassword!2026"),
+        )
+        assert signup.error_message == ""
+        assert signup.acknowledge_weak_password is False
+        assert signup.password_policy_error_visible is False
+
+        reset = _mount_component(
+            ResetPasswordForm,
+            _FakeSession(temp_db),
+            code_sent=True,
+            email="reset-banner@example.com",
+            error_message="Check your inbox and enter the token below.",
+            acknowledge_weak_password=True,
+        )
+        await ResetPasswordForm.update_new_password(
+            reset,
+            rio.TextInputChangeEvent("ChangedResetPassword!2026"),
+        )
+        assert reset.error_message == "Check your inbox and enter the token below."
+        assert reset.acknowledge_weak_password is False
+
+        reset.error_message = "This password is too common or predictable."
+        reset.password_policy_error_visible = True
+        await ResetPasswordForm.update_email(
+            reset,
+            rio.TextInputChangeEvent("changed-reset-banner@example.com"),
+        )
+        assert reset.error_message == ""
+        assert reset.password_policy_error_visible is False
+
+    asyncio.run(scenario())
+
+
+def test_public_acknowledgement_handlers_clear_only_policy_banners(
+    temp_db: Persistence,
+):
+    signup = _mount_component(
+        SignUpForm,
+        _FakeSession(temp_db),
+        error_message="Please acknowledge these warnings.",
+        password_policy_error_visible=True,
+    )
+    SignUpForm.on_acknowledge_weak_password_change(
+        signup,
+        rio.SwitchChangeEvent(True),
+    )
+    assert signup.acknowledge_weak_password is True
+    assert signup.error_message == ""
+    assert signup.password_policy_error_visible is False
+
+    signup.error_message = "This email is already registered"
+    SignUpForm.on_acknowledge_weak_password_change(
+        signup,
+        rio.SwitchChangeEvent(True),
+    )
+    assert signup.error_message == "This email is already registered"
+
+    reset = _mount_component(
+        ResetPasswordForm,
+        _FakeSession(temp_db),
+        error_message="Please acknowledge these warnings.",
+        password_policy_error_visible=True,
+    )
+    ResetPasswordForm.on_acknowledge_weak_password_change(
+        reset,
+        rio.SwitchChangeEvent(True),
+    )
+    assert reset.acknowledge_weak_password is True
+    assert reset.error_message == ""
+    assert reset.password_policy_error_visible is False
+
+    reset.error_message = "Invalid or expired reset token."
+    ResetPasswordForm.on_acknowledge_weak_password_change(
+        reset,
+        rio.SwitchChangeEvent(True),
+    )
+    assert reset.error_message == "Invalid or expired reset token."
+
+
+def test_signup_passes_warning_acknowledgement_to_persistence(
+    temp_db: Persistence,
+):
+    async def scenario():
+        await _create_user(temp_db, "existing-root@example.com")
+        form = _mount_component(
+            SignUpForm,
+            _FakeSession(temp_db),
+            email="acknowledged-signup@example.com",
+            password="weak",
+            confirm_password="weak",
+            acknowledge_weak_password=True,
+        )
+
+        await SignUpForm.on_sign_up_pressed(form)
+
+        created = await temp_db.get_user_by_email(
+            "acknowledged-signup@example.com"
+        )
+        assert created.verify_password("weak")
+
+    asyncio.run(scenario())
+
+
+def test_reset_passes_warning_acknowledgement_without_reasking(
+    temp_db: Persistence,
+):
+    async def scenario():
+        user = await _create_user(temp_db, "acknowledged-reset@example.com")
+        reset_token = await temp_db.create_reset_token(user.id)
+        form = _mount_component(
+            ResetPasswordForm,
+            _FakeSession(temp_db),
+            code_sent=True,
+            email=user.email,
+            reset_token=reset_token.token,
+            new_password="weak",
+            confirm_password="weak",
+            acknowledge_weak_password=True,
+        )
+
+        await ResetPasswordForm._update_password(form)
+
+        assert "updated" in form.error_message.lower()
+        assert (await temp_db.get_user_by_id(user.id)).verify_password("weak")
+
+    asyncio.run(scenario())
+
+
+def test_reset_surfaces_transactional_policy_race_message(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        user = await _create_user(
+            temp_db,
+            "reset-policy-race@example.com",
+        )
+        reset_token = await temp_db.create_reset_token(user.id)
+        form = _mount_component(
+            ResetPasswordForm,
+            _FakeSession(temp_db),
+            code_sent=True,
+            email=user.email,
+            reset_token=reset_token.token,
+            new_password="RaceSafePasswordChoice!2026",
+            confirm_password="RaceSafePasswordChoice!2026",
+        )
+        policy_message = (
+            "This password now matches an account identifier. "
+            "Please choose a different password."
+        )
+
+        async def reject_changed_context(*args, **kwargs):
+            raise ValueError(policy_message)
+
+        monkeypatch.setattr(
+            temp_db,
+            "consume_reset_token_and_update_password",
+            reject_changed_context,
+        )
+
+        await ResetPasswordForm._update_password(form)
+
+        assert form.error_message == policy_message
+        assert form.password_policy_error_visible is True
+        assert (await temp_db.get_user_by_reset_token(reset_token.token)).id == user.id
+
+    asyncio.run(scenario())
 
 
 def _reset_token_hashes(persistence: Persistence, user_id) -> list[str]:
@@ -377,7 +678,6 @@ def test_reset_token_rate_limit_blocks_valid_token_after_guessing(temp_db: Persi
             reset_token=reset_token.token,
             new_password="EvenStrongerPass!7",
             confirm_password="EvenStrongerPass!7",
-            acknowledge_weak_password=False,
         )
 
         for _ in range(config.RATE_LIMIT_PASSWORD_RESET_TOKEN_ATTEMPTS):
@@ -433,7 +733,6 @@ def test_password_reset_completion_ip_rate_limit_blocks_varied_tokens(
             email=user.email,
             new_password="EvenStrongerPass!7",
             confirm_password="EvenStrongerPass!7",
-            acknowledge_weak_password=False,
         )
 
         for index in range(config.RATE_LIMIT_PASSWORD_RESET_COMPLETION_IP_ATTEMPTS):
@@ -472,7 +771,6 @@ def test_password_reset_mfa_rate_limit_blocks_valid_code_after_bad_codes(
             new_password="EvenStrongerPass!7",
             confirm_password="EvenStrongerPass!7",
             verification_code="000000",
-            acknowledge_weak_password=False,
         )
 
         for _ in range(config.RATE_LIMIT_MFA_ATTEMPTS):

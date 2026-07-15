@@ -18,6 +18,7 @@ from app.persistence import AdminMutationContext, Persistence
 from app.rate_limits import rate_limit_key, sensitive_action_policy
 from app.scripts import message_utils
 from app.session_validation import StepUpResult
+from app.validation import SecuritySanitizer
 
 
 PASSWORD = "VeryStrongPass!9"
@@ -159,6 +160,7 @@ def _mount_admin(session: _FakeSession, **attributes) -> AdminPage:
     component.create_user_password = ""
     component.create_user_password_strength = 0
     component.create_user_acknowledge_weak_password = False
+    component.create_user_password_policy_error_visible = False
     component.create_user_role = "user"
     component.create_user_is_verified = False
     component.create_user_step_up_password = ""
@@ -432,33 +434,159 @@ def test_admin_permission_error_keeps_a_still_authorized_actor_on_page(
     asyncio.run(scenario())
 
 
-def test_admin_creation_requires_weak_password_acknowledgement_when_allowed(
+def test_admin_creation_requires_and_accepts_warning_acknowledgement(
     temp_db: Persistence,
-    monkeypatch,
 ):
     async def scenario():
-        monkeypatch.setattr(config, "ALLOW_WEAK_PASSWORDS", True)
         root, root_session = await _create_root_session(temp_db)
         page = _mount_admin(
             _FakeSession(temp_db, root_session, root),
-            create_user_email="weak-admin-created@example.com",
+            create_user_email="short-admin-created@example.com",
             create_user_password="weak",
             create_user_role="user",
         )
 
         await AdminPage._on_create_user_pressed(page)
-        assert "acknowledge" in page.create_user_error
+        assert "acknowledge" in page.create_user_error.lower()
         with pytest.raises(KeyError):
-            await temp_db.get_user_by_email("weak-admin-created@example.com")
+            await temp_db.get_user_by_email("short-admin-created@example.com")
 
         page.create_user_acknowledge_weak_password = True
         await AdminPage._on_create_user_pressed(page)
 
-        assert page.create_user_error == ""
-        created = await temp_db.get_user_by_email("weak-admin-created@example.com")
+        created = await temp_db.get_user_by_email(
+            "short-admin-created@example.com"
+        )
         assert created.verify_password("weak")
 
     asyncio.run(scenario())
+
+
+def test_admin_password_edit_clears_stale_policy_error(temp_db: Persistence):
+    page = _mount_admin(
+        _FakeSession(temp_db),
+        create_user_password="weak",
+        create_user_password_strength=10,
+        create_user_acknowledge_weak_password=True,
+        create_user_error="Password is too weak.",
+    )
+
+    AdminPage._on_create_password_change(
+        page,
+        rio.TextInputChangeEvent(PASSWORD),
+    )
+
+    assert page.create_user_password == PASSWORD
+    assert page.create_user_password_strength > 10
+    assert page.create_user_acknowledge_weak_password is False
+    assert page.create_user_error == ""
+
+
+def test_admin_acknowledgement_handler_clears_only_policy_error(
+    temp_db: Persistence,
+):
+    page = _mount_admin(
+        _FakeSession(temp_db),
+        create_user_error="Please acknowledge these warnings.",
+        create_user_password_policy_error_visible=True,
+    )
+
+    AdminPage._on_create_password_acknowledgement_change(
+        page,
+        rio.SwitchChangeEvent(True),
+    )
+    assert page.create_user_acknowledge_weak_password is True
+    assert page.create_user_error == ""
+    assert page.create_user_password_policy_error_visible is False
+
+    page.create_user_error = "You do not have permission to create that role."
+    AdminPage._on_create_password_acknowledgement_change(
+        page,
+        rio.SwitchChangeEvent(True),
+    )
+    assert page.create_user_error == (
+        "You do not have permission to create that role."
+    )
+
+
+def test_admin_password_context_matches_persistence_sanitization(
+    temp_db: Persistence,
+):
+    async def scenario():
+        root, root_session = await _create_root_session(temp_db)
+        raw_username = "<UniqueIdentifierForAdministrator>"
+        sanitized_username = SecuritySanitizer.sanitize_string(raw_username, 100)
+        assert sanitized_username is not None
+        page = _mount_admin(
+            _FakeSession(temp_db, root_session, root),
+            create_user_email="canonical-context@example.com",
+            create_user_username=raw_username,
+            create_user_password=sanitized_username,
+            create_user_role="user",
+        )
+
+        await AdminPage._on_create_user_pressed(page)
+        assert "account identifier" in page.create_user_error
+        assert "acknowledge" in page.create_user_error.lower()
+        with pytest.raises(KeyError):
+            await temp_db.get_user_by_email("canonical-context@example.com")
+
+        AdminPage._on_create_password_acknowledgement_change(
+            page,
+            rio.SwitchChangeEvent(True),
+        )
+        assert page.create_user_error == ""
+
+        await AdminPage._on_create_user_pressed(page)
+        created = await temp_db.get_user_by_email(
+            "canonical-context@example.com"
+        )
+        assert created.username == sanitized_username
+        assert created.verify_password(sanitized_username)
+
+    asyncio.run(scenario())
+
+
+def test_admin_strength_meter_tracks_live_create_identifiers(
+    temp_db: Persistence,
+):
+    password = "admin-meter@example.com"
+    page = _mount_admin(
+        _FakeSession(temp_db),
+        create_user_email="unrelated@example.com",
+    )
+
+    AdminPage._on_create_password_change(
+        page,
+        rio.TextInputChangeEvent(password),
+    )
+    assert page.create_user_password_strength >= (
+        config.PASSWORD_STRENGTH_WARNING_THRESHOLD
+    )
+
+    page.create_user_acknowledge_weak_password = True
+    AdminPage._on_create_email_change(
+        page,
+        rio.TextInputChangeEvent(password),
+    )
+    assert page.create_user_acknowledge_weak_password is False
+    assert page.create_user_password_strength < (
+        config.PASSWORD_STRENGTH_WARNING_THRESHOLD
+    )
+
+    AdminPage._on_create_email_change(
+        page,
+        rio.TextInputChangeEvent("unrelated@example.com"),
+    )
+    page.create_user_acknowledge_weak_password = True
+    AdminPage._on_create_username_change(
+        page,
+        rio.TextInputChangeEvent(password),
+    )
+    assert page.create_user_acknowledge_weak_password is False
+    assert page.create_user_password_strength < (
+        config.PASSWORD_STRENGTH_WARNING_THRESHOLD
+    )
 
 
 def test_admin_page_privileged_creation_requires_actor_step_up(
@@ -776,7 +904,11 @@ def test_authenticated_admin_page_builds_lifecycle_controls(temp_db: Persistence
             username="builduser",
         )
         session = _FakeSession(temp_db, root_session, root)
-        page = _mount_admin(session)
+        page = _mount_admin(
+            session,
+            create_user_email="warning-build@example.com",
+            create_user_password="weak",
+        )
 
         await AdminPage._load_user_data(page)
         previous_component = rio_global_state.currently_building_component
@@ -796,6 +928,37 @@ def test_authenticated_admin_page_builds_lifecycle_controls(temp_db: Persistence
         assert page.df is not None
         assert "Active" in page.df.columns
         assert "build-visible-user@example.com" in set(page.df["Email"])
+        acknowledgement_texts = [
+            component
+            for component in session._newly_created_components
+            if isinstance(component, rio.Text)
+            and component.text.startswith("I understand these warnings")
+        ]
+        assert len(acknowledgement_texts) == 1
+        assert acknowledgement_texts[0].overflow == "wrap"
+        assert acknowledgement_texts[0].grow_x is True
+        acknowledgement_rows = [
+            component
+            for component in session._newly_created_components
+            if isinstance(component, rio.Row)
+            and any(
+                isinstance(child, rio.Column)
+                and any(
+                    isinstance(grandchild, rio.Text)
+                    and grandchild.text.startswith("I understand these warnings")
+                    for grandchild in child.children
+                )
+                for child in component.children
+            )
+        ]
+        assert len(acknowledgement_rows) == 1
+        assert acknowledgement_rows[0].grow_x is True
+        assert any(
+            isinstance(component, rio.Text)
+            and "recommended minimum" in component.text
+            and component.overflow == "wrap"
+            for component in session._newly_created_components
+        )
 
     asyncio.run(scenario())
 

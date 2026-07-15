@@ -10,11 +10,12 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+from fastapi import HTTPException
+
 from app.config import config
-from app.data_models import AppUser
-from app.permissions import get_highest_privilege_role
 from app.persistence import DEFAULT_DB_PATH, Persistence
-from app.password_policy import evaluate_new_password
+from app.password_policy import account_password_context, evaluate_bootstrap_password
+from app.validation import SecuritySanitizer
 
 
 MISSING_CREDENTIALS_EXIT_CODE = 2
@@ -50,13 +51,34 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allow-weak-password",
         action="store_true",
-        help="Allow a password below the configured strength threshold.",
+        help="Acknowledge password quality warnings for the initial root account.",
     )
     return parser
 
 
 def _normalize_value(value: str | None) -> str:
     return (value or "").strip()
+
+
+def _canonical_password_account_context(
+    *,
+    email: str,
+    username: str | None,
+) -> tuple[str, ...]:
+    """Build policy context from the identity persistence will store."""
+    normalized_email = SecuritySanitizer.validate_email_format(
+        email,
+        require_valid=config.REQUIRE_VALID_EMAIL,
+    )
+    sanitized_username = (
+        SecuritySanitizer.sanitize_string(username, 100)
+        if username
+        else None
+    )
+    return account_password_context(
+        email=normalized_email,
+        username=sanitized_username,
+    )
 
 
 def _warn_missing(missing_fields: list[str], *, strict: bool) -> int:
@@ -114,37 +136,54 @@ async def bootstrap_root(args: argparse.Namespace) -> int:
         if not password:
             return _warn_missing(["password"], strict=args.strict)
 
-        password_policy = evaluate_new_password(
-            password,
-            acknowledged_weak=args.allow_weak_password,
-            allow_weak=args.allow_weak_password,
-        )
-        if not password_policy.ok:
-            print(
-                "ERROR: Root password is too weak. Choose a stronger password "
-                f"(minimum strength: {config.MIN_PASSWORD_STRENGTH}) or pass "
-                "--allow-weak-password for a controlled local/test bootstrap.",
-                file=sys.stderr,
-            )
-            return MISSING_CREDENTIALS_EXIT_CODE
-
         email_for_storage = email or username
         if not email_for_storage:
             return _warn_missing(["email or username"], strict=args.strict)
-
-        user = AppUser.create_new_user_with_default_settings(
-            email=email_for_storage,
-            password=password,
-            username=username or None,
-        )
-        user.role = get_highest_privilege_role()
-        user.is_verified = True
 
         original_require_valid_email = config.REQUIRE_VALID_EMAIL
         if not email:
             config.REQUIRE_VALID_EMAIL = False
         try:
-            created = await pers.create_verified_root_user_if_empty(user)
+            try:
+                expected_passwords = _canonical_password_account_context(
+                    email=email_for_storage,
+                    username=username or None,
+                )
+            except HTTPException as exc:
+                print(f"ERROR: {exc.detail}", file=sys.stderr)
+                return MISSING_CREDENTIALS_EXIT_CODE
+
+            password_policy = evaluate_bootstrap_password(
+                password,
+                allow_insecure_password=args.allow_weak_password,
+                expected_passwords=expected_passwords,
+            )
+            if not password_policy.ok:
+                acknowledgement_hint = (
+                    " or pass --allow-weak-password to acknowledge them"
+                    if not args.allow_weak_password
+                    else ""
+                )
+                print(
+                    f"ERROR: {password_policy.message or 'Root password is not allowed.'} "
+                    f"Choose a password without warnings{acknowledgement_hint}.",
+                    file=sys.stderr,
+                )
+                return MISSING_CREDENTIALS_EXIT_CODE
+
+            try:
+                created = await pers.create_verified_root_user_if_empty(
+                    email=email_for_storage,
+                    password=password,
+                    username=username or None,
+                    allow_insecure_password=args.allow_weak_password,
+                )
+            except (HTTPException, ValueError) as exc:
+                print(
+                    f"ERROR: {getattr(exc, 'detail', exc)}",
+                    file=sys.stderr,
+                )
+                return MISSING_CREDENTIALS_EXIT_CODE
         finally:
             config.REQUIRE_VALID_EMAIL = original_require_valid_email
     finally:

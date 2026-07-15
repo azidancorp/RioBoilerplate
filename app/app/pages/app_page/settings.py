@@ -7,9 +7,14 @@ from urllib.parse import urlencode
 import rio
 from fastapi import HTTPException
 from app.config import config
-from app.password_policy import evaluate_new_password
+from app.password_policy import account_password_context, evaluate_new_password
 from app.persistence import Persistence
-from app.persistence_auth import TwoFactorFailure
+from app.persistence_auth import (
+    PasswordChangeCurrentPasswordError,
+    PasswordChangeSessionInvalidError,
+    TwoFactorFailure,
+    TwoFactorStateConflict,
+)
 from app.data_models import RecoveryCodeUsage
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
@@ -18,6 +23,8 @@ from app.components.center_component import CenterComponent
 from app.components.currency_summary import CurrencySummary, CurrencyOverview as CurrencySnapshot
 from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
 from app.scripts.utils import (
+    build_password_warning_acknowledgement,
+    get_password_policy_decision,
     get_password_strength,
     get_password_strength_color,
     get_password_strength_status,
@@ -89,6 +96,7 @@ class Settings(ResponsiveComponent):
     profile_display_name: str = ""
     profile_bio: str = ""
     account_email: str = ""
+    account_username: str = ""
     account_auth_provider: str = "password"
 
     # Password change fields
@@ -101,6 +109,7 @@ class Settings(ResponsiveComponent):
     change_password_new_password_strength: int = 0
     change_password_passwords_match: bool = False
     change_password_acknowledge_weak_password: bool = False
+    change_password_policy_error_visible: bool = False
 
     # Account deletion fields
     delete_account_password: str = ""
@@ -148,6 +157,7 @@ class Settings(ResponsiveComponent):
         self.email_notifications_enabled = user.email_notifications_enabled
         self.sms_notifications_enabled = user.sms_notifications_enabled
         self.account_email = user.email
+        self.account_username = user.username or ""
         self.account_auth_provider = user.auth_provider
         self.currency_overview = CurrencySnapshot(
             balance_minor=user.primary_currency_balance,
@@ -250,11 +260,16 @@ class Settings(ResponsiveComponent):
 
     async def on_change_new_password(self, event: rio.TextInputChangeEvent):
         self.change_password_new_password = event.text
-        self.change_password_new_password_strength = get_password_strength(self.change_password_new_password)
+        self.change_password_acknowledge_weak_password = False
+        self.change_password_policy_error_visible = False
+        self.change_password_new_password_strength = get_password_strength(
+            self.change_password_new_password,
+            expected_passwords=self._change_password_expected_values(),
+        )
         self.change_password_passwords_match = (
             self.change_password_new_password == self.change_password_confirm_password
         )
-        self.change_password_acknowledge_weak_password = False
+        self.error_message = ""
         self.force_refresh()
 
     async def on_change_confirm_password(self, event: rio.TextInputChangeEvent):
@@ -263,6 +278,22 @@ class Settings(ResponsiveComponent):
             self.change_password_new_password == self.change_password_confirm_password
         )
         self.force_refresh()
+
+    def on_change_password_acknowledgement(
+        self,
+        event: rio.SwitchChangeEvent,
+    ) -> None:
+        self.change_password_acknowledge_weak_password = event.is_on
+        if event.is_on and self.change_password_policy_error_visible:
+            self.error_message = ""
+            self.change_password_policy_error_visible = False
+        self.force_refresh()
+
+    def _change_password_expected_values(self) -> tuple[str, ...]:
+        return account_password_context(
+            email=self.account_email,
+            username=self.account_username or None,
+        )
 
     def new_password_strength_progress(self) -> rio.Component:
         return rio.ProgressBar(
@@ -280,6 +311,7 @@ class Settings(ResponsiveComponent):
 
     async def _on_confirm_password_change_pressed(self) -> None:
         """Handle the password change process."""
+        self.change_password_policy_error_visible = False
         fresh_session = require_fresh_user_session(self.session)
         if fresh_session is None:
             return
@@ -299,14 +331,40 @@ class Settings(ResponsiveComponent):
                 self.error_message = "New passwords do not match"
                 return
 
+            previous_password_policy = get_password_policy_decision(
+                self.change_password_new_password,
+                expected_passwords=self._change_password_expected_values(),
+            )
+            self.account_email = user.email
+            self.account_username = user.username or ""
+            current_password_policy = get_password_policy_decision(
+                self.change_password_new_password,
+                expected_passwords=self._change_password_expected_values(),
+            )
+            self.change_password_new_password_strength = (
+                current_password_policy.strength
+            )
+            previous_warning_codes = {
+                warning.code for warning in previous_password_policy.warnings
+            }
+            current_warning_codes = {
+                warning.code for warning in current_password_policy.warnings
+            }
+            if current_warning_codes - previous_warning_codes:
+                self.change_password_acknowledge_weak_password = False
+
             password_policy = evaluate_new_password(
                 self.change_password_new_password,
-                acknowledged_weak=self.change_password_acknowledge_weak_password,
+                acknowledged_weak=(
+                    self.change_password_acknowledge_weak_password
+                ),
+                expected_passwords=self._change_password_expected_values(),
             )
             if not password_policy.ok:
                 self.error_message = (
                     password_policy.message or "Password is not allowed."
                 )
+                self.change_password_policy_error_visible = True
                 return
 
             decision = self._sensitive_action_limited(
@@ -320,41 +378,37 @@ class Settings(ResponsiveComponent):
                 )
                 return
                 
-            # Verify current password
-            if not user.verify_password(self.change_password_current_password):
-                self.error_message = "Current password is incorrect"
-                return
-                
-            # Validate and sanitize 2FA code if provided
-            if user.two_factor_enabled:
-                result = persistence.verify_two_factor_challenge(
-                    user_session.user_id,
-                    self.change_password_2fa,
-                )
-                if not result.ok:
-                    if result.failure == TwoFactorFailure.MISSING_CODE:
-                        self.error_message = "2FA code is required"
-                        return
-                    self.error_message = "Invalid 2FA or recovery code."
-                    return
-
-                if result.used_recovery_code:
-                    try:
-                        usage = self.session[RecoveryCodeUsage]
-                    except KeyError:
-                        usage = RecoveryCodeUsage()
-                        self.session.attach(usage)
-                    usage.used_in_settings = True
-                    self.recovery_code_notice = "A recovery code was used. Generate a new set to stay protected."
-
-                self.change_password_2fa = ""
-            
-            # Update the password
-            await persistence.update_password(
-                user_session.user_id,
-                self.change_password_new_password,
-                acknowledged_weak=self.change_password_acknowledge_weak_password,
+            result = await persistence.change_password_for_session(
+                auth_token=user_session.id,
+                current_password=self.change_password_current_password,
+                new_password=self.change_password_new_password,
+                two_factor_code=self.change_password_2fa,
+                acknowledged_weak=(
+                    self.change_password_acknowledge_weak_password
+                ),
             )
+            if not result.ok:
+                if result.failure == TwoFactorFailure.MISSING_CODE:
+                    self.error_message = "2FA code is required"
+                    return
+                self.error_message = "Invalid 2FA or recovery code."
+                return
+
+            # The transaction deleted every bearer session. Detach the mounted
+            # credentials immediately so a later UI-only cleanup failure cannot
+            # leave this page presenting a stale authenticated state.
+            reject_stale_user_session(self.session)
+
+            if result.used_recovery_code:
+                try:
+                    usage = self.session[RecoveryCodeUsage]
+                except KeyError:
+                    usage = RecoveryCodeUsage()
+                    self.session.attach(usage)
+                usage.used_in_settings = True
+                self.recovery_code_notice = (
+                    "A recovery code was used. Generate a new set to stay protected."
+                )
             
             # Clear the form
             self.change_password_current_password = ""
@@ -364,13 +418,24 @@ class Settings(ResponsiveComponent):
             self.change_password_new_password_strength = 0
             self.change_password_passwords_match = False
             self.change_password_acknowledge_weak_password = False
+            self.change_password_policy_error_visible = False
             self.error_message = ""
             persistence.clear_rate_limit(
                 scope=sensitive_action_policy("settings_password_change").scope,
                 key=rate_limit_key("settings_password_change", user_session.user_id),
             )
+
+        except PasswordChangeSessionInvalidError:
             reject_stale_user_session(self.session)
-            
+        except PasswordChangeCurrentPasswordError:
+            self.error_message = "Current password is incorrect"
+        except TwoFactorStateConflict:
+            self.error_message = (
+                "Two-factor authentication changed. Please try again."
+            )
+        except ValueError as e:
+            self.error_message = str(e)
+            self.change_password_policy_error_visible = True
         except Exception as e:
             self.error_message = f"Failed to update password: {str(e)}"
 
@@ -548,6 +613,10 @@ class Settings(ResponsiveComponent):
         reject_stale_user_session(self.session)
 
     def build(self) -> rio.Component:
+        change_password_policy = get_password_policy_decision(
+            self.change_password_new_password,
+            expected_passwords=self._change_password_expected_values(),
+        )
         delete_account_inputs: list[rio.Component] = []
         if self.account_auth_provider == "google":
             delete_account_inputs.append(
@@ -760,34 +829,16 @@ class Settings(ResponsiveComponent):
                         self.new_password_strength_progress(),
                         *(
                             [
-                                rio.Row(
-                                    rio.Switch(
-                                        is_on=self.bind().change_password_acknowledge_weak_password,
-                                    ),
-                                    rio.Text(
-                                        "I acknowledge my password is weak",
-                                        style=rio.TextStyle(
-                                            fill=rio.Color.from_rgb(
-                                                1,
-                                                0.6,
-                                                0,
-                                                srgb=True,
-                                            ),
-                                        ),
-                                    ),
-                                    spacing=1,
-                                    align_x=0,
+                                build_password_warning_acknowledgement(
+                                    change_password_policy,
+                                    is_on=self.bind().change_password_acknowledge_weak_password,
+                                    on_change=self.on_change_password_acknowledgement,
                                 )
                             ]
-                            if (
-                                config.ALLOW_WEAK_PASSWORDS
-                                and self.change_password_new_password
-                                and self.change_password_new_password_strength
-                                < config.MIN_PASSWORD_STRENGTH
-                            )
+                            if self.change_password_new_password
+                            and change_password_policy.requires_acknowledgement
                             else []
                         ),
-
                         rio.Link(
                             rio.Button(
                                 "Disable Two-Factor Authentication" if self.two_factor_enabled else "Enable Two-Factor Authentication",

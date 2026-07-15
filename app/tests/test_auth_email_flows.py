@@ -22,8 +22,15 @@ def temp_db(tmp_path: Path):
         persistence.close()
 
 
-async def _create_user(persistence: Persistence, email: str, password: str = "password") -> AppUser:
+async def _create_user(
+    persistence: Persistence,
+    email: str,
+    password: str = "password",
+    *,
+    username: str | None = None,
+) -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
+    user.username = username
     await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 
@@ -171,7 +178,7 @@ def test_password_reset_token_is_hashed_and_single_use(temp_db: Persistence):
         assert await temp_db.consume_reset_token_and_update_password(
             reset_token.token,
             user.id,
-            "new-password",
+            "NewPasswordChoice!2026",
         ) is True
         assert await temp_db.consume_reset_token_and_update_password(
             reset_token.token,
@@ -180,7 +187,7 @@ def test_password_reset_token_is_hashed_and_single_use(temp_db: Persistence):
         ) is False
 
         refreshed_user = await temp_db.get_user_by_id(user.id)
-        assert refreshed_user.verify_password("new-password")
+        assert refreshed_user.verify_password("NewPasswordChoice!2026")
         assert not refreshed_user.verify_password("password")
 
     asyncio.run(scenario())
@@ -210,7 +217,11 @@ def test_expired_verification_token_is_rejected(temp_db: Persistence):
 
 def test_reset_link_prefills_two_factor_requirement(temp_db: Persistence):
     async def scenario():
-        user = await _create_user(temp_db, "reset-2fa@example.com")
+        user = await _create_user(
+            temp_db,
+            "reset-2fa@example.com",
+            username="reset-link-username",
+        )
         temp_db.set_2fa_secret(user.id, "ABCDEFGHIJKLMNOPQRSTUVWX23456789")
         reset_token = await temp_db.create_reset_token(user.id)
 
@@ -225,6 +236,7 @@ def test_reset_link_prefills_two_factor_requirement(temp_db: Persistence):
         page.page_message = ""
         page.page_message_style = "success"
         page.reset_prefilled_email = ""
+        page.reset_prefilled_username = ""
         page.reset_prefilled_token = ""
         page.reset_prefilled_message = ""
         page.reset_prefilled_message_style = "success"
@@ -234,6 +246,7 @@ def test_reset_link_prefills_two_factor_requirement(temp_db: Persistence):
 
         assert page.current_form == "reset"
         assert page.reset_prefilled_email == "reset-2fa@example.com"
+        assert page.reset_prefilled_username == "reset-link-username"
         assert page.reset_prefilled_token == reset_token.token
         assert page.reset_prefilled_require_two_factor is True
         assert page.reset_prefilled_message == "Reset link received. Enter your new password below."
@@ -254,6 +267,7 @@ def test_invalid_reset_link_shows_expired_message(temp_db: Persistence):
         page.page_message = ""
         page.page_message_style = "success"
         page.reset_prefilled_email = ""
+        page.reset_prefilled_username = ""
         page.reset_prefilled_token = ""
         page.reset_prefilled_message = ""
         page.reset_prefilled_message_style = "success"
@@ -263,6 +277,7 @@ def test_invalid_reset_link_shows_expired_message(temp_db: Persistence):
 
         assert page.current_form == "reset"
         assert page.reset_prefilled_email == ""
+        assert page.reset_prefilled_username == ""
         assert page.reset_prefilled_token == ""
         assert page.reset_prefilled_require_two_factor is False
         assert page.reset_prefilled_message == (
@@ -286,6 +301,7 @@ def test_malformed_reset_link_shows_invalid_message(temp_db: Persistence):
         page.page_message = ""
         page.page_message_style = "success"
         page.reset_prefilled_email = ""
+        page.reset_prefilled_username = ""
         page.reset_prefilled_token = ""
         page.reset_prefilled_message = ""
         page.reset_prefilled_message_style = "success"
@@ -297,6 +313,7 @@ def test_malformed_reset_link_shows_invalid_message(temp_db: Persistence):
         assert page.page_message == "Reset link is invalid. Request a new password reset email."
         assert page.page_message_style == "danger"
         assert page.reset_prefilled_email == ""
+        assert page.reset_prefilled_username == ""
         assert page.reset_prefilled_token == ""
         assert page.reset_prefilled_require_two_factor is False
 

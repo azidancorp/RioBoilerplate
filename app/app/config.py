@@ -83,9 +83,12 @@ class AppConfig:
 
     # Password Policy
     # ---------------
-    MIN_PASSWORD_STRENGTH: int = 50
-    # If True, allows weak passwords with user acknowledgement.
-    # If False, prohibits signups with weak passwords entirely.
+    # Password analysis is advisory by default: warned passwords require an
+    # explicit acknowledgement but are still permitted. Deployments can opt
+    # into hard rejection by setting ALLOW_WEAK_PASSWORDS to False.
+    MIN_PASSWORD_LENGTH: int = 15
+    MAX_PASSWORD_LENGTH: int = 1024
+    PASSWORD_STRENGTH_WARNING_THRESHOLD: int = 50
     ALLOW_WEAK_PASSWORDS: bool = True
     # Recovery codes currently use a very long TTL to behave like "backup codes"
     # while still supporting explicit expiry checks in persistence.

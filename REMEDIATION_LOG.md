@@ -51,7 +51,7 @@ decision not to change it.
 | Profile read hierarchy | Admin profile reads can expose root/peer private data outside the role hierarchy. | done — `Apply role hierarchy to profile reads` |
 | Profile mutations | Cross-user profile edits do not consistently enforce the live role hierarchy inside the write transaction. | done — `Authorize profile writes atomically` |
 | Session lifetime | API bearer authentication accepts a session beyond its absolute maximum lifetime. | done — `Enforce absolute session lifetime everywhere` |
-| Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | done — `Apply one password policy to every flow` |
+| Password policy | Signup, reset, settings, and admin-created passwords enforce different rules. | done — `Apply one password policy to every flow`; `Extend shared password warnings` |
 | OAuth account deletion | An OAuth-only user cannot complete self-service account deletion. | done — `Enable safe OAuth account deletion` |
 | Browser token storage | The bearer token is exposed to normal browser-side code instead of using Rio's HTTP-only storage marker. | done — `Store browser sessions in HTTP-only cookies` |
 | OAuth handoffs | A deactivation race can leave a handoff usable after an account is reactivated. | done — `Serialize OAuth handoffs with account status` |
@@ -134,22 +134,70 @@ decision not to change it.
 
 ### 2026-07-11 — One password policy across every flow
 
+- Historical note: this first centralized pass used a score/acknowledgement
+  model. `Extend shared password warnings` preserves that consent model while
+  adding richer advisory analysis.
 - Added one policy decision function for signup, password reset, settings
   changes, administrator-created accounts, and root bootstrap.
-- `ALLOW_WEAK_PASSWORDS=False` now means acknowledgement can never override the
-  configured minimum. When weak passwords are enabled, every user-facing flow
-  requires an explicit acknowledgement; empty passwords are always rejected.
+- The policy uses `ALLOW_WEAK_PASSWORDS` and explicit acknowledgement. The later
+  extension adds length, blocklist, account-context, Unicode, and predictability
+  warnings without turning them into restrictions in the default configuration.
 - Enforced the same rule again at the persistence boundary for normal password
   changes, reset-token completion, and admin creation, preventing a caller from
   bypassing the UI. Rejected attempts leave hashes, sessions, and reset tokens
   untouched.
 - Added matching strength/acknowledgement controls to Settings and Admin, and
-  retained the existing signup/reset visuals.
+  retained the existing signup/reset visuals. The later extension makes those
+  controls explain every warning rather than only a low heuristic score.
 - Verification: 114 focused tests passed across password policy, hashing,
   reset-token lifecycle, signup/bootstrap, mounted settings, admin lifecycle,
   and public rate-limit flows. The 16 page-smoke tests passed, and a live Rio
   dev boot returned the login page plus the expected protected redirects for
   Settings and Admin.
+
+### 2026-07-15 — Extend shared password warnings
+
+- Extended the shared analysis beyond the heuristic score: recommended minimum
+  and maximum lengths, a pinned 19,640-entry common-password corpus, service and
+  account identifiers, predictable derivatives, repeated/sequential patterns,
+  surrounding whitespace, control characters, and invisible Unicode now produce
+  specific warnings.
+- Preserved user choice. With the shipped `ALLOW_WEAK_PASSWORDS = True`, every
+  non-empty, technically hashable password remains usable after one explicit
+  acknowledgement, regardless of score, length, blocklist result, or warning
+  count. Setting the flag to `False` is an operator-controlled strict mode.
+- Kept quality analysis bounded at 1,024 characters without making that a storage
+  limit: longer values receive a warning, skip deeper analysis, and are hashed in
+  full after acknowledgement.
+- Normalized new Unicode password hashes with NFC. Verification retains a
+  migration-safe fallback for older Argon2id and PBKDF2 hashes created from raw
+  non-NFC input and marks those hashes for upgrade after successful login.
+- Added plaintext, acknowledgement-enforcing persistence boundaries for signup
+  and root bootstrap. Password reset completion now reloads live email, username,
+  active state, provider, and token state under SQLite's writer lock before
+  changing the hash; unacknowledged attempts preserve sessions and reset tokens,
+  while acknowledged warnings proceed through the same safe transaction.
+- Bound self-service password changes to the live bearer and exact verified
+  credential state. Settings now revalidates the session, password, live MFA
+  factor, and account context under one writer transaction; recovery-code use,
+  the new hash, reset-token deletion, and all-session revocation commit or roll
+  back together.
+- Restored acknowledgement controls in every flow, changed Admin's wording from
+  `Temporary Password` to `Initial Password`, made live warnings account-context
+  aware, cleared stale acknowledgements/messages on edit, and wrapped the warning
+  content safely at mobile widths.
+- Added regressions proving every warning category is advisory by default,
+  acknowledgement is required and honored consistently, opt-in strict mode still
+  works, Unicode hash migration remains compatible, stale in-flight Settings
+  requests cannot overwrite a winning password change, live MFA drift fails
+  closed, and recovery-code use rolls back with a failed password transaction.
+- Verification: the complete repository suite passed with **497 tests**; Ruff
+  reported no errors, `pip check` reported no broken requirements, and
+  `git diff --check` passed. Fresh isolated development and release boots both
+  returned `200` for Home/Login and the expected unauthenticated `307` redirects
+  for Settings/Admin. A live 375 px browser pass exercised the warning text and
+  acknowledgement switch, exposed an overly narrow intrinsic warning row, and
+  led to the shared full-width row plus its constructor regression.
 
 ### 2026-07-11 — Auth transaction ownership
 

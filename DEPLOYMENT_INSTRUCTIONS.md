@@ -259,6 +259,11 @@ command exits successfully without changing anything.
 
 This CLI is the only supported initial-root creation path. Password signup and OAuth account creation are blocked while the database is empty. Run it before anything else creates users; it deliberately refuses to modify a database that already contains accounts.
 
+`--allow-weak-password` records the same explicit warning acknowledgement used
+by signup, reset, Settings, and Admin. Without it, a root password that triggers
+one or more quality warnings is not created. It does not override an operator-set
+`ALLOW_WEAK_PASSWORDS = False`.
+
 ## Step 3.7: Production Hardening Checklist
 
 The boilerplate ships with developer-friendly defaults that are convenient for local work but **must be reviewed before public exposure**. These are non-secret behavior flags, so they live in `app/app/config.py` — edit that file directly. Review each one:
@@ -267,7 +272,10 @@ The boilerplate ships with developer-friendly defaults that are convenient for l
 | --- | --- | --- |
 | `OAUTH_COOKIE_SECURE` | `False` | `True` — required so the OAuth state/nonce cookie is only sent over HTTPS, which production serves. |
 | `REQUIRE_EMAIL_VERIFICATION` | `False` | Decide deliberately. Set `True` to require verified email before login (requires working SMTP from Step 3.5). |
-| `ALLOW_WEAK_PASSWORDS` | `True` | `False` to reject weak passwords outright instead of allowing them with acknowledgement. |
+| `ALLOW_WEAK_PASSWORDS` | `True` | `True` warns and requires acknowledgement but preserves user choice. Set `False` only if this deployment deliberately wants every quality warning to become a hard rejection. |
+| `MIN_PASSWORD_LENGTH` | `15` | Advisory minimum. Shorter non-empty passwords show a warning and remain usable after acknowledgement while `ALLOW_WEAK_PASSWORDS` is `True`. |
+| `MAX_PASSWORD_LENGTH` | `1024` | Advisory analysis limit. Longer passwords skip deeper quality analysis, show a warning, and are still hashed in full after acknowledgement. |
+| `PASSWORD_STRENGTH_WARNING_THRESHOLD` | `50` | Scores below this value add a warning and require acknowledgement; the score is not independently an authorization rule. |
 | `RATE_LIMIT_TRUST_PROXY_HEADERS` | `False` | `True` **only** when behind the trusted reverse proxy configured in Step 6, so per-IP rate limits use the real client IP. See the rate-limiting note later in this guide. |
 | `SESSION_ABSOLUTE_MAX_DAYS` | `30` | Absolute session lifetime ceiling. Lower it for stricter re-auth cadence, or set `0` to disable the cap. |
 

@@ -13,7 +13,11 @@ from app.data_models import (
     CurrencyLedgerEntry,
 )
 from app.validation import SecuritySanitizer
-from app.password_policy import require_new_password
+from app.password_policy import (
+    account_password_context,
+    require_bootstrap_password,
+    require_new_password,
+)
 from app.config import config
 from app.permissions import (
     can_manage_role,
@@ -36,6 +40,12 @@ from app.persistence_schema import initialize_schema
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "app.db"
 TwoFactorStateConflict = persistence_auth.TwoFactorStateConflict
+PasswordChangeSessionInvalidError = (
+    persistence_auth.PasswordChangeSessionInvalidError
+)
+PasswordChangeCurrentPasswordError = (
+    persistence_auth.PasswordChangeCurrentPasswordError
+)
 CurrencyIdempotencyConflictError = (
     persistence_currency.CurrencyIdempotencyConflictError
 )
@@ -561,8 +571,56 @@ class Persistence:
         )
 
     # Spans users + profiles + currency ledger; must stay transactional.
+    async def create_password_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        username: str | None = None,
+        referral_code: str = "",
+        acknowledged_weak: bool = False,
+    ) -> AppUser:
+        """Register a password user, requiring acknowledgement of policy warnings."""
+        normalized_email = SecuritySanitizer.validate_email_format(
+            email,
+            require_valid=config.REQUIRE_VALID_EMAIL,
+        )
+        sanitized_username = (
+            SecuritySanitizer.sanitize_string(username, 100)
+            if username
+            else None
+        )
+        require_new_password(
+            password,
+            acknowledged_weak=acknowledged_weak,
+            expected_passwords=account_password_context(
+                email=normalized_email,
+                username=sanitized_username,
+            ),
+        )
+        user = AppUser.create_new_user_with_default_settings(
+            email=normalized_email,
+            password=password,
+            username=sanitized_username,
+            referral_code=referral_code,
+        )
+        await self._create_user_transaction(
+            user,
+            assigned_role=get_default_role(),
+            require_existing_user=True,
+        )
+        return user
+
     async def create_user(self, user: AppUser) -> None:
-        """Register a default-role user after operator bootstrap has completed."""
+        """Register an external-auth user after operator bootstrap is complete."""
+        if user.auth_provider == "password":
+            raise ValueError(
+                "Password users must be created with create_password_user()."
+            )
+        if user.password_hash is not None or user.password_salt is not None:
+            raise ValueError(
+                "External-auth users must not include password credentials."
+            )
         await self._create_user_transaction(
             user,
             assigned_role=get_default_role(),
@@ -581,16 +639,11 @@ class Persistence:
         is_verified: bool = False,
         acknowledged_weak: bool = False,
     ) -> AppUser:
-        """Create a user from the authenticated admin surface."""
+        """Create a user from Admin, requiring acknowledgement of policy warnings."""
         if not validate_role(role):
             raise ValueError(
                 f"Invalid role: {role}. Must be one of: {', '.join(get_all_roles())}"
             )
-
-        require_new_password(
-            password,
-            acknowledged_weak=acknowledged_weak,
-        )
 
         normalized_email = SecuritySanitizer.validate_email_format(
             email,
@@ -605,6 +658,14 @@ class Persistence:
             SecuritySanitizer.sanitize_string(full_name, 100)
             if full_name
             else None
+        )
+        require_new_password(
+            password,
+            acknowledged_weak=acknowledged_weak,
+            expected_passwords=account_password_context(
+                email=normalized_email,
+                username=sanitized_username,
+            ),
         )
 
         user = AppUser.create_new_user_with_default_settings(
@@ -984,11 +1045,41 @@ class Persistence:
                 conn.rollback()
             raise
 
-    async def create_verified_root_user_if_empty(self, user: AppUser) -> bool:
-        """Create a verified root user only if the users table is still empty."""
-        user.email = SecuritySanitizer.validate_email_format(
-            user.email,
+    async def create_verified_root_user_if_empty(
+        self,
+        *,
+        email: str,
+        password: str,
+        username: str | None = None,
+        allow_insecure_password: bool = False,
+    ) -> bool:
+        """Create the initial root from plaintext credentials, if no user exists.
+
+        ``allow_insecure_password`` is retained for CLI compatibility and acts
+        only as acknowledgement of policy warnings. It does not override an
+        operator-configured strict password policy.
+        """
+        normalized_email = SecuritySanitizer.validate_email_format(
+            email,
             require_valid=config.REQUIRE_VALID_EMAIL,
+        )
+        sanitized_username = (
+            SecuritySanitizer.sanitize_string(username, 100)
+            if username
+            else None
+        )
+        require_bootstrap_password(
+            password,
+            allow_insecure_password=allow_insecure_password,
+            expected_passwords=account_password_context(
+                email=normalized_email,
+                username=sanitized_username,
+            ),
+        )
+        user = AppUser.create_new_user_with_default_settings(
+            email=normalized_email,
+            password=password,
+            username=sanitized_username,
         )
 
         self._ensure_connection()
@@ -1482,6 +1573,24 @@ class Persistence:
             self,
             user_id,
             new_password,
+            acknowledged_weak=acknowledged_weak,
+        )
+
+    async def change_password_for_session(
+        self,
+        *,
+        auth_token: str,
+        current_password: str,
+        new_password: str,
+        two_factor_code: str | None = None,
+        acknowledged_weak: bool = False,
+    ) -> persistence_auth.TwoFactorChallengeResult:
+        return await persistence_auth.change_password_for_session(
+            self,
+            auth_token=auth_token,
+            current_password=current_password,
+            new_password=new_password,
+            two_factor_code=two_factor_code,
             acknowledged_weak=acknowledged_weak,
         )
 

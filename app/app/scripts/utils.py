@@ -1,7 +1,9 @@
 import os
+from collections.abc import Iterable
+
 import rio
 
-from app.passwords import get_password_strength as _get_password_strength
+from app.password_policy import PasswordPolicyDecision, evaluate_new_password
 
 
 def load_markdown(filename: str) -> str:
@@ -38,9 +40,81 @@ def load_markdown(filename: str) -> str:
         return "# Content Unavailable\n\nThe requested page could not be found."
 
 
-def get_password_strength(password: str) -> int:
+def get_password_policy_decision(
+    password: str,
+    *,
+    expected_passwords: Iterable[str] = (),
+) -> PasswordPolicyDecision:
+    """Return the unacknowledged policy result used by live password UI."""
+    return evaluate_new_password(
+        password,
+        expected_passwords=expected_passwords,
+    )
+
+
+def get_password_strength(
+    password: str,
+    *,
+    expected_passwords: Iterable[str] = (),
+) -> int:
     """Compatibility wrapper around the core password-policy score."""
-    return _get_password_strength(password)
+    return get_password_policy_decision(
+        password,
+        expected_passwords=expected_passwords,
+    ).strength
+
+
+def build_password_warning_acknowledgement(
+    decision: PasswordPolicyDecision,
+    *,
+    is_on,
+    on_change=None,
+) -> rio.Component:
+    """Render policy warnings and their explicit, narrow-safe acknowledgement."""
+    warning_style = rio.TextStyle(
+        fill=rio.Color.from_rgb(1, 0.6, 0, srgb=True),
+    )
+    warning_texts = [
+        rio.Text(
+            warning.message,
+            style=warning_style,
+            overflow="wrap",
+            grow_x=True,
+        )
+        for warning in decision.warnings
+    ]
+    if not warning_texts and decision.message:
+        warning_texts.append(
+            rio.Text(
+                decision.message,
+                style=warning_style,
+                overflow="wrap",
+                grow_x=True,
+            )
+        )
+
+    return rio.Row(
+        rio.Switch(
+            is_on=is_on,
+            on_change=on_change,
+            align_y=0,
+        ),
+        rio.Column(
+            *warning_texts,
+            rio.Text(
+                "I understand these warnings and want to use this password.",
+                style=warning_style,
+                overflow="wrap",
+                grow_x=True,
+            ),
+            spacing=0.5,
+            grow_x=True,
+        ),
+        spacing=1,
+        align_x=0,
+        grow_x=True,
+    )
+
 
 def get_password_strength_color(score: int) -> rio.Color:
     """

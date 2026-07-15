@@ -6,11 +6,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pyotp
 import pytest
 
+import app.persistence_auth as persistence_auth
 from app.data_models import AppUser
 from app.persistence import Persistence, _reset_initialized_db_paths
-import app.persistence_auth as persistence_auth
 
 
 PASSWORD = "OldStrongPass!123"
@@ -99,6 +100,299 @@ def test_normal_password_change_invalidates_reset_token_and_cannot_be_overwritte
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("operation", ["update", "reset"])
+def test_password_mutations_accept_acknowledged_live_context_warning(
+    tmp_path: Path,
+    operation: str,
+):
+    async def scenario() -> None:
+        persistence = Persistence(
+            db_path=tmp_path / f"acknowledged-live-context-{operation}.db"
+        )
+        password = "Context.Account-2026@example.com"
+        try:
+            user = await _create_password_user(persistence, password)
+            session = await persistence.create_session(user.id)
+            reset_token = await persistence.create_reset_token(user.id)
+
+            with pytest.raises(ValueError, match="acknowledge"):
+                if operation == "update":
+                    await persistence.update_password(user.id, password)
+                else:
+                    await persistence.consume_reset_token_and_update_password(
+                        reset_token.token,
+                        user.id,
+                        password,
+                    )
+
+            unchanged = await persistence.get_user_by_id(user.id)
+            assert unchanged.verify_password(PASSWORD)
+            assert not unchanged.verify_password(password)
+            assert (
+                await persistence.get_session_by_auth_token(session.id)
+            ).user_id == user.id
+            assert _reset_token_count(persistence, user.id) == 1
+
+            if operation == "update":
+                await persistence.update_password(
+                    user.id,
+                    password,
+                    acknowledged_weak=True,
+                )
+            else:
+                assert await persistence.consume_reset_token_and_update_password(
+                    reset_token.token,
+                    user.id,
+                    password,
+                    acknowledged_weak=True,
+                )
+
+            updated = await persistence.get_user_by_id(user.id)
+            assert updated.verify_password(password)
+            assert not updated.verify_password(PASSWORD)
+            with pytest.raises(KeyError):
+                await persistence.get_session_by_auth_token(session.id)
+            assert _reset_token_count(persistence, user.id) == 0
+        finally:
+            persistence.close()
+
+    asyncio.run(scenario())
+
+
+def test_missing_reset_token_and_user_returns_false_without_hashing(
+    tmp_path: Path,
+    monkeypatch,
+):
+    persistence = Persistence(db_path=tmp_path / "missing-reset-token.db")
+
+    def fail_if_hashed(_password: str):
+        raise AssertionError("A missing reset token must not trigger Argon2")
+
+    monkeypatch.setattr(
+        persistence_auth.password_utils,
+        "hash_password",
+        fail_if_hashed,
+    )
+    try:
+        assert asyncio.run(
+            persistence.consume_reset_token_and_update_password(
+                "A" * 32,
+                uuid.uuid4(),
+                NEW_PASSWORD,
+            )
+        ) is False
+    finally:
+        persistence.close()
+
+
+def test_wrong_reset_token_owner_is_cleaned_without_hashing(
+    tmp_path: Path,
+    monkeypatch,
+):
+    async def scenario() -> None:
+        persistence = Persistence(db_path=tmp_path / "wrong-reset-owner.db")
+        try:
+            user = await _create_password_user(
+                persistence,
+                "reset-owner@example.com",
+            )
+            reset_token = await persistence.create_reset_token(user.id)
+
+            def fail_if_hashed(_password: str):
+                raise AssertionError("A mismatched reset token must not trigger Argon2")
+
+            monkeypatch.setattr(
+                persistence_auth.password_utils,
+                "hash_password",
+                fail_if_hashed,
+            )
+            assert await persistence.consume_reset_token_and_update_password(
+                reset_token.token,
+                uuid.uuid4(),
+                NEW_PASSWORD,
+            ) is False
+            with pytest.raises(KeyError):
+                await persistence.get_user_by_reset_token(reset_token.token)
+        finally:
+            persistence.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("operation", ["update", "reset"])
+@pytest.mark.parametrize(
+    ("context_column", "new_context_value"),
+    [
+        ("email", "new.account.name@example.com"),
+        ("username", "new-account-name-2026"),
+    ],
+)
+def test_password_mutations_recheck_live_account_context_after_hashing(
+    tmp_path: Path,
+    monkeypatch,
+    operation: str,
+    context_column: str,
+    new_context_value: str,
+):
+    async def scenario() -> None:
+        db_path = tmp_path / f"live-context-{operation}-{context_column}.db"
+        persistence = Persistence(db_path=db_path)
+        try:
+            user = await _create_password_user(
+                persistence,
+                f"old-{operation}-{context_column}@example.com",
+            )
+            session = await persistence.create_session(user.id)
+            reset_token = await persistence.create_reset_token(user.id)
+            auth_state_before = persistence.conn.execute(
+                """
+                SELECT password_hash, password_salt, password_scheme
+                FROM users
+                WHERE id = ?
+                """,
+                (str(user.id),),
+            ).fetchone()
+            original_hash_password = persistence_auth.password_utils.hash_password
+            context_changed = False
+
+            def change_context_then_hash(password: str):
+                nonlocal context_changed
+                if not context_changed:
+                    context_changed = True
+                    other = Persistence(db_path=db_path)
+                    try:
+                        other.conn.execute(
+                            f"UPDATE users SET {context_column} = ? WHERE id = ?",
+                            (new_context_value, str(user.id)),
+                        )
+                        other.conn.commit()
+                    finally:
+                        other.close()
+                return original_hash_password(password)
+
+            monkeypatch.setattr(
+                persistence_auth.password_utils,
+                "hash_password",
+                change_context_then_hash,
+            )
+            with pytest.raises(
+                ValueError,
+                match="account identifier.*predictable",
+            ):
+                if operation == "update":
+                    await persistence.update_password(
+                        user.id,
+                        new_context_value,
+                    )
+                else:
+                    await persistence.consume_reset_token_and_update_password(
+                        reset_token.token,
+                        user.id,
+                        new_context_value,
+                    )
+
+            assert persistence.conn.execute(
+                f"SELECT {context_column} FROM users WHERE id = ?",
+                (str(user.id),),
+            ).fetchone() == (new_context_value,)
+            assert persistence.conn.execute(
+                """
+                SELECT password_hash, password_salt, password_scheme
+                FROM users
+                WHERE id = ?
+                """,
+                (str(user.id),),
+            ).fetchone() == auth_state_before
+            assert (
+                await persistence.get_session_by_auth_token(session.id)
+            ).user_id == user.id
+            assert _reset_token_count(persistence, user.id) == 1
+        finally:
+            persistence.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("state_column", "new_state", "message"),
+    [
+        ("is_active", 0, "Inactive users"),
+        ("auth_provider", "oidc", "External-auth users"),
+    ],
+)
+def test_password_update_rechecks_live_account_state_after_hashing(
+    tmp_path: Path,
+    monkeypatch,
+    state_column: str,
+    new_state: object,
+    message: str,
+):
+    async def scenario() -> None:
+        db_path = tmp_path / f"live-password-state-{state_column}.db"
+        persistence = Persistence(db_path=db_path)
+        try:
+            user = await _create_password_user(
+                persistence,
+                f"live-{state_column}@example.com",
+            )
+            session = await persistence.create_session(user.id)
+            await persistence.create_reset_token(user.id)
+            auth_state_before = persistence.conn.execute(
+                """
+                SELECT password_hash, password_salt, password_scheme
+                FROM users
+                WHERE id = ?
+                """,
+                (str(user.id),),
+            ).fetchone()
+            original_hash_password = persistence_auth.password_utils.hash_password
+            state_changed = False
+
+            def change_state_then_hash(password: str):
+                nonlocal state_changed
+                if not state_changed:
+                    state_changed = True
+                    other = Persistence(db_path=db_path)
+                    try:
+                        other.conn.execute(
+                            f"UPDATE users SET {state_column} = ? WHERE id = ?",
+                            (new_state, str(user.id)),
+                        )
+                        other.conn.commit()
+                    finally:
+                        other.close()
+                return original_hash_password(password)
+
+            monkeypatch.setattr(
+                persistence_auth.password_utils,
+                "hash_password",
+                change_state_then_hash,
+            )
+            with pytest.raises(ValueError, match=message):
+                await persistence.update_password(user.id, NEW_PASSWORD)
+
+            assert persistence.conn.execute(
+                f"SELECT {state_column} FROM users WHERE id = ?",
+                (str(user.id),),
+            ).fetchone() == (new_state,)
+            assert persistence.conn.execute(
+                """
+                SELECT password_hash, password_salt, password_scheme
+                FROM users
+                WHERE id = ?
+                """,
+                (str(user.id),),
+            ).fetchone() == auth_state_before
+            assert (
+                await persistence.get_session_by_auth_token(session.id)
+            ).user_id == user.id
+            assert _reset_token_count(persistence, user.id) == 1
+        finally:
+            persistence.close()
+
+    asyncio.run(scenario())
+
+
 def test_failed_password_change_rolls_back_password_session_and_reset_token(
     tmp_path: Path,
 ):
@@ -134,6 +428,66 @@ def test_failed_password_change_rolls_back_password_session_and_reset_token(
             assert (await persistence.get_session_by_auth_token(session.id)).user_id == user.id
             assert (await persistence.get_user_by_reset_token(reset_token.token)).id == user.id
             assert _reset_token_count(persistence, user.id) == 1
+            assert persistence.conn.in_transaction is False
+        finally:
+            persistence.close()
+
+    asyncio.run(scenario())
+
+
+def test_failed_session_bound_password_change_rolls_back_recovery_code(
+    tmp_path: Path,
+):
+    async def scenario() -> None:
+        persistence = Persistence(
+            db_path=tmp_path / "session-password-change-rollback.db"
+        )
+        try:
+            user = await _create_password_user(
+                persistence,
+                "session-password-change-rollback@example.com",
+            )
+            recovery_code = persistence.enroll_two_factor(
+                user.id,
+                pyotp.random_base32(),
+                count=1,
+            )[0]
+            session = await persistence.create_session(user.id)
+            reset_token = await persistence.create_reset_token(user.id)
+            persistence.conn.execute(
+                f"""
+                CREATE TRIGGER fail_session_reset_token_delete
+                BEFORE DELETE ON password_reset_tokens
+                WHEN OLD.user_id = '{user.id}'
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced reset-token delete failure');
+                END
+                """
+            )
+            persistence.conn.commit()
+
+            with pytest.raises(sqlite3.IntegrityError):
+                await persistence.change_password_for_session(
+                    auth_token=session.id,
+                    current_password=PASSWORD,
+                    new_password=NEW_PASSWORD,
+                    two_factor_code=recovery_code,
+                )
+
+            persistence.conn.execute(
+                "DROP TRIGGER fail_session_reset_token_delete"
+            )
+            persistence.conn.commit()
+            refreshed = await persistence.get_user_by_id(user.id)
+            assert refreshed.verify_password(PASSWORD)
+            assert not refreshed.verify_password(NEW_PASSWORD)
+            assert (
+                await persistence.get_session_by_auth_token(session.id)
+            ).user_id == user.id
+            assert (
+                await persistence.get_user_by_reset_token(reset_token.token)
+            ).id == user.id
+            assert persistence.get_recovery_codes_summary(user.id)["remaining"] == 1
             assert persistence.conn.in_transaction is False
         finally:
             persistence.close()
@@ -193,6 +547,10 @@ def test_failed_reset_completion_rolls_back_password_session_and_reset_token(
     ("operation", "error_message"),
     [
         (
+            "change_password_for_session",
+            "Session-bound password change cannot run inside an existing transaction",
+        ),
+        (
             "update_password",
             "Password update cannot run inside an existing transaction",
         ),
@@ -235,7 +593,13 @@ def test_password_mutations_reject_caller_owned_transaction(
 
             try:
                 with pytest.raises(RuntimeError, match=error_message):
-                    if operation == "update_password":
+                    if operation == "change_password_for_session":
+                        await persistence.change_password_for_session(
+                            auth_token=session.id,
+                            current_password=PASSWORD,
+                            new_password=NEW_PASSWORD,
+                        )
+                    elif operation == "update_password":
                         await persistence.update_password(user.id, NEW_PASSWORD)
                     else:
                         await persistence.consume_reset_token_and_update_password(

@@ -59,12 +59,11 @@ async def _create_social_user(
 
 
 async def _bootstrap_root(persistence: Persistence) -> AppUser:
-    root = AppUser.create_new_user_with_default_settings(
+    assert await persistence.create_verified_root_user_if_empty(
         email="root@example.com",
         password="VeryStrongPass!9",
     )
-    assert await persistence.create_verified_root_user_if_empty(root)
-    return await persistence.get_user_by_id(root.id)
+    return await persistence.get_user_by_email("root@example.com")
 
 
 class _FakeEvent:

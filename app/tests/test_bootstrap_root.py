@@ -260,6 +260,89 @@ def test_bootstrap_root_rejects_weak_password_unless_allowed(
     assert len(_list_users(db_path)) == 1
 
 
+def test_bootstrap_root_preflight_uses_canonical_account_context(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    db_path = tmp_path / "canonical-context.db"
+    raw_username = "AlphaBetaGamma!9<"
+    canonical_username = "AlphaBetaGamma!9&lt;"
+    creation_calls = 0
+
+    class TrackingPersistence(Persistence):
+        async def create_verified_root_user_if_empty(self, **kwargs) -> bool:
+            nonlocal creation_calls
+            creation_calls += 1
+            return await super().create_verified_root_user_if_empty(**kwargs)
+
+    monkeypatch.setattr(bootstrap_root, "Persistence", TrackingPersistence)
+
+    exit_code = bootstrap_root.main(
+        [
+            "--db-path",
+            str(db_path),
+            "--email",
+            "owner@example.com",
+            "--username",
+            raw_username,
+            "--password",
+            canonical_username,
+        ]
+    )
+
+    assert exit_code == bootstrap_root.MISSING_CREDENTIALS_EXIT_CODE
+    assert creation_calls == 0
+    assert "account identifier" in capsys.readouterr().err
+    assert _user_count(db_path) == 0
+
+    exit_code = bootstrap_root.main(
+        [
+            "--db-path",
+            str(db_path),
+            "--email",
+            "owner@example.com",
+            "--username",
+            raw_username,
+            "--password",
+            canonical_username,
+            "--allow-weak-password",
+        ]
+    )
+
+    assert exit_code == 0
+    assert creation_calls == 1
+    users = _list_users(db_path)
+    assert len(users) == 1
+    assert users[0].username == canonical_username
+    assert users[0].verify_password(canonical_username)
+
+
+def test_bootstrap_root_acknowledgement_respects_strict_policy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "strict-weak.db"
+    monkeypatch.setattr(config, "ALLOW_WEAK_PASSWORDS", False)
+
+    exit_code = bootstrap_root.main(
+        [
+            "--db-path",
+            str(db_path),
+            "--email",
+            "owner@example.com",
+            "--username",
+            "owner",
+            "--password",
+            "weak",
+            "--allow-weak-password",
+        ]
+    )
+
+    assert exit_code == bootstrap_root.MISSING_CREDENTIALS_EXIT_CODE
+    assert _user_count(db_path) == 0
+
+
 def test_bootstrap_root_db_path_targets_requested_database(
     tmp_path: Path,
     monkeypatch,

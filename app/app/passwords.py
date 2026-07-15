@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
+import unicodedata
 from dataclasses import dataclass
 
 from pwdlib import PasswordHash
@@ -15,8 +16,21 @@ LEGACY_PBKDF2_ITERATIONS = 100000
 _password_hash = PasswordHash.recommended()
 
 
-def get_password_strength(password: str) -> int:
-    """Return the existing 0-99 heuristic score used by the password policy."""
+def get_password_strength(
+    password: str,
+    *,
+    minimum_length: int = 15,
+    maximum_length: int = 1024,
+    warning_threshold: int = 50,
+) -> int:
+    """Return a display-only 0-99 heuristic score for a proposed password."""
+    if len(password) > maximum_length:
+        return 0
+
+    password = normalize_password(password)
+    if len(password) > maximum_length:
+        return 0
+
     length = len(password)
     score = 0
 
@@ -83,7 +97,18 @@ def get_password_strength(password: str) -> int:
         and ord(password[index + 2]) == ord(password[index]) + 2
     ) * 3
 
-    return max(0, min(score, 99))
+    score = max(0, min(score, 99))
+    meaningful_password = password.strip()
+    if not meaningful_password:
+        return 0
+
+    below_recommendation = max(0, min(warning_threshold - 1, 99))
+    if len(password) < minimum_length:
+        score = min(score, below_recommendation)
+    if len(set(meaningful_password.casefold())) == 1:
+        score = min(score, min(10, below_recommendation))
+
+    return score
 
 
 @dataclass(frozen=True)
@@ -102,7 +127,7 @@ def legacy_pbkdf2_password_hash(password: str, password_salt: bytes) -> bytes:
 
 
 def hash_password(password: str) -> tuple[bytes, None, str]:
-    encoded_hash = _password_hash.hash(password).encode("utf-8")
+    encoded_hash = _password_hash.hash(normalize_password(password)).encode("utf-8")
     return encoded_hash, None, HASH_SCHEME_ARGON2ID
 
 
@@ -115,28 +140,46 @@ def verify_password(
     if stored_hash is None:
         return PasswordVerificationResult(ok=False)
 
+    normalized_password = normalize_password(password)
+    password_candidates = (normalized_password,)
+    if normalized_password != password:
+        password_candidates += (password,)
+
     normalized_scheme = scheme or HASH_SCHEME_PBKDF2_SHA256
     if normalized_scheme == HASH_SCHEME_PBKDF2_SHA256:
         if stored_salt is None:
             return PasswordVerificationResult(ok=False)
-        expected_hash = legacy_pbkdf2_password_hash(password, stored_salt)
-        ok = secrets.compare_digest(_as_bytes(stored_hash), expected_hash)
-        return PasswordVerificationResult(
-            ok=ok,
-            needs_rehash=ok,
-        )
+        for candidate in password_candidates:
+            expected_hash = legacy_pbkdf2_password_hash(candidate, stored_salt)
+            if secrets.compare_digest(_as_bytes(stored_hash), expected_hash):
+                return PasswordVerificationResult(ok=True, needs_rehash=True)
+        return PasswordVerificationResult(ok=False)
 
     if normalized_scheme == HASH_SCHEME_ARGON2ID:
-        try:
-            ok, updated_hash = _password_hash.verify_and_update(
-                password,
-                _as_text(stored_hash),
-            )
-        except Exception:
-            return PasswordVerificationResult(ok=False)
-        return PasswordVerificationResult(ok=ok, needs_rehash=updated_hash is not None)
+        for candidate in password_candidates:
+            try:
+                ok, updated_hash = _password_hash.verify_and_update(
+                    candidate,
+                    _as_text(stored_hash),
+                )
+            except Exception:
+                continue
+            if ok:
+                return PasswordVerificationResult(
+                    ok=True,
+                    needs_rehash=(
+                        updated_hash is not None
+                        or candidate != normalized_password
+                    ),
+                )
+        return PasswordVerificationResult(ok=False)
 
     return PasswordVerificationResult(ok=False)
+
+
+def normalize_password(password: str) -> str:
+    """Return the NFC form used for all newly stored password hashes."""
+    return unicodedata.normalize("NFC", password)
 
 
 def _as_bytes(value: bytes | str) -> bytes:

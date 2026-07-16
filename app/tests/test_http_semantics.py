@@ -44,26 +44,86 @@ def test_unknown_browser_and_api_paths_return_real_404_responses(client):
         headers={"Accept": "text/html"},
     )
     api_response = client.get("/api/nope")
+    api_post_response = client.post("/api/nope")
     auth_response = client.get("/auth/nope")
+    browser_post_response = client.post("/does-not-exist")
 
     assert browser_response.status_code == 404
     assert browser_response.headers["content-type"].startswith("text/plain")
     assert browser_response.text == "Not Found"
     assert api_response.status_code == 404
     assert api_response.json() == {"detail": "Not Found"}
+    assert api_post_response.status_code == 404
+    assert api_post_response.json() == {"detail": "Not Found"}
+    assert "allow" not in api_post_response.headers
     assert auth_response.status_code == 404
     assert auth_response.json() == {"detail": "Not Found"}
+    assert browser_post_response.status_code == 404
+    assert browser_post_response.text == "Not Found"
+    assert "allow" not in browser_post_response.headers
 
 
-def test_known_pages_and_wrong_api_methods_keep_their_normal_semantics(client):
+def test_known_pages_keep_their_normal_semantics(client):
     public_page = client.get("/about")
     protected_page = client.get("/app/settings", follow_redirects=False)
-    wrong_method = client.post("/api/health")
 
     assert public_page.status_code == 200
     assert public_page.headers["content-type"].startswith("text/html")
     assert protected_page.status_code in {200, 302, 307}
-    assert wrong_method.status_code == 405
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "allow"),
+    (
+        ("GET", "/api/contact", "POST"),
+        ("GET", "/api/currency/adjust", "POST"),
+        ("GET", "/api/currency/set", "POST"),
+        ("GET", "/rio/upload/probe", "PUT"),
+        ("POST", "/api/health", "GET"),
+        ("POST", "/auth/google/login", "GET"),
+        ("POST", "/about", "GET"),
+        ("POST", "/app/settings", "GET"),
+        ("POST", "/rio/favicon.png", "GET"),
+        ("PATCH", "/api/profiles", "GET, POST"),
+        (
+            "PATCH",
+            "/api/profiles/00000000-0000-0000-0000-000000000000",
+            "DELETE, GET, PUT",
+        ),
+        ("POST", "/robots.txt", "GET"),
+        ("POST", "/sitemap.xml", "GET"),
+        ("POST", "/rio/sitemap.xml", "GET"),
+    ),
+)
+def test_known_routes_reject_wrong_methods(client, method, path, allow):
+    client.cookies.clear()
+    response = client.request(method, path)
+
+    assert response.status_code == 405
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.headers["allow"] == allow
+    assert response.json() == {"detail": "Method Not Allowed"}
+    assert "rio-browser-binding" not in response.headers.get("set-cookie", "")
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    (
+        ("GET", "/rio/cookies"),
+        ("HEAD", "/rio/cookies"),
+        ("GET", "/rio/cookies/guessed"),
+        ("HEAD", "/rio/cookies/guessed"),
+    ),
+)
+def test_cookie_write_wrong_methods_keep_hardened_response(client, method, path):
+    client.cookies.clear()
+    response = client.request(method, path)
+
+    assert response.status_code == 405
+    assert response.headers["allow"] == "POST"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.content == b""
+    assert response.headers.get_list("set-cookie") == []
 
 
 def test_docs_and_openapi_describe_only_the_application_api_surface(client):

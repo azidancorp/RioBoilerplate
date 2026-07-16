@@ -16,6 +16,7 @@ from app.navigation import APP_ROUTES, PUBLIC_NAV_ROUTES
 
 
 _RIO_INDEX_ROUTE_NAME = "_serve_index"
+_RIO_COOKIE_WRITE_PATH = "/rio/cookies"
 _KNOWN_PAGE_PATHS = frozenset(
     route.path for route in (*PUBLIC_NAV_ROUTES, *APP_ROUTES)
 )
@@ -34,14 +35,29 @@ def _documented_routes(routes: Iterable[Any]) -> list[APIRoute]:
     ]
 
 
-def _matches_explicit_route(app: FastAPI, request: Request) -> bool:
+def _match_explicit_routes(
+    app: FastAPI,
+    request: Request,
+) -> tuple[bool, frozenset[str]]:
+    allowed_methods: set[str] = set()
     for route in app.routes:
         if getattr(route, "name", None) == _RIO_INDEX_ROUTE_NAME:
             continue
         match, _ = route.matches(request.scope)
-        if match in {Match.FULL, Match.PARTIAL}:
-            return True
-    return False
+        if match == Match.FULL:
+            return True, frozenset()
+        if match == Match.PARTIAL:
+            allowed_methods.update(getattr(route, "methods", ()) or ())
+    return False, frozenset(allowed_methods)
+
+
+def _method_not_allowed_response(allowed_methods: Iterable[str]) -> JSONResponse:
+    allow = ", ".join(sorted(set(allowed_methods)))
+    return JSONResponse(
+        {"detail": "Method Not Allowed"},
+        status_code=405,
+        headers={"Allow": allow},
+    )
 
 
 def _robots_response() -> PlainTextResponse:
@@ -115,12 +131,28 @@ def install_http_surface(app: FastAPI) -> None:
     @app.middleware("http")
     async def reject_unknown_http_paths(request: Request, call_next):
         path = request.url.path
+        is_cookie_write_path = path == _RIO_COOKIE_WRITE_PATH or path.startswith(
+            f"{_RIO_COOKIE_WRITE_PATH}/"
+        )
+        if is_cookie_write_path and request.method != "POST":
+            # The hardened cookie middleware owns these responses so they retain
+            # its no-store policy and browser-cookie normalization.
+            return await call_next(request)
+
         if path == "/robots.txt":
+            if request.method != "GET":
+                return _method_not_allowed_response({"GET"})
             return _robots_response()
         if path in {"/sitemap.xml", "/rio/sitemap.xml"}:
+            if request.method != "GET":
+                return _method_not_allowed_response({"GET"})
             return _public_sitemap_response()
-        if path in _KNOWN_PAGE_PATHS or _matches_explicit_route(app, request):
+
+        full_match, allowed_methods = _match_explicit_routes(app, request)
+        if path in _KNOWN_PAGE_PATHS or full_match:
             return await call_next(request)
+        if allowed_methods:
+            return _method_not_allowed_response(allowed_methods)
 
         if path == "/api" or path.startswith("/api/"):
             return JSONResponse({"detail": "Not Found"}, status_code=404)

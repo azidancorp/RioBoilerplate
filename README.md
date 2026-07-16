@@ -56,7 +56,7 @@ Public password signup and OAuth registration cannot initialize an empty databas
 
 > **Warning: not production-ready on Railway yet.** As shipped, `railway.toml` deploys with no volume attached, and Railway's container filesystem is ephemeral — the SQLite database is erased on every deploy and restart. Do not put real users on a Railway deployment until the runtime-data relocation described below is complete and a volume is mounted. The supported production path today is the VPS guide in `DEPLOYMENT_INSTRUCTIONS.md`; the outstanding Railway work and the root-bootstrap procedure are tracked in `docs/railway-readiness.md`.
 
-`railway.toml` runs strict prestart checks before starting the public server. On a fresh database, the deployment exits with a bootstrap error rather than exposing an unclaimed root slot. This fail-closed result is expected.
+`railway.toml` runs strict prestart checks before starting the public server. On a fresh database, the deployment exits with a bootstrap error rather than exposing an unclaimed root slot. It also refuses to start until `AUTH_TOKEN_COOKIE_SECURE` is enabled, `APP_URL` is the canonical public HTTPS origin, and—when Google OAuth is configured—`OAUTH_COOKIE_SECURE` is enabled. These non-secret values are code-configured, so set, test, and commit them in `app/app/config.py` before deploying; a Railway environment variable does not override them. These fail-closed results are expected.
 
 Do not expose a Railway domain until the initial root has been created against the same persistent database the service will use. `railway run` and `railway shell` execute locally with Railway variables and do not modify the deployed SQLite volume.
 

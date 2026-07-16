@@ -1,8 +1,14 @@
 import asyncio
 import builtins
 import concurrent.futures
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from threading import Barrier
+
+import app as app_module
 
 from app.config import config
 from app.data_models import AppUser
@@ -437,8 +443,12 @@ def test_prestart_strict_bootstrap_fails_without_verified_root(
     assert "Run python -m app.scripts.bootstrap_root" not in output.err
 
 
-def test_prestart_strict_bootstrap_passes_after_bootstrap(tmp_path: Path) -> None:
+def test_prestart_strict_bootstrap_passes_after_bootstrap(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     db_path = tmp_path / "prestart-ready.db"
+    monkeypatch.setattr(config, "AUTH_TOKEN_COOKIE_SECURE", False)
     assert bootstrap_root.main(
         [
             "--db-path",
@@ -452,9 +462,323 @@ def test_prestart_strict_bootstrap_passes_after_bootstrap(tmp_path: Path) -> Non
         ]
     ) == 0
 
+    assert prestart.main(["--db-path", str(db_path), "--strict-bootstrap"]) == 0
+
+
+def test_prestart_secure_cookie_requirement_fails_before_touching_database(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    db_path = tmp_path / "secure-cookie-disabled.db"
+    monkeypatch.setattr(config, "AUTH_TOKEN_COOKIE_SECURE", False)
+
+    exit_code = prestart.main(
+        [
+            "--db-path",
+            str(db_path),
+            "--strict-bootstrap",
+            "--require-secure-auth-cookie",
+        ]
+    )
+
+    assert exit_code == 3
+    output = capsys.readouterr()
+    assert "authentication cookies are not Secure" in output.err
+    assert "AUTH_TOKEN_COOKIE_SECURE = True" in output.err
+    assert not db_path.exists()
+
+
+def test_prestart_secure_cookie_requirement_passes_for_ready_database(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "secure-cookie-ready.db"
+    assert (
+        bootstrap_root.main(
+            [
+                "--db-path",
+                str(db_path),
+                "--email",
+                "owner@example.com",
+                "--username",
+                "owner",
+                "--password",
+                STRONG_PASSWORD,
+            ]
+        )
+        == 0
+    )
+    monkeypatch.setattr(config, "AUTH_TOKEN_COOKIE_SECURE", True)
+    monkeypatch.setattr(config, "APP_URL", "https://app.example.test")
+    monkeypatch.setattr(config, "OAUTH_COOKIE_SECURE", True)
+
     assert prestart.main(
-        ["--db-path", str(db_path), "--strict-bootstrap"]
+        [
+            "--db-path",
+            str(db_path),
+            "--strict-bootstrap",
+            "--require-secure-auth-cookie",
+        ]
     ) == 0
+
+
+def test_prestart_secure_cookie_requirement_accepts_canonical_origins(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(config, "AUTH_TOKEN_COOKIE_SECURE", True)
+    monkeypatch.setattr(config, "ENABLE_GOOGLE_LOGIN", False)
+
+    for index, app_url in enumerate(
+        (
+            "https://app.example.test",
+            "https://app.example.test/",
+            "https://app.example.test:8443",
+            "https://127.0.0.1",
+            "https://[2001:db8::1]:8443",
+            "https://xn--bcher-kva.example",
+            "https://xn--fa-hia.example",
+            "https://xn--strae-oqa.example",
+        )
+    ):
+        db_path = tmp_path / f"canonical-origin-{index}.db"
+        monkeypatch.setattr(config, "APP_URL", app_url)
+
+        assert (
+            prestart.main(
+                [
+                    "--db-path",
+                    str(db_path),
+                    "--require-secure-auth-cookie",
+                ]
+            )
+            == 0
+        )
+        assert db_path.exists()
+
+
+def test_prestart_secure_cookie_requirement_rejects_noncanonical_origins(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(config, "AUTH_TOKEN_COOKIE_SECURE", True)
+
+    for index, app_url in enumerate(
+        (
+            "https://app.example.test/base",
+            "https://app.example.test?wrong=1",
+            "https://app.example.test/#fragment",
+            "https://app.example.test:not-a-port",
+            "https://app.example.test:70000",
+            "https://app.example.test:",
+            "https://app.example.test:0",
+            "https://app.example.test?",
+            "https://app.example.test#",
+            "https://app.example.test/#",
+            "https://app.example.test ",
+            "https://app.example.test\\evil",
+            "https://%61pp.example.test",
+            "https://app.exämple.test",
+            "https://-app.example.test",
+            "https://app.example.test.",
+            "https://app.example.test\x7f",
+            "https://0x7f000001",
+            "https://0x7f.0.0.1",
+            "https://example.123",
+            "https://example.0x7f",
+            "https://xn--a.example",
+            "https://xn--abc.example",
+            "https://xn--0.example",
+            "https://[v1.a]",
+            "https://0x",
+            "https://1.0x",
+            "https://example.0x",
+            "https://xn--00b.example",
+        )
+    ):
+        db_path = tmp_path / f"noncanonical-origin-{index}.db"
+        monkeypatch.setattr(config, "APP_URL", app_url)
+
+        assert (
+            prestart.main(
+                [
+                    "--db-path",
+                    str(db_path),
+                    "--require-secure-auth-cookie",
+                ]
+            )
+            == 3
+        )
+        assert "canonical HTTPS origin" in capsys.readouterr().err
+        assert not db_path.exists()
+
+
+def test_prestart_does_not_require_canonical_origin_without_production_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "ungated-app-url.db"
+    monkeypatch.setattr(config, "APP_URL", "https://example.test:bad-port/path")
+
+    assert prestart.main(["--db-path", str(db_path)]) == 0
+    assert db_path.exists()
+
+
+def test_prestart_secure_cookie_requirement_rejects_plaintext_app_url(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    db_path = tmp_path / "secure-cookie-http-url.db"
+    monkeypatch.setattr(config, "AUTH_TOKEN_COOKIE_SECURE", True)
+    monkeypatch.setattr(config, "APP_URL", "http://app.example.test")
+
+    exit_code = prestart.main(
+        [
+            "--db-path",
+            str(db_path),
+            "--require-secure-auth-cookie",
+        ]
+    )
+
+    assert exit_code == 3
+    output = capsys.readouterr()
+    assert "APP_URL" in output.err
+    assert "https://" in output.err
+    assert not db_path.exists()
+
+
+def test_prestart_secure_cookie_requirement_rejects_insecure_oauth_cookie(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    db_path = tmp_path / "insecure-oauth-cookie.db"
+    monkeypatch.setattr(config, "AUTH_TOKEN_COOKIE_SECURE", True)
+    monkeypatch.setattr(config, "APP_URL", "https://app.example.test")
+    monkeypatch.setattr(config, "ENABLE_GOOGLE_LOGIN", True)
+    monkeypatch.setattr(config, "SESSION_SECRET_KEY", "session-secret")
+    monkeypatch.setattr(config, "GOOGLE_CLIENT_ID", "google-client")
+    monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "google-secret")
+    monkeypatch.setattr(config, "OAUTH_COOKIE_SECURE", False)
+
+    exit_code = prestart.main(
+        [
+            "--db-path",
+            str(db_path),
+            "--require-secure-auth-cookie",
+        ]
+    )
+
+    assert exit_code == 3
+    output = capsys.readouterr()
+    assert "Production OAuth is configured" in output.err
+    assert "OAUTH_COOKIE_SECURE = True" in output.err
+    assert not db_path.exists()
+
+
+def test_prestart_allows_nonsecure_oauth_cookie_when_oauth_is_disabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "oauth-disabled.db"
+    monkeypatch.setattr(config, "AUTH_TOKEN_COOKIE_SECURE", True)
+    monkeypatch.setattr(config, "APP_URL", "https://app.example.test")
+    monkeypatch.setattr(config, "ENABLE_GOOGLE_LOGIN", False)
+    monkeypatch.setattr(config, "SESSION_SECRET_KEY", "session-secret")
+    monkeypatch.setattr(config, "GOOGLE_CLIENT_ID", "google-client")
+    monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "google-secret")
+    monkeypatch.setattr(config, "OAUTH_COOKIE_SECURE", False)
+
+    assert prestart.main(
+        [
+            "--db-path",
+            str(db_path),
+            "--require-secure-auth-cookie",
+        ]
+    ) == 0
+    assert db_path.exists()
+
+
+def test_prestart_module_invocation_detection_is_exact() -> None:
+    assert app_module._is_prestart_module_invocation(
+        ["python", "-X", "dev", "-m", "app.scripts.prestart"]
+    )
+    assert app_module._is_prestart_module_invocation(
+        ["python", "-imapp.scripts.prestart", "--strict-bootstrap"]
+    )
+    assert not app_module._is_prestart_module_invocation(
+        ["python", "-m", "app.scripts.bootstrap_root"]
+    )
+    assert not app_module._is_prestart_module_invocation(
+        ["python", "worker.py", "-m", "app.scripts.prestart"]
+    )
+    assert not app_module._is_prestart_module_invocation(
+        ["python", "-c", "pass", "-m", "app.scripts.prestart"]
+    )
+
+
+def test_prestart_module_reports_plaintext_url_before_app_import_failure(
+    tmp_path: Path,
+) -> None:
+    source_package = Path(__file__).resolve().parents[1] / "app"
+    copied_project = tmp_path / "project"
+    copied_package = copied_project / "app"
+    shutil.copytree(
+        source_package,
+        copied_package,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+
+    copied_config = copied_package / "config.py"
+    config_source = copied_config.read_text(encoding="utf-8")
+    insecure_default = "AUTH_TOKEN_COOKIE_SECURE: bool = False"
+    assert insecure_default in config_source
+    copied_config.write_text(
+        config_source.replace(
+            insecure_default,
+            "AUTH_TOKEN_COOKIE_SECURE: bool = True",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "must-not-exist.db"
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.scripts.prestart",
+            "--db-path",
+            str(db_path),
+            "--require-secure-auth-cookie",
+        ],
+        cwd=copied_project,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 3
+    assert "authentication cookies require APP_URL" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not db_path.exists()
+
+    runtime_import = subprocess.run(
+        [sys.executable, "-c", "import app"],
+        cwd=copied_project,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert runtime_import.returncode != 0
+    assert "Secure production cookies require" in runtime_import.stderr
 
 
 def test_railway_start_is_gated_by_strict_bootstrap() -> None:
@@ -462,7 +786,10 @@ def test_railway_start_is_gated_by_strict_bootstrap() -> None:
         Path(__file__).resolve().parents[2] / "railway.toml"
     ).read_text(encoding="utf-8")
 
-    strict_check = "python -m app.scripts.prestart --strict-bootstrap"
+    strict_check = (
+        "python -m app.scripts.prestart --strict-bootstrap "
+        "--require-secure-auth-cookie"
+    )
     public_start = "exec rio run"
     assert strict_check in railway_config
     assert public_start in railway_config

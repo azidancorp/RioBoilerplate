@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 
@@ -18,6 +19,62 @@ from app.components.root_component import RootComponent
 from app.data_models import UserSettings
 from app.http_surface import install_http_surface
 from app.persistence import Persistence
+from app.rio_cookie_security import install_rio_cookie_security
+
+
+_PRESTART_MODULE = "app.scripts.prestart"
+
+
+def _is_prestart_module_invocation(argv: Sequence[str]) -> bool:
+    """Return whether Python is executing this project's prestart module.
+
+    Python imports the parent ``app`` package before it executes a ``-m``
+    submodule.  Prestart must therefore bypass application-only initialization
+    long enough to report configuration errors itself.  Parse only Python's
+    interpreter arguments, stopping at another execution mode or a script, so
+    a coincidental ``-m app.scripts.prestart`` in application arguments cannot
+    disable the runtime hardening.
+    """
+    index = 1
+    while index < len(argv):
+        argument = argv[index]
+        if argument == "--" or argument == "-" or not argument.startswith("-"):
+            return False
+
+        if argument == "--check-hash-based-pycs":
+            index += 2
+            continue
+        if argument.startswith("--"):
+            index += 1
+            continue
+
+        # CPython accepts both ``-m module`` and combined forms such as
+        # ``-im module`` or ``-mapp.scripts.prestart``.
+        short_options = argument[1:]
+        option_index = 0
+        while option_index < len(short_options):
+            option = short_options[option_index]
+            if option == "c":
+                return False
+            if option == "m":
+                module_name = short_options[option_index + 1 :]
+                if module_name:
+                    return module_name == _PRESTART_MODULE
+                return (
+                    index + 1 < len(argv)
+                    and argv[index + 1] == _PRESTART_MODULE
+                )
+            if option in {"W", "X"}:
+                # The remainder of this argument, or the next argument when
+                # empty, belongs to the interpreter option.
+                if option_index + 1 == len(short_options):
+                    index += 1
+                break
+            option_index += 1
+
+        index += 1
+
+    return False
 
 
 async def on_app_start(app: rio.App) -> None:
@@ -105,6 +162,14 @@ app = rio.App(
 )
 
 fastapi_app = app.as_fastapi()
+if not _is_prestart_module_invocation(getattr(sys, "orig_argv", sys.argv)):
+    install_rio_cookie_security(
+        fastapi_app,
+        secure_auth_cookie=config.AUTH_TOKEN_COOKIE_SECURE,
+        canonical_origin=(
+            config.APP_URL if config.AUTH_TOKEN_COOKIE_SECURE else None
+        ),
+    )
 
 if config.SESSION_SECRET_KEY:
     fastapi_app.add_middleware(

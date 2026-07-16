@@ -28,7 +28,8 @@ class AppConfig:
 
     # Public App URL
     # --------------
-    # Used when generating password-reset and email-verification links.
+    # Canonical public origin for secure cookie writes and generated links.
+    # Production must use the one public HTTPS origin that reaches this app.
     APP_URL: str = "http://localhost:8000"
 
     # Email Validation Settings
@@ -54,6 +55,9 @@ class AppConfig:
     SESSION_SECRET_KEY: str = ""
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
+    # False supports the stock localhost HTTP workflow. Production prestart
+    # refuses to launch unless this is explicitly changed to True.
+    AUTH_TOKEN_COOKIE_SECURE: bool = False
     OAUTH_COOKIE_SECURE: bool = False
     OAUTH_HANDOFF_TTL_MINUTES: int = 5
 
@@ -174,4 +178,10 @@ class AppConfig:
 config = AppConfig.from_env()
 
 if "localhost" in config.APP_URL or "127.0.0.1" in config.APP_URL:
-    print("WARNING: APP_URL is set to a localhost address. Password-reset and email-verification links will not work in production. Update APP_URL in config.py before deploying.", file=sys.stderr)
+    print(
+        "WARNING: APP_URL is set to a localhost address. Secure cookie writes, "
+        "password-reset links, and email-verification links require the "
+        "canonical public HTTPS origin in production. Update APP_URL in "
+        "config.py before deploying.",
+        file=sys.stderr,
+    )

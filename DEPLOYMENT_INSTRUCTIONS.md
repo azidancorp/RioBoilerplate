@@ -172,6 +172,12 @@ From your **local machine**, deploy the committed revision. `git archive` sends
 only files tracked by Git, so local virtual environments, secrets, databases,
 caches, and other uncommitted files cannot accidentally reach the server:
 
+Before running these commands, complete the production-behavior review in
+Step 3.7 in your **local checkout**, test the resulting configuration, and
+commit it. Non-secret settings such as `APP_URL` and secure-cookie policy are
+part of the deployed source; do not customize tracked Python files only on the
+server, because the next archive deployment will overwrite those edits.
+
 ```bash
 # Stream the committed HEAD to a fresh, root-only staging path (run locally)
 git -C [LOCAL_APP_PATH] archive --format=tar.gz HEAD | ssh [SSH_ALIAS] '
@@ -230,7 +236,7 @@ chmod 0640 .env
 
 Add any deployment-specific secrets required by the providers you enable.
 
-> **Note:** Other behavior settings (email validation, username login, currency names, password policy) are hardcoded in `app/app/config.py`. Edit that file directly to customize behavior. See `docs/configuration/email-validation.md` for the email/username validation knobs.
+> **Note:** Other behavior settings (email validation, username login, currency names, password policy) are hardcoded in `app/app/config.py`. Review, test, and commit those changes in the local checkout before creating the Step 3 archive. See `docs/configuration/email-validation.md` for the email/username validation knobs.
 > **Note:** Email provider host/sender/TLS defaults also live in `app/app/config.py`; only credential/secret values such as `RIO_SMTP_PASSWORD` belong in `.env`.
 > **Note:** The SQLite database file is created locally on first run at `app/app/data/app.db` and is not intended to be committed.
 
@@ -266,11 +272,21 @@ one or more quality warnings is not created. It does not override an operator-se
 
 ## Step 3.7: Production Hardening Checklist
 
-The boilerplate ships with developer-friendly defaults that are convenient for local work but **must be reviewed before public exposure**. These are non-secret behavior flags, so they live in `app/app/config.py` — edit that file directly. Review each one:
+Although this checklist is grouped with deployment configuration, complete it
+in the **local checkout before Step 3**. The boilerplate ships with
+developer-friendly defaults that are convenient for local work but **must be
+reviewed before public exposure**. These are non-secret behavior flags, so they
+live in `app/app/config.py`: edit them locally, run the relevant tests and
+prestart check, commit the intended production values, and then deploy that
+commit. Do not leave production-only edits in `/srv/[APP_NAME]`.
+
+Review each setting:
 
 | Flag (`app/app/config.py`) | Default | Recommended for production |
 | --- | --- | --- |
-| `OAUTH_COOKIE_SECURE` | `False` | `True` — required so the OAuth state/nonce cookie is only sent over HTTPS, which production serves. |
+| `APP_URL` | `http://localhost:8000` | `https://[DOMAIN_NAME]` — the one canonical public origin. The Nginx example below redirects `www` to this apex origin. |
+| `AUTH_TOKEN_COOKIE_SECURE` | `False` | `True` — required so the browser authentication cookie is never sent over plaintext HTTP. `APP_URL` must also be the canonical public `https://` URL; the supported production prestart command fails closed otherwise. |
+| `OAUTH_COOKIE_SECURE` | `False` | `True` when Google OAuth is configured — required so its state/nonce cookie is only sent over HTTPS. |
 | `REQUIRE_EMAIL_VERIFICATION` | `False` | Decide deliberately. Set `True` to require verified email before login (requires working SMTP from Step 3.5). |
 | `ALLOW_WEAK_PASSWORDS` | `True` | `True` warns and requires acknowledgement but preserves user choice. Set `False` only if this deployment deliberately wants every quality warning to become a hard rejection. |
 | `MIN_PASSWORD_LENGTH` | `15` | Advisory minimum. Shorter non-empty passwords show a warning and remain usable after acknowledgement while `ALLOW_WEAK_PASSWORDS` is `True`. |
@@ -292,7 +308,8 @@ cd /srv/[APP_NAME]/app
 # lower memory usage, and additional safety checks)
 APP_PORT=8000
 sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
-  ../venv/bin/python -m app.scripts.prestart --strict-bootstrap
+  ../venv/bin/python -m app.scripts.prestart --strict-bootstrap \
+  --require-secure-auth-cookie
 sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
   XDG_CACHE_HOME=/tmp/[APP_NAME]-cache \
   ../venv/bin/rio run --port "$APP_PORT" --release
@@ -300,7 +317,10 @@ sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
 # Verify it's working from another terminal with the same port value.
 APP_PORT=8000
 curl -fsS "http://127.0.0.1:${APP_PORT}/api/health"
-curl -s "http://127.0.0.1:${APP_PORT}" | head
+
+# Test the browser page through the public HTTPS origin after Nginx and
+# Certbot are configured. Production browser cookies intentionally do not
+# round-trip through this direct plaintext backend address.
 
 # Stop the test (Ctrl+C)
 ```
@@ -322,20 +342,13 @@ The app is running at http://127.0.0.1:8000
 # health check output
 {"status":"ok","checks":{"app":"ok","database":"ok","schema":"ok"}}
 
-# homepage curl test output
-<!doctype html>
-<html>
-    <head>
-        <title>Home</title>
-        <meta name="og:title" content="Home">
-        <meta name="description" content="A Rio web-app written in 100% Python">
 ```
 
 **Common Issues:**
 - **"Couldn't find rio.toml"**: Make sure you're in the correct app directory
 - **Module import errors**: Check virtual environment is activated and dependencies installed
 - **Port already in use**: Another service might be using port 8000, try a different port
-- **No HTML output from curl**: Rio app may not be starting properly, check error messages
+- **Health request fails**: Check the Rio process output and the selected port
 
 ## Step 5: Create systemd Service
 
@@ -363,7 +376,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=XDG_CACHE_HOME=/tmp/[APP_NAME]-cache
 # --release flag provides production optimizations and safety checks
 # Required: verify schema and require a verified root user before public start
-ExecStartPre=/srv/[APP_NAME]/venv/bin/python -m app.scripts.prestart --strict-bootstrap
+ExecStartPre=/srv/[APP_NAME]/venv/bin/python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie
 ExecStart=/srv/[APP_NAME]/venv/bin/rio run --port 8000 --release
 Restart=on-failure
 RestartSec=5s
@@ -431,7 +444,13 @@ Create Nginx configuration for your domain. This reverse proxy setup provides se
 - Keeping the Rio application private (only accessible locally)
 - Handling SSL termination and HTTPS traffic
 - Providing additional security headers and request filtering
-- Enabling load balancing and caching if needed
+- Providing a single public entry point for the supported one-process Rio service
+
+Run one Rio process/replica unless the proxy provides session affinity across
+the initial page request, WebSocket and reconnects, and `POST /rio/cookies`.
+Rio's latent/active sessions and pending cookie capabilities are process-local;
+the browser-binding signing key is process-local too, so sharing only that key
+would not make an unaffined multi-worker deployment safe.
 
 
 ```bash
@@ -445,13 +464,31 @@ nano /etc/nginx/sites-available/[DOMAIN_NAME]
 server {
     listen 80;
     server_name [DOMAIN_NAME] www.[DOMAIN_NAME];
-    return 301 https://$host$request_uri;
+    return 301 https://[DOMAIN_NAME]$request_uri;
+}
+
+# Redirect the alternate HTTPS hostname to the APP_URL origin before Rio sees
+# the request. This keeps Origin-bound authentication cookie writes reliable.
+server {
+    listen 443 ssl;
+    server_name www.[DOMAIN_NAME];
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # Temporary SSL certificate (will be replaced by Certbot)
+    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
+    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+
+    return 301 https://[DOMAIN_NAME]$request_uri;
 }
 
 # HTTPS reverse proxy with WebSocket support
 server {
     listen 443 ssl;
-    server_name [DOMAIN_NAME] www.[DOMAIN_NAME];
+    server_name [DOMAIN_NAME];
+
+    # Keep future visits on HTTPS after the first successful HTTPS response.
+    add_header Strict-Transport-Security "max-age=31536000" always;
 
     # Temporary SSL certificate (will be replaced by Certbot)
     ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
@@ -591,8 +628,16 @@ Test your deployment:
 # Test HTTP to HTTPS redirect
 curl -I http://[DOMAIN_NAME]
 
-# Test HTTPS with GET request (recommended)
-curl -s https://[DOMAIN_NAME] | head -20
+# Test HTTPS with GET request (recommended). The real page response is 200 and
+# seeds the browser-binding cookie without a bootstrap redirect. The jar simply
+# verifies that cookie can be retained for a later request.
+COOKIE_JAR=/tmp/[APP_NAME]-verification.cookies
+curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" https://[DOMAIN_NAME] | head -20
+rm -f "$COOKIE_JAR"
+
+# Verify HSTS is present on the public HTTPS response.
+curl -sS -D - -o /dev/null https://[DOMAIN_NAME] \
+  | grep -i '^Strict-Transport-Security:'
 
 # Alternative: Test HTTPS with HEAD request
 # Note: May return 405 if app doesn't handle HEAD requests

@@ -16,14 +16,24 @@ tracks what blocks Railway and how to operate it once unblocked.
    sample file `sales_data.csv`. Mounting a volume over the whole directory
    would hide the tracked file from the running app.
 3. **First deploy fails closed by design.** The start command runs
-   `python -m app.scripts.prestart --strict-bootstrap`, which exits on an empty
-   database rather than exposing an unclaimed root slot. On a fresh volume the
-   service will crash-loop until the root account is bootstrapped (see below).
-   This is expected behavior, not a bug.
+   `python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie`.
+   It exits on an empty database rather than exposing an unclaimed root slot.
+   It also requires secure authentication
+   cookies, a canonical HTTPS `APP_URL`, and secure OAuth cookies when Google
+   OAuth is configured. These are non-secret code settings: set, test, and
+   commit them in `app/app/config.py` before deploying rather than expecting
+   Railway environment variables or container-local edits to override them. On
+   a fresh volume the service will crash-loop until the root account is
+   bootstrapped (see below). This is expected behavior, not a bug.
 4. **`railway run` and `railway shell` cannot bootstrap the deployment.** Both
    execute *locally* with Railway's environment variables; they do not touch
    the deployed volume. Bootstrapping must happen inside the deployed
    container.
+5. **Multiple replicas require end-to-end session affinity.** Rio sessions,
+   browser-binding signatures, and pending cookie-write capabilities are
+   process-local. Use one replica unless Railway can keep the initial page GET,
+   WebSocket/reconnect traffic, and `POST /rio/cookies` on the same process;
+   sharing only a signing key is insufficient.
 
 ## TODO: runtime-data relocation
 
@@ -38,6 +48,8 @@ tracked application files:
       outside the runtime-data directory.
 - [ ] Mount a Railway volume at the configured runtime-data path (e.g.
       `/data`) and point the config at it.
+- [ ] Keep the service at one replica, or verify end-to-end affinity for the
+      full Rio and secure-cookie request sequence described above.
 - [ ] Update this document and remove the warnings in `README.md`,
       `DEPLOYMENT_INSTRUCTIONS.md`, and `railway.toml` once verified.
 

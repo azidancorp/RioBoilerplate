@@ -39,6 +39,21 @@ def client(tmp_path_factory):
         app_module.app.default_attachments[:] = original_attachments
 
 
+def test_crawler_receives_page_without_binding_redirect(client):
+    """Stateless SSR clients must not need to retain a bootstrap cookie."""
+    for _ in range(3):
+        client.cookies.clear()
+        response = client.get(
+            "/about",
+            headers={"User-Agent": CRAWLER_UA},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 200
+        assert response.headers.get("location") is None
+        assert "initialMessages" in response.text
+
+
 # Parametrize over public routes
 @pytest.mark.parametrize("route", PUBLIC_NAV_ROUTES, ids=lambda r: r.path)
 def test_public_page_renders(client, route):

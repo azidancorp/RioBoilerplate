@@ -67,16 +67,20 @@ def test_known_pages_and_wrong_api_methods_keep_their_normal_semantics(client):
 
 
 def test_docs_and_openapi_describe_only_the_application_api_surface(client):
+    client.cookies.clear()
     docs = client.get("/docs")
     redoc = client.get("/redoc")
     openapi = client.get("/openapi.json")
 
     assert docs.status_code == 200
     assert "SwaggerUIBundle" in docs.text
+    assert "rio-browser-binding" not in docs.headers.get("set-cookie", "")
     assert redoc.status_code == 200
     assert "redoc" in redoc.text.lower()
+    assert "rio-browser-binding" not in redoc.headers.get("set-cookie", "")
     assert openapi.status_code == 200
     assert openapi.headers["content-type"].startswith("application/json")
+    assert "rio-browser-binding" not in openapi.headers.get("set-cookie", "")
 
     schema = openapi.json()
     assert schema["openapi"]

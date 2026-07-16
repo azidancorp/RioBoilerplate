@@ -10,7 +10,9 @@ from typing import Iterable
 
 from app.api.health import check_sqlite_health
 from app.config import config
+from app.oauth_clients import is_google_login_configured
 from app.persistence import DEFAULT_DB_PATH, Persistence
+from app.rio_cookie_security import canonical_http_origin
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -23,6 +25,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Fail unless a verified root user exists after schema initialization.",
     )
     parser.add_argument(
+        "--require-secure-auth-cookie",
+        action="store_true",
+        help=(
+            "Fail unless browser authentication and configured OAuth cookies "
+            "are Secure."
+        ),
+    )
+    parser.add_argument(
         "--db-path",
         type=Path,
         default=None,
@@ -31,7 +41,48 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _is_canonical_https_origin(value: str) -> bool:
+    try:
+        origin = canonical_http_origin(value)
+    except ValueError:
+        return False
+    return origin.startswith("https://")
+
+
 def run_prestart(args: argparse.Namespace) -> int:
+    if args.require_secure_auth_cookie and not config.AUTH_TOKEN_COOKIE_SECURE:
+        print(
+            "ERROR: Production authentication cookies are not Secure. Set "
+            "AUTH_TOKEN_COOKIE_SECURE = True in app/app/config.py before "
+            "starting the public service.",
+            file=sys.stderr,
+        )
+        return 3
+
+    if args.require_secure_auth_cookie and not _is_canonical_https_origin(
+        config.APP_URL
+    ):
+        print(
+            "ERROR: Secure production authentication cookies require APP_URL "
+            "to be a canonical HTTPS origin such as https://example.com in "
+            "app/app/config.py.",
+            file=sys.stderr,
+        )
+        return 3
+
+    if (
+        args.require_secure_auth_cookie
+        and is_google_login_configured()
+        and not config.OAUTH_COOKIE_SECURE
+    ):
+        print(
+            "ERROR: Production OAuth is configured, but its state/nonce "
+            "cookie is not Secure. Set OAUTH_COOKIE_SECURE = True in "
+            "app/app/config.py before starting the public service.",
+            file=sys.stderr,
+        )
+        return 3
+
     db_path = args.db_path or DEFAULT_DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)
 

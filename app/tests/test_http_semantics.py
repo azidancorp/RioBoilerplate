@@ -90,9 +90,9 @@ def test_known_pages_keep_their_normal_semantics(client):
             "/api/profiles/00000000-0000-0000-0000-000000000000",
             "DELETE, GET, PUT",
         ),
-        ("POST", "/robots.txt", "GET"),
-        ("POST", "/sitemap.xml", "GET"),
-        ("POST", "/rio/sitemap.xml", "GET"),
+        ("POST", "/robots.txt", "GET, HEAD"),
+        ("POST", "/sitemap.xml", "GET, HEAD"),
+        ("POST", "/rio/sitemap.xml", "GET, HEAD"),
     ),
 )
 def test_known_routes_reject_wrong_methods(client, method, path, allow):
@@ -104,6 +104,17 @@ def test_known_routes_reject_wrong_methods(client, method, path, allow):
     assert response.headers["allow"] == allow
     assert response.json() == {"detail": "Method Not Allowed"}
     assert "rio-browser-binding" not in response.headers.get("set-cookie", "")
+
+
+@pytest.mark.parametrize(
+    "path",
+    ("/robots.txt", "/sitemap.xml", "/rio/sitemap.xml"),
+)
+def test_crawler_files_answer_head_requests(client, path):
+    client.cookies.clear()
+    response = client.head(path)
+
+    assert response.status_code == 200
 
 
 @pytest.mark.parametrize(

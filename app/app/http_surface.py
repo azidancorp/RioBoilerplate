@@ -140,12 +140,12 @@ def install_http_surface(app: FastAPI) -> None:
             return await call_next(request)
 
         if path == "/robots.txt":
-            if request.method != "GET":
-                return _method_not_allowed_response({"GET"})
+            if request.method not in {"GET", "HEAD"}:
+                return _method_not_allowed_response({"GET", "HEAD"})
             return _robots_response()
         if path in {"/sitemap.xml", "/rio/sitemap.xml"}:
-            if request.method != "GET":
-                return _method_not_allowed_response({"GET"})
+            if request.method not in {"GET", "HEAD"}:
+                return _method_not_allowed_response({"GET", "HEAD"})
             return _public_sitemap_response()
 
         full_match, allowed_methods = _match_explicit_routes(app, request)

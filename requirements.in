@@ -1,0 +1,19 @@
+# Direct runtime dependencies. Regenerate requirements.txt with:
+#   venv/bin/pip-compile --allow-unsafe --generate-hashes --strip-extras requirements.in
+# Keep the installer patched too: every virtual environment contains pip.
+pip==26.1.2
+rio-ui==0.12.2
+qrcode[pil]==8.2
+pillow==12.3.0
+pyotp==2.9.0
+python-dotenv==1.2.2
+numpy==2.5.1
+pandas==3.0.0
+plotly==6.5.2
+pydantic[email]==2.12.5
+requests==2.33.0
+httpx==0.28.1
+idna==3.15
+pwdlib[argon2]==0.3.0
+authlib==1.7.2
+itsdangerous==2.2.0

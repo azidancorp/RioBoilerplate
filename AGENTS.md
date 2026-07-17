@@ -26,7 +26,7 @@ Rio-based web application boilerplate with user authentication, MFA, mobile-resp
 - Docs/playbooks: `README.md`, `DEPLOYMENT_INSTRUCTIONS.md`, `UPSTREAM_MERGE_GUIDE.md`, `RioDocumentation/`
 
 ## Run / Test
-- Install deps: `python -m venv venv && source venv/bin/activate && pip install -r requirements.txt`
+- Install deps: `python -m venv venv && source venv/bin/activate && python -m pip install --require-hashes -r requirements-dev.txt`
 - Run dev server (from outer `app/` containing `rio.toml`): `cd app && rio run`
 - Release smoke test (recommended before deployment): `cd app && rio run --port 8000 --release`
 - Pytest:

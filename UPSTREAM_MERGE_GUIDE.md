@@ -176,7 +176,7 @@ Add `--allow-unrelated-histories` to your merge command. This happens on the fir
 
 **Merge succeeded but app won't start**
 
-1. Check `requirements.txt` - you may need to `pip install -r requirements.txt` for new dependencies
+1. Check the requirements inputs and locks; regenerate them when inputs changed, then run `python -m pip install --require-hashes -r requirements-dev.txt`
 2. Check for database schema changes in the upstream commits
 
 **Too many conflicts to handle**

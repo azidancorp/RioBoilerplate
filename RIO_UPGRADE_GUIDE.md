@@ -1,6 +1,6 @@
 # Upgrading `rio-ui` 0.12.0 → 0.12.2
 
-Scope: the patch bump of the pinned `rio-ui` from `0.12.0` to `0.12.2` in `requirements.txt`. For a project derived from this boilerplate that is catching up to this pin.
+Scope: the patch bump of the pinned `rio-ui` from `0.12.0` to `0.12.2` in `requirements.in` and its generated locks. For a project derived from this boilerplate that is catching up to this pin.
 
 This bump was validated in the boilerplate (full suite: **210 passed**, no code changes required). It is a patch bump with **no documented breaking API changes** — your only job is to confirm your *own* additions on top of the boilerplate still work, by running the regression suite below.
 
@@ -28,8 +28,8 @@ The only subtle change is `Session._attachments` (dict → `SessionAttachments`)
 
 ## Upgrade steps
 
-1. Set `rio-ui==0.12.2` in `requirements.txt` and reinstall (`pip install -r requirements.txt`).
-2. Optionally capture transitive bumps: `pip freeze > before.txt` (pre-bump), again after, then `diff`.
+1. Set `rio-ui==0.12.2` in `requirements.in`, regenerate both hashed locks, and reinstall with `python -m pip install --require-hashes -r requirements-dev.txt`.
+2. Review the generated lock diff to identify every transitive change.
 3. Run the regression suite against your tree; stop on first failure:
 
 ```bash

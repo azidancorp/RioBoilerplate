@@ -42,7 +42,7 @@ For detailed merge instructions and conflict resolution, see `UPSTREAM_MERGE_GUI
 ## Quick Start
 1. Set up the boilerplate using Option A or B above.
 2. Create and activate a virtual environment: `python -m venv venv` then `source venv/bin/activate` (or `venv\Scripts\activate` on Windows).
-3. Install dependencies: `pip install -r requirements.txt`.
+3. Install the hashed development lock: `python -m pip install --require-hashes -r requirements-dev.txt`.
 4. Copy `.env.example` to `.env` and set any provider/session secrets your deployment uses.
 5. From the repository root, initialize the first verified root account: `cd app && python -m app.scripts.bootstrap_root`.
 6. Still in `app/`, start the development server: `rio run`.
@@ -66,6 +66,12 @@ The current `app/app/data/` directory mixes mutable runtime state with tracked s
 - `rio run` – hot-reloading dev server.
 - `rio run --port 8000 --release` – release-mode smoke test.
 - `curl -fsS http://127.0.0.1:8000/api/health` – machine-readable health check for the running app and local SQLite schema.
+
+Runtime dependencies are declared in `requirements.in` and compiled with hashes
+into `requirements.txt`. Development and supply-chain tools use the corresponding
+`requirements-dev.in` and `requirements-dev.txt` files. After changing an input,
+regenerate both locks with the pinned `pip-compile` from the development lock;
+never hand-edit the generated files.
 
 ## Configuration
 - `.env` is for secrets only, such as `SESSION_SECRET_KEY` or provider credentials.
@@ -102,7 +108,10 @@ RioBoilerplate/
 │       └── validation.py      # Input validation & Pydantic models
 ├── RioDocumentation/          # Bundled Rio reference material
 ├── DEPLOYMENT_INSTRUCTIONS.md # Production rollout guide
-├── requirements.txt
+├── requirements.in            # Direct runtime dependencies
+├── requirements.txt           # Hashed runtime lock
+├── requirements-dev.in        # Direct development/tooling dependencies
+├── requirements-dev.txt       # Hashed development lock
 └── README.md
 ```
 

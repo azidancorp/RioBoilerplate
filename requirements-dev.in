@@ -1,0 +1,8 @@
+# Development and supply-chain tooling. Runtime dependencies are included so
+# requirements-dev.txt is a complete, independently installable lock.
+-r requirements.in
+pip-tools==7.5.3
+pytest==9.0.3
+pip-audit==2.10.1
+cyclonedx-bom==7.3.0
+paramiko==5.0.0

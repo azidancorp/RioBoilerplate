@@ -168,31 +168,34 @@ Nginx Full (v6)            ALLOW       Anywhere (v6)
 
 ## Step 3: Deploy Application Files
 
-From your **local machine**, deploy the committed revision. `git archive` sends
-only files tracked by Git, so local virtual environments, secrets, databases,
-caches, and other uncommitted files cannot accidentally reach the server:
+Deploy the release artifact produced by the successful `CI` run for the exact
+commit. The artifact contains only committed source, the runtime SBOM, and the
+hash-verified Linux/Python 3.12 wheelhouse used for installation. Do not rebuild
+dependencies from the public package index on the production server.
 
 Before running these commands, complete the production-behavior review in
 Step 3.7 in your **local checkout**, test the resulting configuration, and
 commit it. Non-secret settings such as `APP_URL` and secure-cookie policy are
 part of the deployed source; do not customize tracked Python files only on the
-server, because the next archive deployment will overwrite those edits.
+server, because the next artifact deployment will overwrite those edits.
 
 ```bash
-# Stream the committed HEAD to a fresh, root-only staging path (run locally)
-git -C [LOCAL_APP_PATH] archive --format=tar.gz HEAD | ssh [SSH_ALIAS] '
-  rm -rf /tmp/[APP_NAME] &&
-  install -d -m 0700 /tmp/[APP_NAME] &&
-  tar -xzf - -C /tmp/[APP_NAME]
-'
-# OR
-git -C [LOCAL_APP_PATH] archive --format=tar.gz HEAD | ssh root@[DROPLET_IP] '
-  rm -rf /tmp/[APP_NAME] &&
-  install -d -m 0700 /tmp/[APP_NAME] &&
-  tar -xzf - -C /tmp/[APP_NAME]
-'
+# On your local machine, download the named artifact from the successful main
+# branch run. Use the run ID and full commit SHA shown by GitHub Actions.
+gh run download [RUN_ID] \
+  --repo [GITHUB_REPOSITORY] \
+  --name rio-boilerplate-[COMMIT_SHA] \
+  --dir release
+cd release
+sha256sum -c rio-boilerplate-release.tar.gz.sha256
+scp rio-boilerplate-release.tar.gz [SSH_ALIAS]:/tmp/
 
-# Back on the server, install root-owned source and app-owned writable directories
+# On the server, unpack into a fresh root-only staging directory.
+rm -rf /tmp/[APP_NAME]
+install -d -m 0700 /tmp/[APP_NAME]
+tar -xzf /tmp/rio-boilerplate-release.tar.gz -C /tmp/[APP_NAME]
+
+# Install root-owned source and app-owned writable directories.
 chown -R root:root /tmp/[APP_NAME]
 cp -a /tmp/[APP_NAME]/. /srv/[APP_NAME]/
 install -d -o [APP_USER] -g [APP_USER] -m 0750 \
@@ -200,9 +203,13 @@ install -d -o [APP_USER] -g [APP_USER] -m 0750 \
   /srv/[APP_NAME]/.local/share/rio-boilerplate
 rm -rf /tmp/[APP_NAME]
 
-# Build an immutable virtual environment on the server; do not upload a local venv
+# Build from the CI-produced wheelhouse without contacting a package index.
 python3 -m venv /srv/[APP_NAME]/venv
-/srv/[APP_NAME]/venv/bin/pip install -r /srv/[APP_NAME]/requirements.txt
+/srv/[APP_NAME]/venv/bin/pip install \
+  --no-index \
+  --find-links /srv/[APP_NAME]/wheelhouse \
+  --require-hashes \
+  -r /srv/[APP_NAME]/requirements.txt
 
 # Example structure on server should be:
 # /srv/[APP_NAME]/
@@ -212,15 +219,16 @@ python3 -m venv /srv/[APP_NAME]/venv
 # └── venv/          # Python virtual environment
 ```
 
-Successful archive transfer is quiet. On the server,
+Successful artifact transfer is quiet. On the server,
 `test -x /srv/[APP_NAME]/venv/bin/rio` should exit successfully after the
 installation finishes.
 
 **Common Issues:**
 - **Permission denied**: Check SSH access and target directory permissions
-- **Not a Git repository**: Verify `[LOCAL_APP_PATH]` points to this repository
-- **Missing recent changes**: Commit the intended revision before running
-  `git archive`; uncommitted files are deliberately excluded
+- **Artifact not found**: Verify the main-branch CI run succeeded and that the
+  artifact name contains the run's full commit SHA
+- **Wrong target platform**: The supplied wheelhouse targets the CI runner's
+  Linux x86-64/Python 3.12 environment; use a matching production host
 - **Connection timeout**: Check network connection and SSH configuration
 
 ## Step 3.5: Configure Environment
@@ -236,7 +244,7 @@ chmod 0640 .env
 
 Add any deployment-specific secrets required by the providers you enable.
 
-> **Note:** Other behavior settings (email validation, username login, currency names, password policy) are hardcoded in `app/app/config.py`. Review, test, and commit those changes in the local checkout before creating the Step 3 archive. See `docs/configuration/email-validation.md` for the email/username validation knobs.
+> **Note:** Other behavior settings (email validation, username login, currency names, password policy) are hardcoded in `app/app/config.py`. Review, test, and commit those changes before the Step 3 release artifact is built. See `docs/configuration/email-validation.md` for the email/username validation knobs.
 > **Note:** Email provider host/sender/TLS defaults also live in `app/app/config.py`; only credential/secret values such as `RIO_SMTP_PASSWORD` belong in `.env`.
 > **Note:** The SQLite database file is created locally on first run at `app/app/data/app.db` and is not intended to be committed.
 
@@ -769,7 +777,10 @@ ufw allow OpenSSH
 ```
 /srv/[APP_NAME]/
 ├── .env                   # Deployment secrets
-├── requirements.txt
+├── requirements.txt       # CI-generated wheelhouse lock
+├── requirements-source.txt # Audited platform-neutral source lock
+├── sbom.cdx.json          # Runtime dependency inventory
+├── wheelhouse/            # CI-built, hash-verified Python wheels
 ├── app/                    # Main application files
 │   ├── rio.toml           # Rio configuration
 │   └── app/

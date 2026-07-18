@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import typing as t
 import uuid
@@ -381,7 +382,8 @@ class LoginForm(rio.Component):
             return
 
         try:
-            send_email_verification_email(
+            await asyncio.to_thread(
+                send_email_verification_email,
                 recipient=user_info.email,
                 token=token.token,
                 valid_until=token.valid_until,
@@ -637,7 +639,8 @@ class SignUpForm(rio.Component):
                 return
 
             try:
-                send_email_verification_email(
+                await asyncio.to_thread(
+                    send_email_verification_email,
                     recipient=user_info.email,
                     token=token.token,
                     valid_until=token.valid_until,
@@ -1153,7 +1156,8 @@ class ResetPasswordForm(rio.Component):
             return
 
         try:
-            send_password_reset_email(
+            await asyncio.to_thread(
+                send_password_reset_email,
                 recipient=sanitized_email,
                 token=reset_token.token,
                 valid_until=reset_token.valid_until,

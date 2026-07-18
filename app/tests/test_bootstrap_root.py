@@ -702,6 +702,94 @@ def test_prestart_allows_nonsecure_oauth_cookie_when_oauth_is_disabled(
     assert db_path.exists()
 
 
+def test_prestart_production_email_rejects_outbox_before_touching_database(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    db_path = tmp_path / "production-outbox.db"
+    monkeypatch.setattr(config, "EMAIL_METHOD", "outbox")
+
+    exit_code = prestart.main(
+        ["--db-path", str(db_path), "--require-production-email"]
+    )
+
+    assert exit_code == 3
+    assert "local development only" in capsys.readouterr().err
+    assert not db_path.exists()
+
+
+def test_prestart_production_resend_requires_api_key_before_database(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    db_path = tmp_path / "resend-without-key.db"
+    monkeypatch.setattr(config, "EMAIL_METHOD", "resend")
+    monkeypatch.setattr(config, "DEFAULT_EMAIL_SENDER", "sender@example.com")
+    monkeypatch.setattr(config, "RESEND_API_KEY", "")
+
+    exit_code = prestart.main(
+        ["--db-path", str(db_path), "--require-production-email"]
+    )
+
+    assert exit_code == 3
+    assert "requires RESEND_API_KEY" in capsys.readouterr().err
+    assert not db_path.exists()
+
+
+def test_prestart_production_smtp_rejects_insecure_or_partial_credentials(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(config, "EMAIL_METHOD", "smtp")
+    monkeypatch.setattr(config, "DEFAULT_EMAIL_SENDER", "sender@example.com")
+    monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(config, "SMTP_USERNAME", "smtp-user")
+    monkeypatch.setattr(config, "SMTP_PASSWORD", "smtp-password")
+    monkeypatch.setattr(config, "SMTP_USE_TLS", False)
+
+    insecure_db = tmp_path / "insecure-smtp.db"
+    assert prestart.main(
+        ["--db-path", str(insecure_db), "--require-production-email"]
+    ) == 3
+    assert "requires SMTP_USE_TLS=True" in capsys.readouterr().err
+    assert not insecure_db.exists()
+
+    monkeypatch.setattr(config, "SMTP_USE_TLS", True)
+    monkeypatch.setattr(config, "SMTP_PASSWORD", "")
+    partial_db = tmp_path / "partial-smtp-credentials.db"
+    assert prestart.main(
+        ["--db-path", str(partial_db), "--require-production-email"]
+    ) == 3
+    assert "must be configured together" in capsys.readouterr().err
+    assert not partial_db.exists()
+
+
+def test_prestart_production_email_accepts_resend_and_secure_smtp(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(config, "DEFAULT_EMAIL_SENDER", "sender@example.com")
+    monkeypatch.setattr(config, "EMAIL_METHOD", "resend")
+    monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
+    resend_db = tmp_path / "ready-resend.db"
+    assert prestart.main(
+        ["--db-path", str(resend_db), "--require-production-email"]
+    ) == 0
+
+    monkeypatch.setattr(config, "EMAIL_METHOD", "smtp")
+    monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(config, "SMTP_USE_TLS", True)
+    monkeypatch.setattr(config, "SMTP_USERNAME", "")
+    monkeypatch.setattr(config, "SMTP_PASSWORD", "")
+    smtp_db = tmp_path / "ready-smtp.db"
+    assert prestart.main(
+        ["--db-path", str(smtp_db), "--require-production-email"]
+    ) == 0
+
+
 def test_prestart_module_invocation_detection_is_exact() -> None:
     assert app_module._is_prestart_module_invocation(
         ["python", "-X", "dev", "-m", "app.scripts.prestart"]
@@ -788,7 +876,7 @@ def test_railway_start_is_gated_by_strict_bootstrap() -> None:
 
     strict_check = (
         "python -m app.scripts.prestart --strict-bootstrap "
-        "--require-secure-auth-cookie"
+        "--require-secure-auth-cookie --require-production-email"
     )
     public_start = "exec rio run"
     assert strict_check in railway_config

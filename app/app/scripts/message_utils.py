@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import smtplib
+import ssl
+import tempfile
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
@@ -20,7 +22,16 @@ from app.validation import SecuritySanitizer
 logger = logging.getLogger(__name__)
 
 _EMAIL_OUTBOX_DIR = Path(__file__).resolve().parent.parent / "data" / "email_outbox"
+_RESEND_EMAILS_URL = "https://api.resend.com/emails"
 _MAX_CONTACT_ID_ATTEMPTS = 1000
+
+
+def _email_configuration_error(log_detail: str) -> HTTPException:
+    logger.error("Email delivery configuration error: %s", log_detail)
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Email delivery is not configured.",
+    )
 
 
 def create_contact_submission(name: str, email: str, message: str) -> Dict[str, Any]:
@@ -102,7 +113,7 @@ def _notify_contact_submission(submission: Dict[str, Any]) -> None:
     )
 
 
-# TODO: Move reset/verification email bodies to Jinja templates with render tests; keep token-only links and outbox fallback.
+# TODO: Move reset/verification email bodies to Jinja templates with render tests.
 def send_email_verification_email(
     *,
     recipient: str,
@@ -164,12 +175,15 @@ def send_email(
     persist_copy: bool = True,
 ) -> None:
     """
-    Send a plain text email using basic SMTP configuration with a local outbox fallback.
+    Send plain text email using the explicitly configured delivery method.
 
-    When no SMTP settings are provided, the message is persisted to the data/email_outbox
-    directory so testers can inspect outbound mail during development.
+    The local outbox is a development inspection aid, not a delivery queue. External
+    provider failures are reported to the caller and never fall back to local files.
     """
-    sanitized_recipient = SecuritySanitizer.validate_email_format(recipient)
+    sanitized_recipient = SecuritySanitizer.validate_email_format(
+        recipient,
+        require_valid=True,
+    )
 
     subject = (subject or "").strip()
     if not subject:
@@ -182,45 +196,160 @@ def send_email(
     if not sender_address:
         sender_address = "no-reply@rio.local"
 
-    message = EmailMessage()
-    message["To"] = sanitized_recipient
-    message["From"] = sender_address
-    message["Subject"] = subject
-    message.set_content(body)
+    method = (config.EMAIL_METHOD or "").strip().lower()
 
-    smtp_host = config.SMTP_HOST
-    if smtp_host:
+    if method == "resend":
+        api_key = (config.RESEND_API_KEY or "").strip()
+        if not api_key:
+            raise _email_configuration_error(
+                "EMAIL_METHOD='resend' requires RESEND_API_KEY."
+            )
+
+        try:
+            external_sender = SecuritySanitizer.validate_email_format(
+                sender_address,
+                require_valid=True,
+            )
+        except HTTPException as exc:
+            raise _email_configuration_error(
+                "External delivery requires a valid DEFAULT_EMAIL_SENDER."
+            ) from exc
+
+        delivery_failure_type: str | None = None
+        try:
+            response = requests.post(
+                _RESEND_EMAILS_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "User-Agent": "rio-boilerplate",
+                },
+                json={
+                    "from": external_sender,
+                    "to": [sanitized_recipient],
+                    "subject": subject,
+                    "text": body,
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+            response_data = response.json()
+            email_id = response_data.get("id") if isinstance(response_data, dict) else None
+            if not email_id:
+                raise ValueError("Resend response did not include an email ID.")
+        except (requests.RequestException, ValueError) as exc:
+            delivery_failure_type = type(exc).__name__
+
+        if delivery_failure_type is not None:
+            logger.error("Resend email delivery failed (%s).", delivery_failure_type)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Email delivery is temporarily unavailable.",
+            )
+
+        logger.info(
+            "Sent email via Resend to %s (id=%s)",
+            sanitized_recipient,
+            email_id,
+        )
+        return
+
+    if method == "smtp":
+        smtp_host = (config.SMTP_HOST or "").strip()
+        username = (config.SMTP_USERNAME or "").strip()
+        password = config.SMTP_PASSWORD or ""
+
+        if not smtp_host:
+            raise _email_configuration_error("EMAIL_METHOD='smtp' requires SMTP_HOST.")
+        if not config.SMTP_USE_TLS:
+            raise _email_configuration_error("EMAIL_METHOD='smtp' requires TLS.")
+        if bool(username) != bool(password):
+            raise _email_configuration_error(
+                "SMTP username and password must be configured together."
+            )
+
+        try:
+            external_sender = SecuritySanitizer.validate_email_format(
+                sender_address,
+                require_valid=True,
+            )
+        except HTTPException as exc:
+            raise _email_configuration_error(
+                "External delivery requires a valid DEFAULT_EMAIL_SENDER."
+            ) from exc
+
+        message = EmailMessage()
+        message["To"] = sanitized_recipient
+        message["From"] = external_sender
+        message["Subject"] = subject
+        message.set_content(body)
+
+        delivery_failure_type = None
         try:
             with smtplib.SMTP(smtp_host, config.SMTP_PORT, timeout=10) as smtp:
-                if config.SMTP_USE_TLS:
-                    smtp.starttls()
-                if config.SMTP_USERNAME and config.SMTP_PASSWORD:
-                    smtp.login(config.SMTP_USERNAME, config.SMTP_PASSWORD)
+                smtp.starttls(context=ssl.create_default_context())
+                if username and password:
+                    smtp.login(username, password)
                 smtp.send_message(message)
-                logger.info("Sent email via SMTP to %s", sanitized_recipient)
-                return
         except Exception as exc:
-            logger.error("Failed to send email via SMTP: %s", exc)
+            delivery_failure_type = type(exc).__name__
 
-    if persist_copy:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        sanitized_filename = sanitized_recipient.replace("@", "_at_").replace(".", "_")
-        _EMAIL_OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
-        outbox_path = _EMAIL_OUTBOX_DIR / f"{timestamp}-{sanitized_filename}.txt"
+        if delivery_failure_type is not None:
+            logger.error("SMTP email delivery failed (%s).", delivery_failure_type)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Email delivery is temporarily unavailable.",
+            )
 
+        logger.info("Sent email via SMTP to %s", sanitized_recipient)
+        return
+
+    if method == "outbox":
+        if (config.SMTP_HOST or "").strip():
+            raise _email_configuration_error(
+                "EMAIL_METHOD='outbox' cannot be used while SMTP_HOST is configured; "
+                "set EMAIL_METHOD='smtp' or clear SMTP_HOST."
+            )
+
+        if not persist_copy:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="The development email outbox is disabled for this message.",
+            )
+
+        outbox_path: Path | None = None
         try:
-            with outbox_path.open("w", encoding="utf-8") as handle:
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            _EMAIL_OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=_EMAIL_OUTBOX_DIR,
+                prefix=f"{timestamp}-",
+                suffix=".txt",
+                delete=False,
+            ) as handle:
+                outbox_path = Path(handle.name)
                 handle.write(f"To: {sanitized_recipient}\n")
                 handle.write(f"From: {sender_address}\n")
                 handle.write(f"Subject: {subject}\n\n")
                 handle.write(body)
             logger.info("Email saved to local outbox: %s", outbox_path)
         except OSError as exc:
+            if outbox_path is not None:
+                try:
+                    outbox_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Failed to remove partial outbox file: %s", outbox_path)
             logger.error("Failed to persist email to outbox: %s", exc)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Unable to queue email for delivery.",
+                detail="Unable to save email to the development outbox.",
             ) from exc
+        return
+
+    raise _email_configuration_error(
+        f"Unsupported EMAIL_METHOD '{method}'; use outbox, resend, or smtp."
+    )
 
 
 def send_ntfy_message(

@@ -8,11 +8,14 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+from fastapi import HTTPException
+
 from app.api.health import check_sqlite_health
 from app.config import config
 from app.oauth_clients import is_google_login_configured
 from app.persistence import DEFAULT_DB_PATH, Persistence
 from app.rio_cookie_security import canonical_http_origin
+from app.validation import SecuritySanitizer
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -33,6 +36,11 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--require-production-email",
+        action="store_true",
+        help="Fail unless a secure external email provider is configured.",
+    )
+    parser.add_argument(
         "--db-path",
         type=Path,
         default=None,
@@ -47,6 +55,37 @@ def _is_canonical_https_origin(value: str) -> bool:
     except ValueError:
         return False
     return origin.startswith("https://")
+
+
+def _production_email_configuration_error() -> str | None:
+    method = (config.EMAIL_METHOD or "").strip().lower()
+    if method == "outbox":
+        return "EMAIL_METHOD='outbox' is for local development only."
+    if method not in {"resend", "smtp"}:
+        return "EMAIL_METHOD must be 'resend' or 'smtp' in production."
+
+    try:
+        SecuritySanitizer.validate_email_format(
+            config.DEFAULT_EMAIL_SENDER,
+            require_valid=True,
+        )
+    except HTTPException:
+        return "DEFAULT_EMAIL_SENDER must be a valid production email address."
+
+    if method == "resend":
+        if not (config.RESEND_API_KEY or "").strip():
+            return "EMAIL_METHOD='resend' requires RESEND_API_KEY."
+        return None
+
+    if not (config.SMTP_HOST or "").strip():
+        return "EMAIL_METHOD='smtp' requires SMTP_HOST."
+    if not config.SMTP_USE_TLS:
+        return "EMAIL_METHOD='smtp' requires SMTP_USE_TLS=True."
+    if bool((config.SMTP_USERNAME or "").strip()) != bool(
+        config.SMTP_PASSWORD or ""
+    ):
+        return "SMTP_USERNAME and SMTP_PASSWORD must be configured together."
+    return None
 
 
 def run_prestart(args: argparse.Namespace) -> int:
@@ -82,6 +121,15 @@ def run_prestart(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 3
+
+    if args.require_production_email:
+        email_error = _production_email_configuration_error()
+        if email_error:
+            print(
+                f"ERROR: Production email check failed: {email_error}",
+                file=sys.stderr,
+            )
+            return 3
 
     db_path = args.db_path or DEFAULT_DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)

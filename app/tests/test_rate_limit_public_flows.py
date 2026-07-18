@@ -1,10 +1,12 @@
 import asyncio
+import threading
 from collections import defaultdict
 from pathlib import Path
 
 import pyotp
 import pytest
 import rio
+from fastapi import HTTPException
 
 from app.config import config
 from app.data_models import AppUser, UserSettings
@@ -491,6 +493,106 @@ def test_reset_request_uses_same_visible_state_for_existing_and_unknown_email(
     asyncio.run(scenario())
 
 
+def test_reset_email_delivery_does_not_block_the_event_loop(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    started = threading.Event()
+    release = threading.Event()
+    events: list[str] = []
+    worker_threads: list[int] = []
+
+    def blocking_send(**kwargs):
+        worker_threads.append(threading.get_ident())
+        events.append("send-start")
+        started.set()
+        if not release.wait(timeout=5):
+            events.append("send-timeout")
+            return
+        events.append("send-end")
+
+    monkeypatch.setattr(
+        login_page_module,
+        "send_password_reset_email",
+        blocking_send,
+    )
+
+    async def scenario():
+        user = await _create_user(temp_db, "reset-thread@example.com")
+        form = _mount_component(
+            ResetPasswordForm,
+            _FakeSession(temp_db, "198.51.100.41"),
+            email=user.email,
+        )
+        event_loop_thread = threading.get_ident()
+
+        send_task = asyncio.create_task(ResetPasswordForm._send_reset_token(form))
+        try:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 5
+            while not started.is_set() and loop.time() < deadline:
+                await asyncio.sleep(0.001)
+
+            assert started.is_set()
+            assert not send_task.done()
+            events.append("heartbeat")
+        finally:
+            release.set()
+            await asyncio.wait_for(send_task, timeout=5)
+
+        assert len(worker_threads) == 1
+        assert worker_threads[0] != event_loop_thread
+        assert events == ["send-start", "heartbeat", "send-end"]
+
+    asyncio.run(scenario())
+
+
+def test_signup_email_delivery_propagates_http_errors_from_worker_thread(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    worker_threads: list[int] = []
+    delivery_error = HTTPException(
+        status_code=502,
+        detail="Email delivery is temporarily unavailable.",
+    )
+
+    def fail_delivery(**kwargs):
+        worker_threads.append(threading.get_ident())
+        raise delivery_error
+
+    monkeypatch.setattr(config, "REQUIRE_EMAIL_VERIFICATION", True)
+    monkeypatch.setattr(
+        login_page_module,
+        "send_email_verification_email",
+        fail_delivery,
+    )
+
+    async def scenario():
+        await _create_user(temp_db, "existing-root@example.com")
+        form = _mount_component(
+            SignUpForm,
+            _FakeSession(temp_db, "198.51.100.42"),
+            email="signup-thread@example.com",
+            password="VeryStrongPass!9",
+            confirm_password="VeryStrongPass!9",
+        )
+        event_loop_thread = threading.get_ident()
+
+        await SignUpForm.on_sign_up_pressed(form)
+
+        assert len(worker_threads) == 1
+        assert worker_threads[0] != event_loop_thread
+        assert form.banner_style == "danger"
+        assert form.error_message == (
+            "Account created, but verification email could not be sent: "
+            "Email delivery is temporarily unavailable."
+        )
+        assert await temp_db.get_user_by_email("signup-thread@example.com")
+
+    asyncio.run(scenario())
+
+
 def test_rate_limited_reset_request_does_not_rotate_token_or_send_email(
     temp_db: Persistence,
     monkeypatch: pytest.MonkeyPatch,
@@ -528,9 +630,20 @@ def test_verification_resend_rate_limit_does_not_rotate_token_or_send_email(
 ):
     config.RATE_LIMIT_VERIFICATION_EMAIL_ATTEMPTS = 1
     sent: list[dict] = []
-    monkeypatch.setattr(login_page_module, "send_email_verification_email", lambda **kwargs: sent.append(kwargs))
+    worker_threads: list[int] = []
+
+    def fake_send_email_verification_email(**kwargs):
+        worker_threads.append(threading.get_ident())
+        sent.append(kwargs)
+
+    monkeypatch.setattr(
+        login_page_module,
+        "send_email_verification_email",
+        fake_send_email_verification_email,
+    )
 
     async def scenario():
+        event_loop_thread = threading.get_ident()
         user = await _create_user(temp_db, "verify-limit@example.com")
         original_token = await temp_db.create_email_verification_token(user.id)
         assert original_token.token
@@ -545,6 +658,7 @@ def test_verification_resend_rate_limit_does_not_rotate_token_or_send_email(
         allowed_hashes = _verification_token_hashes(temp_db, user.id)
         assert form.banner_style == "success"
         assert len(sent) == 1
+        assert worker_threads[0] != event_loop_thread
 
         await LoginForm.resend_verification_email(form)
 

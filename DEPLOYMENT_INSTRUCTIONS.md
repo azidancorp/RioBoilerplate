@@ -244,8 +244,33 @@ chmod 0640 .env
 
 Add any deployment-specific secrets required by the providers you enable.
 
+Google OAuth requires `SESSION_SECRET_KEY` in addition to the Google client
+credentials. Generate it once with the command below, copy the result into
+`.env`, and keep the same value across restarts and application instances:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+This key signs the temporary OAuth state/nonce cookie. Changing it invalidates
+OAuth attempts already in progress, which users can restart.
+
+Email delivery is selected explicitly with `EMAIL_METHOD` in
+`app/app/config.py`. Keep `outbox` only for local development. For production,
+choose `resend` (recommended) and set `RESEND_API_KEY` in `.env`, or choose
+`smtp` and configure its host, sender, TLS, and optional username in
+`config.py` plus `RIO_SMTP_PASSWORD` in `.env`. Provider failures never fall
+back to local token-bearing files. Use a sending-only Resend API key rather
+than a full-access key.
+
+> **Existing SMTP deployments:** Before deploying this version, set
+> `EMAIL_METHOD = "smtp"` beside the existing `SMTP_*` settings and add
+> `--require-production-email` to the installed systemd `ExecStartPre`. Run
+> `systemctl daemon-reload` before restarting. SMTP is no longer inferred from
+> `SMTP_HOST`.
+
 > **Note:** Other behavior settings (email validation, username login, currency names, password policy) are hardcoded in `app/app/config.py`. Review, test, and commit those changes before the Step 3 release artifact is built. See `docs/configuration/email-validation.md` for the email/username validation knobs.
-> **Note:** Email provider host/sender/TLS defaults also live in `app/app/config.py`; only credential/secret values such as `RIO_SMTP_PASSWORD` belong in `.env`.
+> **Note:** Email provider method/host/sender/TLS defaults also live in `app/app/config.py`; only secret values such as `RESEND_API_KEY` and `RIO_SMTP_PASSWORD` belong in `.env`.
 > **Note:** The SQLite database file is created locally on first run at `app/app/data/app.db` and is not intended to be committed.
 
 ## Step 3.6: Initialize the First Root User
@@ -295,7 +320,9 @@ Review each setting:
 | `APP_URL` | `http://localhost:8000` | `https://[DOMAIN_NAME]` — the one canonical public origin. The Nginx example below redirects `www` to this apex origin. |
 | `AUTH_TOKEN_COOKIE_SECURE` | `False` | `True` — required so the browser authentication cookie is never sent over plaintext HTTP. `APP_URL` must also be the canonical public `https://` URL; the supported production prestart command fails closed otherwise. |
 | `OAUTH_COOKIE_SECURE` | `False` | `True` when Google OAuth is configured — required so its state/nonce cookie is only sent over HTTPS. |
-| `REQUIRE_EMAIL_VERIFICATION` | `False` | Decide deliberately. Set `True` to require verified email before login (requires working SMTP from Step 3.5). |
+| `EMAIL_METHOD` | `outbox` | `resend` or `smtp`. The production prestart check rejects the development-only outbox and incomplete or insecure provider configuration. |
+| `DEFAULT_EMAIL_SENDER` | `no-reply@rio.local` | A valid address on the sending domain configured with your provider. |
+| `REQUIRE_EMAIL_VERIFICATION` | `False` | Decide deliberately. Set `True` to require verified email before login (requires a working external email provider from Step 3.5). |
 | `ALLOW_WEAK_PASSWORDS` | `True` | `True` warns and requires acknowledgement but preserves user choice. Set `False` only if this deployment deliberately wants every quality warning to become a hard rejection. |
 | `MIN_PASSWORD_LENGTH` | `15` | Advisory minimum. Shorter non-empty passwords show a warning and remain usable after acknowledgement while `ALLOW_WEAK_PASSWORDS` is `True`. |
 | `MAX_PASSWORD_LENGTH` | `1024` | Advisory analysis limit. Longer passwords skip deeper quality analysis, show a warning, and are still hashed in full after acknowledgement. |
@@ -317,7 +344,7 @@ cd /srv/[APP_NAME]/app
 APP_PORT=8000
 sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
   ../venv/bin/python -m app.scripts.prestart --strict-bootstrap \
-  --require-secure-auth-cookie
+  --require-secure-auth-cookie --require-production-email
 sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
   XDG_CACHE_HOME=/tmp/[APP_NAME]-cache \
   ../venv/bin/rio run --port "$APP_PORT" --release
@@ -383,8 +410,8 @@ Environment=HOME=/srv/[APP_NAME]
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=XDG_CACHE_HOME=/tmp/[APP_NAME]-cache
 # --release flag provides production optimizations and safety checks
-# Required: verify schema and require a verified root user before public start
-ExecStartPre=/srv/[APP_NAME]/venv/bin/python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie
+# Required: verify schema, root ownership, secure cookies, and external email
+ExecStartPre=/srv/[APP_NAME]/venv/bin/python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie --require-production-email
 ExecStart=/srv/[APP_NAME]/venv/bin/rio run --port 8000 --release
 Restart=on-failure
 RestartSec=5s
@@ -804,8 +831,8 @@ ufw allow OpenSSH
 - The application itself runs as the dedicated no-login `[APP_USER]` account.
   Do not grant this account sudo or an interactive shell.
 - The systemd unit makes the OS and deployed source read-only to the service;
-  only the SQLite/email-outbox data directory and contact-message data directory
-  are writable.
+  only the SQLite data directory and contact-message data directory are
+  writable. The local email outbox is development-only.
 - During code updates, install files and dependencies as root, keep source and
   `venv/` root-owned, preserve `[APP_USER]` ownership of the two runtime-data
   directories, run strict prestart as `[APP_USER]`, and then restart the

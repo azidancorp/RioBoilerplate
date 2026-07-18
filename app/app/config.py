@@ -100,9 +100,12 @@ class AppConfig:
 
     # Email Delivery
     # --------------
-    # Non-secret delivery defaults live here so deployments can review behavior
-    # in code. Only credential/secret values are loaded from .env.
+    # Select exactly one delivery method: "outbox" for local development,
+    # "resend" for the Resend HTTPS API, or "smtp" for verified STARTTLS.
+    # Production prestart rejects the local outbox method.
+    EMAIL_METHOD: str = "outbox"
     DEFAULT_EMAIL_SENDER: str = "no-reply@rio.local"
+    RESEND_API_KEY: str = ""
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USE_TLS: bool = True
@@ -169,6 +172,7 @@ class AppConfig:
             SESSION_SECRET_KEY=os.getenv("SESSION_SECRET_KEY", ""),
             GOOGLE_CLIENT_ID=os.getenv("GOOGLE_CLIENT_ID", ""),
             GOOGLE_CLIENT_SECRET=os.getenv("GOOGLE_CLIENT_SECRET", ""),
+            RESEND_API_KEY=os.getenv("RESEND_API_KEY", ""),
             SMTP_PASSWORD=os.getenv("RIO_SMTP_PASSWORD", ""),
             CONTACT_NTFY_CHANNEL=os.getenv("RIO_CONTACT_NTFY_CHANNEL", ""),
         )

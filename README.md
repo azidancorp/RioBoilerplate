@@ -56,7 +56,7 @@ Public password signup and OAuth registration cannot initialize an empty databas
 
 > **Warning: not production-ready on Railway yet.** As shipped, `railway.toml` deploys with no volume attached, and Railway's container filesystem is ephemeral — the SQLite database is erased on every deploy and restart. Do not put real users on a Railway deployment until the runtime-data relocation described below is complete and a volume is mounted. The supported production path today is the VPS guide in `DEPLOYMENT_INSTRUCTIONS.md`; the outstanding Railway work and the root-bootstrap procedure are tracked in `docs/railway-readiness.md`.
 
-`railway.toml` runs strict prestart checks before starting the public server. On a fresh database, the deployment exits with a bootstrap error rather than exposing an unclaimed root slot. It also refuses to start until `AUTH_TOKEN_COOKIE_SECURE` is enabled, `APP_URL` is the canonical public HTTPS origin, and—when Google OAuth is configured—`OAUTH_COOKIE_SECURE` is enabled. These non-secret values are code-configured, so set, test, and commit them in `app/app/config.py` before deploying; a Railway environment variable does not override them. These fail-closed results are expected.
+`railway.toml` runs strict prestart checks before starting the public server. On a fresh database, the deployment exits with a bootstrap error rather than exposing an unclaimed root slot. It also refuses to start until secure cookies, a canonical HTTPS `APP_URL`, and an external `resend` or verified-STARTTLS `smtp` email method are configured. These non-secret values are code-configured, so set, test, and commit them in `app/app/config.py` before deploying; provider secrets remain in the environment. These fail-closed results are expected.
 
 Do not expose a Railway domain until the initial root has been created against the same persistent database the service will use. `railway run` and `railway shell` execute locally with Railway variables and do not modify the deployed SQLite volume.
 
@@ -76,6 +76,7 @@ never hand-edit the generated files.
 ## Configuration
 - `.env` is for secrets only, such as `SESSION_SECRET_KEY` or provider credentials.
 - Non-secret behavior stays code-configured in `app/app/config.py`. Edit that file directly for app-specific defaults such as email validation, username login, password policy, and currency naming/precision.
+- `EMAIL_METHOD="outbox"` is for local development. Production must select `resend` or secure `smtp`; delivery failures never fall back to local files.
 - Email validation and username-login behavior are documented in `docs/configuration/email-validation.md`.
 - Root initialization is intentionally not configurable: public registration never assigns a privileged role.
 - The runtime SQLite database file `app/app/data/app.db` is created locally on first run and is ignored by git.

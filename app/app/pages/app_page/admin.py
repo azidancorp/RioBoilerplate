@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import field
 from decimal import Decimal, InvalidOperation
 import logging
@@ -935,7 +936,8 @@ class AdminPage(ResponsiveComponent):
                 target_user.id,
                 admin_context=self._admin_mutation_context(),
             )
-            send_password_reset_email(
+            await asyncio.to_thread(
+                send_password_reset_email,
                 recipient=issuance.recipient_email,
                 token=issuance.token,
                 valid_until=issuance.valid_until,

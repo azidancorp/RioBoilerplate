@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import weakref
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -1532,8 +1533,10 @@ def test_admin_page_deactivates_reactivates_and_sends_password_reset(
     monkeypatch: pytest.MonkeyPatch,
 ):
     sent: list[dict[str, object]] = []
+    worker_threads: list[int] = []
 
     def fake_send_password_reset_email(**kwargs):
+        worker_threads.append(threading.get_ident())
         sent.append(kwargs)
 
     monkeypatch.setattr(
@@ -1543,6 +1546,7 @@ def test_admin_page_deactivates_reactivates_and_sends_password_reset(
     )
 
     async def scenario():
+        event_loop_thread = threading.get_ident()
         root, root_session = await _create_root_session(temp_db)
         target = await temp_db.admin_create_user(
             email="reset-target@example.com",
@@ -1617,6 +1621,7 @@ def test_admin_page_deactivates_reactivates_and_sends_password_reset(
         )
         assert "sent" not in reset_page.reset_user_success.lower()
         assert len(sent) == 1
+        assert worker_threads[0] != event_loop_thread
         assert sent[0]["recipient"] == "reset-target@example.com"
         token = sent[0]["token"]
         assert isinstance(token, str)

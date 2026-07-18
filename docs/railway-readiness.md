@@ -8,23 +8,25 @@ tracks what blocks Railway and how to operate it once unblocked.
 
 1. **The database is lost on every deploy.** Railway's container filesystem is
    ephemeral. `railway.toml` configures no volume, so the SQLite database at
-   `app/app/data/app.db` — along with `email_outbox/` and `contact_messages/` —
-   is erased on every deploy and restart. Any users created on such a
-   deployment disappear with it.
+   `app/app/data/app.db` — along with `contact_messages/` — is erased on every
+   deploy and restart. Any users created on such a deployment disappear with
+   it. The local email outbox is development-only and rejected by production
+   prestart.
 2. **There is no safe volume mount target.** The fix for (1) is a Railway
    volume, but `app/app/data/` mixes mutable runtime state with the tracked
    sample file `sales_data.csv`. Mounting a volume over the whole directory
    would hide the tracked file from the running app.
 3. **First deploy fails closed by design.** The start command runs
-   `python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie`.
+   `python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie --require-production-email`.
    It exits on an empty database rather than exposing an unclaimed root slot.
    It also requires secure authentication
-   cookies, a canonical HTTPS `APP_URL`, and secure OAuth cookies when Google
-   OAuth is configured. These are non-secret code settings: set, test, and
-   commit them in `app/app/config.py` before deploying rather than expecting
-   Railway environment variables or container-local edits to override them. On
-   a fresh volume the service will crash-loop until the root account is
-   bootstrapped (see below). This is expected behavior, not a bug.
+   cookies, a canonical HTTPS `APP_URL`, secure OAuth cookies when Google OAuth
+   is configured, and a secure external email provider. These are non-secret
+   code settings: set, test, and commit them in `app/app/config.py` before
+   deploying rather than expecting Railway environment variables or
+   container-local edits to override them. On a fresh volume the service will
+   crash-loop until the root account is bootstrapped (see below). This is
+   expected behavior, not a bug.
 4. **`railway run` and `railway shell` cannot bootstrap the deployment.** Both
    execute *locally* with Railway's environment variables; they do not touch
    the deployed volume. Bootstrapping must happen inside the deployed
@@ -40,7 +42,7 @@ tracks what blocks Railway and how to operate it once unblocked.
 The prerequisite for Railway readiness is separating mutable runtime state from
 tracked application files:
 
-- [ ] Move `app.db`, `email_outbox/`, and `contact_messages/` out of
+- [ ] Move `app.db` and `contact_messages/` out of
       `app/app/data/` into a dedicated runtime-data directory whose location is
       configured in `app/app/config.py` (defaulting to the current in-repo
       location for local development).

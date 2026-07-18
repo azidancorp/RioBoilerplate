@@ -423,10 +423,26 @@ def create_oauth_pending_logins_table(persistence: SchemaPersistence) -> None:
     cursor = persistence._get_cursor()
     conn = _get_connection(persistence)
 
+    # Pending logins are minutes-lived continuations, so a pre-flow_id table
+    # is reset in place rather than migrated; affected users just retry.
+    cursor.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'oauth_pending_logins'
+        """
+    )
+    if cursor.fetchone():
+        cursor.execute("PRAGMA table_info(oauth_pending_logins)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+        if "flow_id" not in existing_columns:
+            cursor.execute("DROP TABLE oauth_pending_logins")
+
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS oauth_pending_logins (
             binding_digest TEXT PRIMARY KEY,
+            flow_id TEXT NOT NULL,
             user_id TEXT NOT NULL,
             provider TEXT NOT NULL,
             created_at REAL NOT NULL,

@@ -13,6 +13,9 @@ from app.persistence import Persistence
 from app.rio_cookie_security import browser_binding_digest
 
 
+FLOW_ID = "0123456789abcdef0123456789abcdef"
+
+
 @pytest.fixture
 def temp_db(tmp_path: Path):
     persistence = Persistence(db_path=tmp_path / "oauth-account-deletion.db")
@@ -92,7 +95,8 @@ def test_oauth_deletion_proof_is_purpose_user_and_session_bound(
 
         with pytest.raises(KeyError):
             await temp_db.consume_oauth_pending_login(
-                browser_binding_digest(challenge)
+                browser_binding_digest(challenge),
+                FLOW_ID,
             )
         assert _handoff_exists(temp_db, challenge)
 
@@ -114,7 +118,8 @@ def test_oauth_deletion_proof_is_purpose_user_and_session_bound(
 
         with pytest.raises(KeyError):
             await temp_db.consume_oauth_pending_login(
-                browser_binding_digest(approval)
+                browser_binding_digest(approval),
+                FLOW_ID,
             )
         assert await temp_db.delete_user(
             user.id,
@@ -127,6 +132,7 @@ def test_oauth_deletion_proof_is_purpose_user_and_session_bound(
         pending_login_digest = "a" * 64
         await temp_db.create_oauth_pending_login(
             binding_digest=pending_login_digest,
+            flow_id=FLOW_ID,
             user_id=user.id,
             provider="google",
         )

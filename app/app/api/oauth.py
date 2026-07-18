@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import secrets
 import time
 from dataclasses import dataclass
 from urllib.parse import urlencode
@@ -63,7 +64,7 @@ def _settings_delete_redirect(
 def _login_redirect(
     *,
     error: str | None = None,
-    social_login: bool = False,
+    social_login_flow_id: str | None = None,
     return_to: str | None = None,
 ) -> RedirectResponse:
     query = urlencode(
@@ -71,7 +72,7 @@ def _login_redirect(
             key: value
             for key, value in {
                 "oauth_error": error,
-                "social_login": "1" if social_login else None,
+                "social_login": social_login_flow_id,
                 "return_to": get_registered_app_path(return_to),
             }.items()
             if value
@@ -324,9 +325,13 @@ async def oauth_callback(
                 return_to=return_to,
             )
 
+    # Non-authorizing flow nonce: routes the landing tab to its own pending
+    # login, but grants nothing without the matching browser-binding cookie.
+    flow_id = secrets.token_hex(16)
     try:
         await pers.create_oauth_pending_login(
             binding_digest=stored_binding_digest,
+            flow_id=flow_id,
             user_id=user.id,
             provider=identity.provider,
         )
@@ -337,6 +342,6 @@ async def oauth_callback(
         )
 
     return _login_redirect(
-        social_login=True,
+        social_login_flow_id=flow_id,
         return_to=return_to,
     )

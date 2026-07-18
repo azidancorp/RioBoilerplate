@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import re
 import secrets
 import sqlite3
@@ -36,6 +37,7 @@ OAUTH_DELETE_CHALLENGE_PREFIX = "DELETE-START-"
 OAUTH_DELETE_APPROVAL_PREFIX = "DELETE-APPROVE-"
 _OAUTH_DELETE_PROVIDER_MARKER = ":delete-account:"
 _BINDING_DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+_FLOW_ID_PATTERN = re.compile(r"[0-9a-f]{32}\Z")
 
 
 def _get_connection(persistence: SocialPersistence) -> sqlite3.Connection:
@@ -70,6 +72,15 @@ def _require_binding_digest(binding_digest: str) -> str:
     ):
         raise KeyError("Invalid OAuth browser-binding digest.")
     return binding_digest
+
+
+def _require_flow_id(flow_id: str) -> str:
+    if (
+        not isinstance(flow_id, str)
+        or _FLOW_ID_PATTERN.fullmatch(flow_id) is None
+    ):
+        raise KeyError("Invalid OAuth pending-login flow ID.")
+    return flow_id
 
 
 def _new_handoff_token(*, prefix: str = "") -> str:
@@ -130,11 +141,13 @@ async def create_oauth_pending_login(
     persistence: SocialPersistence,
     *,
     binding_digest: str,
+    flow_id: str,
     user_id: uuid.UUID,
     provider: str,
     ttl_minutes: int | None = None,
 ) -> None:
     binding_digest = _require_binding_digest(binding_digest)
+    flow_id = _require_flow_id(flow_id)
     provider = _normalize_provider(provider)
     ttl = (
         config.OAUTH_HANDOFF_TTL_MINUTES
@@ -182,12 +195,13 @@ async def create_oauth_pending_login(
         cursor.execute(
             """
             INSERT INTO oauth_pending_logins (
-                binding_digest, user_id, provider, created_at, valid_until
+                binding_digest, flow_id, user_id, provider, created_at, valid_until
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 binding_digest,
+                flow_id,
                 str(user_id),
                 provider,
                 now.timestamp(),
@@ -455,8 +469,10 @@ def consume_oauth_account_deletion_approval_in_transaction(
 async def consume_oauth_pending_login(
     persistence: SocialPersistence,
     binding_digest: str,
+    flow_id: str,
 ) -> AppUser:
     binding_digest = _require_binding_digest(binding_digest)
+    flow_id = _require_flow_id(flow_id)
     conn = _get_connection(persistence)
     _require_top_level_transaction(conn, operation="OAuth pending-login consumption")
     cursor = persistence._get_cursor()
@@ -466,7 +482,7 @@ async def consume_oauth_pending_login(
         now = datetime.now(timezone.utc)
         cursor.execute(
             """
-            SELECT user_id, valid_until
+            SELECT user_id, flow_id, valid_until
             FROM oauth_pending_logins
             WHERE binding_digest = ?
             LIMIT 1
@@ -477,7 +493,7 @@ async def consume_oauth_pending_login(
         if row is None:
             raise KeyError("OAuth pending login is invalid or was already used.")
 
-        user_id_str, valid_until_ts = row
+        user_id_str, row_flow_id, valid_until_ts = row
         if datetime.fromtimestamp(valid_until_ts, tz=timezone.utc) <= now:
             cursor.execute(
                 "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
@@ -485,6 +501,13 @@ async def consume_oauth_pending_login(
             )
             conn.commit()
             raise KeyError("OAuth pending login has expired.")
+
+        # A stale tab from an earlier overlapping flow must fail without
+        # destroying the newest flow's still-consumable row.
+        if not hmac.compare_digest(str(row_flow_id), flow_id):
+            raise KeyError(
+                "OAuth pending login does not match this sign-in attempt."
+            )
 
         cursor.execute(
             "SELECT is_active FROM users WHERE id = ?",

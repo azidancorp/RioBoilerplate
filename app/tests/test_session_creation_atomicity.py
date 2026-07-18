@@ -10,6 +10,7 @@ from app.persistence import AdminMutationContext, Persistence
 
 
 PASSWORD = "VeryStrongPass!9"
+FLOW_ID = "0123456789abcdef0123456789abcdef"
 
 
 @pytest.fixture
@@ -261,6 +262,7 @@ def test_deactivation_invalidates_pending_oauth_state(temp_db: Persistence):
         )
         await temp_db.create_oauth_pending_login(
             binding_digest=binding_digest,
+            flow_id=FLOW_ID,
             user_id=target.id,
             provider="google",
         )
@@ -291,7 +293,7 @@ def test_deactivation_invalidates_pending_oauth_state(temp_db: Persistence):
         )
 
         with pytest.raises(KeyError):
-            await temp_db.consume_oauth_pending_login(binding_digest)
+            await temp_db.consume_oauth_pending_login(binding_digest, FLOW_ID)
         assert temp_db.conn.execute(
             "SELECT COUNT(*) FROM oauth_pending_logins WHERE user_id = ?",
             (str(target.id),),

@@ -1144,6 +1144,7 @@ class Persistence:
         self,
         *,
         binding_digest: str,
+        flow_id: str,
         user_id: uuid.UUID,
         provider: str,
         ttl_minutes: int | None = None,
@@ -1151,6 +1152,7 @@ class Persistence:
         await persistence_social.create_oauth_pending_login(
             self,
             binding_digest=binding_digest,
+            flow_id=flow_id,
             user_id=user_id,
             provider=provider,
             ttl_minutes=ttl_minutes,
@@ -1159,10 +1161,12 @@ class Persistence:
     async def consume_oauth_pending_login(
         self,
         binding_digest: str,
+        flow_id: str,
     ) -> AppUser:
         return await persistence_social.consume_oauth_pending_login(
             self,
             binding_digest,
+            flow_id,
         )
 
     async def create_oauth_account_deletion_challenge(

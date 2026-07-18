@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import typing as t
 import uuid
 from urllib.parse import urlencode
@@ -132,6 +133,9 @@ def _login_destination(session: rio.Session, user_role: str) -> str:
     if requested_path and check_access(requested_path, user_role):
         return requested_path
     return "/app/dashboard"
+
+
+_SOCIAL_LOGIN_FLOW_ID_PATTERN = re.compile(r"[0-9a-f]{32}\Z")
 
 
 def _oauth_error_message(error_code: str) -> str:
@@ -1584,6 +1588,17 @@ class LoginPage(rio.Component):
             return
 
         if social_login_raw:
+            # Legacy `social_login=1` URLs and hand-edited values fail here
+            # without touching persistence.
+            if _SOCIAL_LOGIN_FLOW_ID_PATTERN.fullmatch(social_login_raw) is None:
+                self.current_form = "login"
+                self._set_page_message(
+                    "danger",
+                    "Google sign-in expired or was already used. Please try again.",
+                )
+                self.force_refresh()
+                return
+
             security = get_rio_cookie_security(self.session._app_server)
             binding = read_browser_binding(self.session.http_headers, security)
             if binding is None:
@@ -1598,7 +1613,8 @@ class LoginPage(rio.Component):
             persistence = self.session[Persistence]
             try:
                 user_info = await persistence.consume_oauth_pending_login(
-                    browser_binding_digest(binding)
+                    browser_binding_digest(binding),
+                    social_login_raw,
                 )
             except KeyError:
                 self.current_form = "login"

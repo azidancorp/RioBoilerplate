@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -187,6 +188,11 @@ class _FakeOAuthClient:
         )
 
 
+_FLOW_ID_FORMAT = re.compile(r"[0-9a-f]{32}\Z")
+# Valid-format nonce for tests that seed pending logins directly.
+_TEST_FLOW_ID = "0123456789abcdef0123456789abcdef"
+
+
 def _redirect_query(response) -> dict[str, list[str]]:
     return parse_qs(urlparse(response.headers["location"]).query)
 
@@ -210,7 +216,8 @@ def _assert_clean_login_redirect(
     else:
         assert query["oauth_error"] == [error]
     if social_login:
-        assert query["social_login"] == ["1"]
+        (flow_id,) = query["social_login"]
+        assert _FLOW_ID_FORMAT.fullmatch(flow_id)
     else:
         assert "social_login" not in query
     if return_to is None:
@@ -278,6 +285,20 @@ def _pending_rows(persistence: Persistence) -> list[tuple[str, str, str]]:
         ORDER BY binding_digest
         """
     ).fetchall()
+
+
+def _flow_id_from(response) -> str:
+    (flow_id,) = _redirect_query(response)["social_login"]
+    return flow_id
+
+
+def _pending_flow_ids(persistence: Persistence) -> list[str]:
+    return [
+        row[0]
+        for row in persistence.conn.execute(
+            "SELECT flow_id FROM oauth_pending_logins ORDER BY binding_digest"
+        ).fetchall()
+    ]
 
 
 def test_google_registration_enables_s256_pkce_end_to_end(monkeypatch):
@@ -504,6 +525,7 @@ def test_google_callback_creates_social_user_and_pending_login(
     assert _pending_rows(temp_db) == [
         (browser_binding_digest(binding), str(user.id), "google")
     ]
+    assert _pending_flow_ids(temp_db) == [_flow_id_from(response)]
 
 
 def test_google_callback_requires_operator_bootstrap(
@@ -747,7 +769,10 @@ def test_google_login_round_trips_allowlisted_return_destination(
     )
     page = _new_login_page(
         temp_db,
-        {"social_login": "1", "return_to": "/app/settings"},
+        {
+            "social_login": _flow_id_from(callback),
+            "return_to": "/app/settings",
+        },
         browser_binding=binding,
     )
     asyncio.run(LoginPage.on_populate(page))
@@ -842,6 +867,80 @@ def test_second_google_login_in_same_browser_replaces_pending_row(
     assert _pending_rows(temp_db) == [
         (browser_binding_digest(binding), str(second.id), "google")
     ]
+    assert _flow_id_from(first_callback) != _flow_id_from(second_callback)
+    assert _pending_flow_ids(temp_db) == [_flow_id_from(second_callback)]
+
+
+def test_stale_tab_cannot_collect_newer_pending_login(
+    monkeypatch,
+    temp_db: Persistence,
+):
+    first = asyncio.run(
+        _create_social_user(
+            temp_db,
+            "stale-tab-first@example.com",
+            provider_user_id="stale-tab-first-sub",
+        )
+    )
+    second = asyncio.run(
+        _create_social_user(
+            temp_db,
+            "stale-tab-second@example.com",
+            provider_user_id="stale-tab-second-sub",
+        )
+    )
+    fake_client = _FakeOAuthClient(
+        {
+            "sub": "stale-tab-first-sub",
+            "email": "stale-tab-first@example.com",
+            "email_verified": True,
+        }
+    )
+    monkeypatch.setattr(oauth_module, "get_oauth_client", lambda provider: fake_client)
+    _patch_app_persistence(monkeypatch, temp_db)
+
+    with TestClient(app_module.fastapi_app, raise_server_exceptions=False) as client:
+        binding = _bind_browser(client)
+        _start_google_login(client)
+        first_callback = client.get(
+            "/auth/google/callback",
+            follow_redirects=False,
+        )
+        fake_client.userinfo = {
+            "sub": "stale-tab-second-sub",
+            "email": "stale-tab-second@example.com",
+            "email_verified": True,
+        }
+        _start_google_login(client)
+        second_callback = client.get(
+            "/auth/google/callback",
+            follow_redirects=False,
+        )
+
+    # The first tab's landing carries the superseded flow ID: it must fail
+    # without consuming or destroying the second flow's pending login.
+    stale_page = _new_login_page(
+        temp_db,
+        {"social_login": _flow_id_from(first_callback)},
+        browser_binding=binding,
+    )
+    asyncio.run(LoginPage.on_populate(stale_page))
+    assert "expired or was already used" in stale_page.page_message
+    assert stale_page.session[UserSettings].auth_token == ""
+    assert _pending_rows(temp_db) == [
+        (browser_binding_digest(binding), str(second.id), "google")
+    ]
+
+    fresh_page = _new_login_page(
+        temp_db,
+        {"social_login": _flow_id_from(second_callback)},
+        browser_binding=binding,
+    )
+    asyncio.run(LoginPage.on_populate(fresh_page))
+    assert fresh_page.session[AppUser].id == second.id
+    assert fresh_page.session[AppUser].id != first.id
+    assert fresh_page.session.navigated_to == "/app/dashboard"
+    assert _pending_rows(temp_db) == []
 
 
 def test_two_browser_redemption_fails_without_destroying_pending_login(
@@ -872,11 +971,14 @@ def test_two_browser_redemption_fails_without_destroying_pending_login(
         _start_google_login(client)
         callback = client.get("/auth/google/callback", follow_redirects=False)
     _assert_clean_login_redirect(callback, social_login=True)
+    flow_id = _flow_id_from(callback)
 
+    # A leaked flow ID is non-authorizing: with another browser's binding it
+    # fails and leaves the owner's pending login intact.
     other_binding = security.new_browser_binding()
     attacker_page = _new_login_page(
         temp_db,
-        {"social_login": "1"},
+        {"social_login": flow_id},
         browser_binding=other_binding,
     )
     asyncio.run(LoginPage.on_populate(attacker_page))
@@ -887,7 +989,7 @@ def test_two_browser_redemption_fails_without_destroying_pending_login(
 
     owner_page = _new_login_page(
         temp_db,
-        {"social_login": "1"},
+        {"social_login": flow_id},
         browser_binding=owner_binding,
     )
     asyncio.run(LoginPage.on_populate(owner_page))
@@ -898,7 +1000,7 @@ def test_two_browser_redemption_fails_without_destroying_pending_login(
 
     replay_page = _new_login_page(
         temp_db,
-        {"social_login": "1"},
+        {"social_login": flow_id},
         browser_binding=owner_binding,
     )
     asyncio.run(LoginPage.on_populate(replay_page))
@@ -919,6 +1021,7 @@ def test_pending_login_expiry_and_inactive_user_delete_row(temp_db: Persistence)
         expired_digest = browser_binding_digest(security.new_browser_binding())
         await temp_db.create_oauth_pending_login(
             binding_digest=expired_digest,
+            flow_id=_TEST_FLOW_ID,
             user_id=user.id,
             provider="google",
         )
@@ -928,12 +1031,13 @@ def test_pending_login_expiry_and_inactive_user_delete_row(temp_db: Persistence)
         )
         temp_db.conn.commit()
         with pytest.raises(KeyError):
-            await temp_db.consume_oauth_pending_login(expired_digest)
+            await temp_db.consume_oauth_pending_login(expired_digest, _TEST_FLOW_ID)
         assert _pending_rows(temp_db) == []
 
         inactive_digest = browser_binding_digest(security.new_browser_binding())
         await temp_db.create_oauth_pending_login(
             binding_digest=inactive_digest,
+            flow_id=_TEST_FLOW_ID,
             user_id=user.id,
             provider="google",
         )
@@ -943,7 +1047,7 @@ def test_pending_login_expiry_and_inactive_user_delete_row(temp_db: Persistence)
         )
         temp_db.conn.commit()
         with pytest.raises(KeyError):
-            await temp_db.consume_oauth_pending_login(inactive_digest)
+            await temp_db.consume_oauth_pending_login(inactive_digest, _TEST_FLOW_ID)
         assert _pending_rows(temp_db) == []
 
     asyncio.run(scenario())
@@ -964,6 +1068,7 @@ def test_legacy_social_login_token_never_consumes_pending_login(
         digest = browser_binding_digest(binding)
         await temp_db.create_oauth_pending_login(
             binding_digest=digest,
+            flow_id=_TEST_FLOW_ID,
             user_id=user.id,
             provider="google",
         )
@@ -971,7 +1076,7 @@ def test_legacy_social_login_token_never_consumes_pending_login(
             temp_db,
             {
                 "social_login_token": "legacy-url-token",
-                "social_login": "1",
+                "social_login": _TEST_FLOW_ID,
             },
             browser_binding=binding,
         )
@@ -991,13 +1096,55 @@ def test_legacy_social_login_token_never_consumes_pending_login(
 
 
 def test_social_login_marker_without_binding_fails_closed(temp_db: Persistence):
-    page = _new_login_page(temp_db, {"social_login": "1"})
+    page = _new_login_page(temp_db, {"social_login": _TEST_FLOW_ID})
 
     asyncio.run(LoginPage.on_populate(page))
 
     assert page.current_form == "login"
     assert page.page_message_style == "danger"
     assert "browser could not be verified" in page.page_message
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["1", "not-hex", _TEST_FLOW_ID[:-1], _TEST_FLOW_ID + "0", _TEST_FLOW_ID.upper()],
+)
+def test_malformed_social_login_marker_never_touches_pending_login(
+    temp_db: Persistence,
+    marker: str,
+):
+    async def scenario():
+        security = get_rio_cookie_security(app_module.fastapi_app)
+        assert security is not None
+        user = await _create_social_user(
+            temp_db,
+            "malformed-marker@example.com",
+            provider_user_id="malformed-marker-sub",
+        )
+        binding = security.new_browser_binding()
+        digest = browser_binding_digest(binding)
+        await temp_db.create_oauth_pending_login(
+            binding_digest=digest,
+            flow_id=_TEST_FLOW_ID,
+            user_id=user.id,
+            provider="google",
+        )
+        page = _new_login_page(
+            temp_db,
+            {"social_login": marker},
+            browser_binding=binding,
+        )
+
+        await LoginPage.on_populate(page)
+
+        assert page.current_form == "login"
+        assert "expired or was already used" in page.page_message
+        assert page.session[UserSettings].auth_token == ""
+        assert _pending_rows(temp_db) == [
+            (digest, str(user.id), "google")
+        ]
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
@@ -1035,12 +1182,13 @@ def test_oauth_login_handles_late_session_creation_rejection(
         binding = security.new_browser_binding()
         await temp_db.create_oauth_pending_login(
             binding_digest=browser_binding_digest(binding),
+            flow_id=_TEST_FLOW_ID,
             user_id=user.id,
             provider="google",
         )
         page = _new_login_page(
             temp_db,
-            {"social_login": "1"},
+            {"social_login": _TEST_FLOW_ID},
             browser_binding=binding,
         )
 
@@ -1073,12 +1221,13 @@ def test_pending_social_login_does_not_bypass_two_factor(temp_db: Persistence):
         binding = security.new_browser_binding()
         await temp_db.create_oauth_pending_login(
             binding_digest=browser_binding_digest(binding),
+            flow_id=_TEST_FLOW_ID,
             user_id=user.id,
             provider="google",
         )
         page = _new_login_page(
             temp_db,
-            {"social_login": "1"},
+            {"social_login": _TEST_FLOW_ID},
             browser_binding=binding,
         )
 

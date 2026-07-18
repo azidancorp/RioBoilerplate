@@ -11,10 +11,16 @@ import pytest
 
 from app import persistence_social
 from app.data_models import AppUser
-from app.persistence import AdminMutationContext, Persistence
+from app.persistence import (
+    AdminMutationContext,
+    Persistence,
+    _reset_initialized_db_paths,
+)
 
 
 PASSWORD = "VeryStrongPass!9"
+FLOW_ID = "0123456789abcdef0123456789abcdef"
+OTHER_FLOW_ID = "fedcba9876543210fedcba9876543210"
 
 
 @pytest.fixture
@@ -100,6 +106,7 @@ def test_deactivation_committing_first_blocks_stale_pending_login_creation(
             return asyncio.run(
                 worker.create_oauth_pending_login(
                     binding_digest=binding_digest,
+                    flow_id=FLOW_ID,
                     user_id=target.id,
                     provider="google",
                 )
@@ -141,6 +148,7 @@ def test_creation_committing_first_is_followed_by_deactivation_cleanup(
         binding_digest = _binding_digest("creation-first")
         await temp_db.create_oauth_pending_login(
             binding_digest=binding_digest,
+            flow_id=FLOW_ID,
             user_id=target.id,
             provider="google",
         )
@@ -154,7 +162,7 @@ def test_creation_committing_first_is_followed_by_deactivation_cleanup(
 
         assert _pending_count(temp_db, target.id) == 0
         with pytest.raises(KeyError):
-            await temp_db.consume_oauth_pending_login(binding_digest)
+            await temp_db.consume_oauth_pending_login(binding_digest, FLOW_ID)
 
     asyncio.run(scenario())
 
@@ -175,6 +183,7 @@ def test_user_deletion_cleans_pending_login(temp_db: Persistence):
         binding_digest = _binding_digest("delete-target")
         await temp_db.create_oauth_pending_login(
             binding_digest=binding_digest,
+            flow_id=FLOW_ID,
             user_id=target.id,
             provider="google",
         )
@@ -200,6 +209,7 @@ def test_pending_login_helpers_preserve_caller_owned_transactions(
         binding_digest = _binding_digest("caller-owned-transaction")
         await temp_db.create_oauth_pending_login(
             binding_digest=binding_digest,
+            flow_id=FLOW_ID,
             user_id=user.id,
             provider="google",
         )
@@ -222,11 +232,12 @@ def test_pending_login_helpers_preserve_caller_owned_transactions(
                     if operation == "create":
                         await temp_db.create_oauth_pending_login(
                             binding_digest=binding_digest,
+                            flow_id=FLOW_ID,
                             user_id=user.id,
                             provider="google",
                         )
                     else:
-                        await temp_db.consume_oauth_pending_login(binding_digest)
+                        await temp_db.consume_oauth_pending_login(binding_digest, FLOW_ID)
 
                 assert temp_db.conn.in_transaction is True
                 assert temp_db.conn.execute(
@@ -261,6 +272,7 @@ def test_pending_login_rejects_invalid_lifetime_and_missing_user(
         with pytest.raises(ValueError, match="must be positive"):
             await temp_db.create_oauth_pending_login(
                 binding_digest=_binding_digest("invalid-lifetime"),
+                flow_id=FLOW_ID,
                 user_id=social_user.id,
                 provider="google",
                 ttl_minutes=0,
@@ -268,6 +280,7 @@ def test_pending_login_rejects_invalid_lifetime_and_missing_user(
         with pytest.raises(KeyError):
             await temp_db.create_oauth_pending_login(
                 binding_digest=_binding_digest("missing-user"),
+                flow_id=FLOW_ID,
                 user_id=uuid.uuid4(),
                 provider="google",
             )
@@ -298,11 +311,33 @@ def test_pending_login_helpers_reject_malformed_digests(temp_db: Persistence):
             with pytest.raises(KeyError):
                 await temp_db.create_oauth_pending_login(
                     binding_digest=binding_digest,
+                    flow_id=FLOW_ID,
                     user_id=user.id,
                     provider="google",
                 )
             with pytest.raises(KeyError):
-                await temp_db.consume_oauth_pending_login(binding_digest)
+                await temp_db.consume_oauth_pending_login(binding_digest, FLOW_ID)
+
+        valid_digest = _binding_digest("malformed-flow-id")
+        invalid_flow_ids = (
+            None,
+            123,
+            "",
+            "a" * 31,
+            "a" * 33,
+            "A" * 32,
+            "a" * 31 + "g",
+        )
+        for flow_id in invalid_flow_ids:
+            with pytest.raises(KeyError):
+                await temp_db.create_oauth_pending_login(
+                    binding_digest=valid_digest,
+                    flow_id=flow_id,
+                    user_id=user.id,
+                    provider="google",
+                )
+            with pytest.raises(KeyError):
+                await temp_db.consume_oauth_pending_login(valid_digest, flow_id)
 
         assert _pending_count(temp_db, user.id) == 0
 
@@ -325,27 +360,153 @@ def test_second_creation_for_binding_replaces_first_user(temp_db: Persistence):
 
         await temp_db.create_oauth_pending_login(
             binding_digest=binding_digest,
+            flow_id=FLOW_ID,
             user_id=first.id,
             provider="google",
         )
         await temp_db.create_oauth_pending_login(
             binding_digest=binding_digest,
+            flow_id=OTHER_FLOW_ID,
             user_id=second.id,
             provider="google",
         )
 
         assert temp_db.conn.execute(
             """
-            SELECT user_id, provider
+            SELECT user_id, flow_id, provider
             FROM oauth_pending_logins
             WHERE binding_digest = ?
             """,
             (binding_digest,),
-        ).fetchall() == [(str(second.id), "google")]
-        consumed = await temp_db.consume_oauth_pending_login(binding_digest)
+        ).fetchall() == [(str(second.id), OTHER_FLOW_ID, "google")]
+        consumed = await temp_db.consume_oauth_pending_login(
+            binding_digest,
+            OTHER_FLOW_ID,
+        )
         assert consumed.id == second.id
 
     asyncio.run(scenario())
+
+
+def test_flow_id_mismatch_rolls_back_without_deleting_row(temp_db: Persistence):
+    async def scenario():
+        user = await _create_user(
+            temp_db,
+            email="oauth-flow-mismatch@example.com",
+            social=True,
+        )
+        binding_digest = _binding_digest("flow-mismatch")
+        await temp_db.create_oauth_pending_login(
+            binding_digest=binding_digest,
+            flow_id=FLOW_ID,
+            user_id=user.id,
+            provider="google",
+        )
+        before = temp_db.conn.execute(
+            """
+            SELECT binding_digest, flow_id, user_id, provider, created_at,
+                   valid_until
+            FROM oauth_pending_logins
+            WHERE binding_digest = ?
+            """,
+            (binding_digest,),
+        ).fetchone()
+
+        # A superseded tab's flow ID must fail without destroying the row
+        # that the newest flow's landing still needs.
+        with pytest.raises(KeyError, match="does not match"):
+            await temp_db.consume_oauth_pending_login(
+                binding_digest,
+                OTHER_FLOW_ID,
+            )
+        assert temp_db.conn.in_transaction is False
+        assert temp_db.conn.execute(
+            """
+            SELECT binding_digest, flow_id, user_id, provider, created_at,
+                   valid_until
+            FROM oauth_pending_logins
+            WHERE binding_digest = ?
+            """,
+            (binding_digest,),
+        ).fetchone() == before
+
+        consumed = await temp_db.consume_oauth_pending_login(
+            binding_digest,
+            FLOW_ID,
+        )
+        assert consumed.id == user.id
+        assert _pending_count(temp_db, user.id) == 0
+
+    asyncio.run(scenario())
+
+
+def test_pre_flow_id_pending_logins_table_is_reset_in_place(tmp_path: Path):
+    db_path = tmp_path / "pre-flow-id.db"
+    setup = Persistence(db_path=db_path)
+    user = asyncio.run(
+        _create_user(
+            setup,
+            email="oauth-schema-reset@example.com",
+            social=True,
+        )
+    )
+    setup.conn.execute("DROP TABLE oauth_pending_logins")
+    setup.conn.execute(
+        """
+        CREATE TABLE oauth_pending_logins (
+            binding_digest TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            valid_until REAL NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    setup.conn.execute(
+        """
+        INSERT INTO oauth_pending_logins (
+            binding_digest, user_id, provider, created_at, valid_until
+        )
+        VALUES (?, ?, 'google', 0, 9999999999)
+        """,
+        (_binding_digest("pre-flow-id-row"), str(user.id)),
+    )
+    setup.conn.commit()
+    setup.close()
+
+    # Schema setup is guarded per database path per process; forget it so the
+    # reopen behaves like the first boot after deploying the new schema.
+    _reset_initialized_db_paths()
+    reopened = Persistence(db_path=db_path)
+    try:
+        columns = {
+            row[1]
+            for row in reopened.conn.execute(
+                "PRAGMA table_info(oauth_pending_logins)"
+            ).fetchall()
+        }
+        assert "flow_id" in columns
+        assert _pending_count(reopened, user.id) == 0
+
+        # The reset must be a one-time shape upgrade, not a wipe on boot.
+        asyncio.run(
+            reopened.create_oauth_pending_login(
+                binding_digest=_binding_digest("post-upgrade-row"),
+                flow_id=FLOW_ID,
+                user_id=user.id,
+                provider="google",
+            )
+        )
+    finally:
+        reopened.close()
+
+    _reset_initialized_db_paths()
+    reopened_again = Persistence(db_path=db_path)
+    try:
+        assert _pending_count(reopened_again, user.id) == 1
+    finally:
+        reopened_again.close()
 
 
 def test_concurrent_pending_login_consumption_is_exactly_once(
@@ -360,6 +521,7 @@ def test_concurrent_pending_login_consumption_is_exactly_once(
         binding_digest = _binding_digest("concurrent-consume")
         await temp_db.create_oauth_pending_login(
             binding_digest=binding_digest,
+            flow_id=FLOW_ID,
             user_id=user.id,
             provider="google",
         )
@@ -374,7 +536,7 @@ def test_concurrent_pending_login_consumption_is_exactly_once(
             barrier.wait(timeout=10)
             try:
                 consumed = asyncio.run(
-                    worker.consume_oauth_pending_login(binding_digest)
+                    worker.consume_oauth_pending_login(binding_digest, FLOW_ID)
                 )
             except KeyError:
                 return "key_error", None
@@ -406,6 +568,7 @@ def test_consume_samples_expiry_after_acquiring_writer_lock(
         binding_digest = _binding_digest("lock-time-expiry")
         await temp_db.create_oauth_pending_login(
             binding_digest=binding_digest,
+            flow_id=FLOW_ID,
             user_id=user.id,
             provider="google",
         )
@@ -446,7 +609,7 @@ def test_consume_samples_expiry_after_acquiring_writer_lock(
         worker.conn.set_trace_callback(trace)
         try:
             return asyncio.run(
-                worker.consume_oauth_pending_login(binding_digest)
+                worker.consume_oauth_pending_login(binding_digest, FLOW_ID)
             )
         finally:
             worker.close()
@@ -477,6 +640,7 @@ def test_inactive_pending_login_is_deleted_on_consumption(temp_db: Persistence):
         binding_digest = _binding_digest("inactive-consume")
         await temp_db.create_oauth_pending_login(
             binding_digest=binding_digest,
+            flow_id=FLOW_ID,
             user_id=user.id,
             provider="google",
         )
@@ -487,7 +651,7 @@ def test_inactive_pending_login_is_deleted_on_consumption(temp_db: Persistence):
         temp_db.conn.commit()
 
         with pytest.raises(KeyError, match="inactive"):
-            await temp_db.consume_oauth_pending_login(binding_digest)
+            await temp_db.consume_oauth_pending_login(binding_digest, FLOW_ID)
         assert _pending_count(temp_db, user.id) == 0
 
     asyncio.run(scenario())

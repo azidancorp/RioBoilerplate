@@ -12,6 +12,7 @@ from app.persistence import Persistence
 
 
 PASSWORD = "VeryStrongPass!9"
+FLOW_ID = "0123456789abcdef0123456789abcdef"
 
 
 @pytest.fixture
@@ -276,11 +277,13 @@ def test_pending_login_creation_cleans_expired_rows_and_preserves_live(
 
         await temp_db.create_oauth_pending_login(
             binding_digest=expired_digest,
+            flow_id=FLOW_ID,
             user_id=first.id,
             provider="google",
         )
         await temp_db.create_oauth_pending_login(
             binding_digest=live_other_digest,
+            flow_id=FLOW_ID,
             user_id=second.id,
             provider="google",
         )
@@ -292,6 +295,7 @@ def test_pending_login_creation_cleans_expired_rows_and_preserves_live(
 
         await temp_db.create_oauth_pending_login(
             binding_digest=new_digest,
+            flow_id=FLOW_ID,
             user_id=first.id,
             provider="google",
         )
@@ -301,7 +305,10 @@ def test_pending_login_creation_cleans_expired_rows_and_preserves_live(
         assert live_other_digest in stored
         assert new_digest in stored
 
-        consumed_user = await temp_db.consume_oauth_pending_login(new_digest)
+        consumed_user = await temp_db.consume_oauth_pending_login(
+            new_digest,
+            FLOW_ID,
+        )
         assert consumed_user.id == first.id
         assert new_digest not in _stored_pending_bindings(temp_db)
 
@@ -327,11 +334,13 @@ def test_failed_pending_login_insertion_restores_cleanup_and_replacement(
 
         await temp_db.create_oauth_pending_login(
             binding_digest=replacement_digest,
+            flow_id=FLOW_ID,
             user_id=first.id,
             provider="google",
         )
         await temp_db.create_oauth_pending_login(
             binding_digest=expired_digest,
+            flow_id=FLOW_ID,
             user_id=first.id,
             provider="google",
         )
@@ -353,6 +362,7 @@ def test_failed_pending_login_insertion_restores_cleanup_and_replacement(
         with pytest.raises(sqlite3.IntegrityError, match="forced pending login"):
             await temp_db.create_oauth_pending_login(
                 binding_digest=replacement_digest,
+                flow_id=FLOW_ID,
                 user_id=second.id,
                 provider="google",
             )

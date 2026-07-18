@@ -169,6 +169,8 @@ async def _create_user(
     password: str = "VeryStrongPass!9",
 ) -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
+    # MFA enrollment requires a verified email.
+    user.is_verified = True
     await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 

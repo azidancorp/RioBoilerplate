@@ -27,6 +27,8 @@ async def _create_password_user(
         email=email,
         password=PASSWORD,
     )
+    # MFA enrollment requires a verified email.
+    user.is_verified = True
     await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 

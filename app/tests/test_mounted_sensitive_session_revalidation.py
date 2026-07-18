@@ -84,6 +84,8 @@ async def _create_user_with_session(
     email: str,
 ) -> tuple[AppUser, UserSession, _FakeSession]:
     user = AppUser.create_new_user_with_default_settings(email=email, password=PASSWORD)
+    # MFA enrollment requires a verified email.
+    user.is_verified = True
     await persistence._create_user_unchecked(user)
     user = await persistence.get_user_by_id(user.id)
     user_session = await persistence.create_session(user.id)

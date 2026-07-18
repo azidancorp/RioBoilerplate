@@ -28,9 +28,12 @@ async def _create_user(
     password: str = "password",
     *,
     username: str | None = None,
+    verified: bool = False,
 ) -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
     user.username = username
+    # Verification-flow tests start unverified; MFA enrollment needs verified.
+    user.is_verified = verified
     await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 
@@ -221,6 +224,7 @@ def test_reset_link_prefills_two_factor_requirement(temp_db: Persistence):
             temp_db,
             "reset-2fa@example.com",
             username="reset-link-username",
+            verified=True,
         )
         temp_db.set_2fa_secret(user.id, "ABCDEFGHIJKLMNOPQRSTUVWX23456789")
         reset_token = await temp_db.create_reset_token(user.id)

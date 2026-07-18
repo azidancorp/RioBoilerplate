@@ -41,6 +41,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Fail unless a secure external email provider is configured.",
     )
     parser.add_argument(
+        "--require-email-verification",
+        action="store_true",
+        help="Fail unless signup requires verified email ownership.",
+    )
+    parser.add_argument(
         "--db-path",
         type=Path,
         default=None,
@@ -130,6 +135,16 @@ def run_prestart(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 3
+
+    if args.require_email_verification and not config.REQUIRE_EMAIL_VERIFICATION:
+        print(
+            "ERROR: Production email-verification check failed: "
+            "REQUIRE_EMAIL_VERIFICATION must be True in app/app/config.py so "
+            "password accounts cannot authenticate before proving control of "
+            "their email address.",
+            file=sys.stderr,
+        )
+        return 3
 
     db_path = args.db_path or DEFAULT_DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)

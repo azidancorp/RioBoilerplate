@@ -7,7 +7,7 @@ import pyotp
 import rio
 
 from app.persistence import Persistence
-from app.persistence_auth import TwoFactorStateConflict
+from app.persistence_auth import TwoFactorEmailUnverifiedError, TwoFactorStateConflict
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
 from app.session_validation import require_fresh_user_session
@@ -34,6 +34,7 @@ class EnableMFA(ResponsiveComponent):
     error_message: str = ""
     recovery_codes: tuple[str, ...] = ()
     show_recovery_codes: bool = False
+    email_unverified: bool = False
 
     def _scrub_setup_state(self) -> None:
         self.password = ""
@@ -56,6 +57,14 @@ class EnableMFA(ResponsiveComponent):
             self._scrub_setup_state()
             self.session.navigate_to("/app/settings", replace=True)
             return
+
+        # Unverified accounts must not arm TOTP; persistence enforces the same
+        # rule, this just explains it before showing a QR code.
+        if not user.is_verified:
+            self._scrub_setup_state()
+            self.email_unverified = True
+            return
+        self.email_unverified = False
 
         # create a new 2FA secret
         self._scrub_setup_state()
@@ -162,6 +171,11 @@ class EnableMFA(ResponsiveComponent):
                 self.session.navigate_to("/app/settings", replace=True)
                 self.force_refresh()
                 return
+            except TwoFactorEmailUnverifiedError:
+                self._scrub_setup_state()
+                self.email_unverified = True
+                self.force_refresh()
+                return
 
             self.recovery_codes = tuple(recovery_codes)
             self.show_recovery_codes = True
@@ -189,7 +203,44 @@ class EnableMFA(ResponsiveComponent):
         """Navigate back to settings after the user confirms they've stored the codes."""
         self.session.navigate_to("/app/settings")
 
+    def _on_back_to_settings(self, _event=None) -> None:
+        self.session.navigate_to("/app/settings")
+
     def build(self) -> rio.Component:
+        if self.email_unverified:
+            return CenterComponent(
+                rio.Card(
+                    rio.Column(
+                        rio.Text(
+                            "Verify Your Email First",
+                            style="heading1",
+                            justify="center",
+                        ),
+                        rio.Text(
+                            "Two-factor authentication requires a verified email "
+                            "address, because account recovery depends on "
+                            "reaching you at it.",
+                            margin_bottom=1,
+                        ),
+                        rio.Text(
+                            "Verify your email and return to this page. If you "
+                            "never received a verification email, contact an "
+                            "administrator.",
+                            margin_bottom=1,
+                        ),
+                        rio.Button(
+                            "Back to Settings",
+                            on_press=self._on_back_to_settings,
+                            shape="rounded",
+                        ),
+                        spacing=1.5,
+                        margin=2,
+                    ),
+                    align_y=0,
+                ),
+                width_percent=WIDTH_COMFORTABLE,
+            )
+
         if self.show_recovery_codes:
             return CenterComponent(
                 rio.Card(

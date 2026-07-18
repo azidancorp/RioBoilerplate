@@ -39,6 +39,15 @@ class TwoFactorStateConflict(RuntimeError):
     """Raised when an MFA mutation no longer matches the user's current state."""
 
 
+class TwoFactorEmailUnverifiedError(PermissionError):
+    """Raised when MFA enrollment is attempted on an unverified email account.
+
+    Unverified accounts must never arm TOTP: a squatter registering someone
+    else's address could otherwise lock the true owner out of the
+    password-reset reclaim path, which requires the account's 2FA code.
+    """
+
+
 class PasswordChangeSessionInvalidError(PermissionError):
     """Raised when a self-service password change loses its live session."""
 
@@ -208,6 +217,21 @@ def generate_recovery_codes(
     return new_codes
 
 
+def _require_verified_email_for_enrollment(cursor, user_id: uuid.UUID) -> None:
+    """Reject MFA enrollment for unverified accounts inside an open transaction."""
+    cursor.execute(
+        "SELECT is_verified FROM users WHERE id = ?",
+        (str(user_id),),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise KeyError(user_id)
+    if not row[0]:
+        raise TwoFactorEmailUnverifiedError(
+            "Two-factor authentication requires a verified email address."
+        )
+
+
 def enroll_two_factor(
     persistence: AuthPersistence,
     user_id: uuid.UUID,
@@ -225,6 +249,7 @@ def enroll_two_factor(
 
     try:
         conn.execute("BEGIN IMMEDIATE")
+        _require_verified_email_for_enrollment(cursor, user_id)
         cursor.execute(
             """
             UPDATE users
@@ -911,6 +936,7 @@ def set_2fa_secret(
                 (str(user_id),),
             )
         else:
+            _require_verified_email_for_enrollment(cursor, user_id)
             cursor.execute(
                 """
                 UPDATE users

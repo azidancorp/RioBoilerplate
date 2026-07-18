@@ -322,7 +322,7 @@ Review each setting:
 | `OAUTH_COOKIE_SECURE` | `False` | `True` when Google OAuth is configured — required so its state/nonce cookie is only sent over HTTPS. |
 | `EMAIL_METHOD` | `outbox` | `resend` or `smtp`. The production prestart check rejects the development-only outbox and incomplete or insecure provider configuration. |
 | `DEFAULT_EMAIL_SENDER` | `no-reply@rio.local` | A valid address on the sending domain configured with your provider. |
-| `REQUIRE_EMAIL_VERIFICATION` | `False` | Decide deliberately. Set `True` to require verified email before login (requires a working external email provider from Step 3.5). |
+| `REQUIRE_EMAIL_VERIFICATION` | `False` | `True` — required so nobody can create a usable account on an email address they do not own (an unverified squatter blocks the real owner's signup and Google sign-in). Needs the working external email provider from Step 3.5; the supported production prestart command fails closed otherwise. Enabling two-factor authentication also requires a verified email. |
 | `ALLOW_WEAK_PASSWORDS` | `True` | `True` warns and requires acknowledgement but preserves user choice. Set `False` only if this deployment deliberately wants every quality warning to become a hard rejection. |
 | `MIN_PASSWORD_LENGTH` | `15` | Advisory minimum. Shorter non-empty passwords show a warning and remain usable after acknowledgement while `ALLOW_WEAK_PASSWORDS` is `True`. |
 | `MAX_PASSWORD_LENGTH` | `1024` | Advisory analysis limit. Longer passwords skip deeper quality analysis, show a warning, and are still hashed in full after acknowledgement. |
@@ -344,7 +344,8 @@ cd /srv/[APP_NAME]/app
 APP_PORT=8000
 sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
   ../venv/bin/python -m app.scripts.prestart --strict-bootstrap \
-  --require-secure-auth-cookie --require-production-email
+  --require-secure-auth-cookie --require-production-email \
+  --require-email-verification
 sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
   XDG_CACHE_HOME=/tmp/[APP_NAME]-cache \
   ../venv/bin/rio run --port "$APP_PORT" --release
@@ -410,8 +411,9 @@ Environment=HOME=/srv/[APP_NAME]
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=XDG_CACHE_HOME=/tmp/[APP_NAME]-cache
 # --release flag provides production optimizations and safety checks
-# Required: verify schema, root ownership, secure cookies, and external email
-ExecStartPre=/srv/[APP_NAME]/venv/bin/python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie --require-production-email
+# Required: verify schema, root ownership, secure cookies, external email,
+# and enforced signup email verification
+ExecStartPre=/srv/[APP_NAME]/venv/bin/python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie --require-production-email --require-email-verification
 ExecStart=/srv/[APP_NAME]/venv/bin/rio run --port 8000 --release
 Restart=on-failure
 RestartSec=5s

@@ -4,4 +4,4 @@
 # the runtime-data relocation in docs/railway-readiness.md is complete and a
 # volume is mounted at the relocated data directory.
 [deploy]
-startCommand = "cd app && python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie --require-production-email && exec rio run --port ${PORT} --release --public"
+startCommand = "cd app && python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie --require-production-email --require-email-verification && exec rio run --port ${PORT} --release --public"

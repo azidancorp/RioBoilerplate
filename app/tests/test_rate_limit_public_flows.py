@@ -145,9 +145,12 @@ async def _create_user(
     password: str = "VeryStrongPass!9",
     *,
     username: str | None = None,
+    verified: bool = True,
 ) -> AppUser:
     user = AppUser.create_new_user_with_default_settings(email=email, password=password)
     user.username = username
+    # MFA enrollment requires a verified email; verification-flow tests opt out.
+    user.is_verified = verified
     await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 
@@ -644,7 +647,11 @@ def test_verification_resend_rate_limit_does_not_rotate_token_or_send_email(
 
     async def scenario():
         event_loop_thread = threading.get_ident()
-        user = await _create_user(temp_db, "verify-limit@example.com")
+        user = await _create_user(
+            temp_db,
+            "verify-limit@example.com",
+            verified=False,
+        )
         original_token = await temp_db.create_email_verification_token(user.id)
         assert original_token.token
 

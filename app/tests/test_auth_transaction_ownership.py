@@ -84,6 +84,8 @@ def test_auth_helpers_never_commit_a_callers_transaction(
             email=f"{operation}@example.com",
             password=PASSWORD,
         )
+        # MFA enrollment requires a verified email.
+        user.is_verified = True
         await temp_db._create_user_unchecked(user)
         user = await temp_db.get_user_by_id(user.id)
         session = await temp_db.create_session(user.id)

@@ -428,6 +428,8 @@ def test_reset_token_success_with_mfa_updates_password_after_challenge(tmp_path:
                 email="reset-success-mfa@example.com",
                 password="OldPass!123",
             )
+            # MFA enrollment requires a verified email.
+            user.is_verified = True
             await persistence._create_user_unchecked(user)
             secret = pyotp.random_base32()
             persistence.set_2fa_secret(user.id, secret)

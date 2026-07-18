@@ -790,6 +790,35 @@ def test_prestart_production_email_accepts_resend_and_secure_smtp(
     ) == 0
 
 
+def test_prestart_email_verification_requirement_fails_when_disabled(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    db_path = tmp_path / "verification-disabled.db"
+    monkeypatch.setattr(config, "REQUIRE_EMAIL_VERIFICATION", False)
+
+    exit_code = prestart.main(
+        ["--db-path", str(db_path), "--require-email-verification"]
+    )
+
+    assert exit_code == 3
+    assert "REQUIRE_EMAIL_VERIFICATION must be True" in capsys.readouterr().err
+    assert not db_path.exists()
+
+
+def test_prestart_email_verification_requirement_passes_when_enabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "verification-enabled.db"
+    monkeypatch.setattr(config, "REQUIRE_EMAIL_VERIFICATION", True)
+
+    assert prestart.main(
+        ["--db-path", str(db_path), "--require-email-verification"]
+    ) == 0
+
+
 def test_prestart_module_invocation_detection_is_exact() -> None:
     assert app_module._is_prestart_module_invocation(
         ["python", "-X", "dev", "-m", "app.scripts.prestart"]
@@ -876,7 +905,8 @@ def test_railway_start_is_gated_by_strict_bootstrap() -> None:
 
     strict_check = (
         "python -m app.scripts.prestart --strict-bootstrap "
-        "--require-secure-auth-cookie --require-production-email"
+        "--require-secure-auth-cookie --require-production-email "
+        "--require-email-verification"
     )
     public_start = "exec rio run"
     assert strict_check in railway_config

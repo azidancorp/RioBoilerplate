@@ -85,6 +85,8 @@ async def _create_user(
         email=email,
         password=PASSWORD,
     )
+    # MFA enrollment requires a verified email.
+    user.is_verified = True
     await persistence._create_user_unchecked(user)
     return await persistence.get_user_by_id(user.id)
 
@@ -111,6 +113,7 @@ def _mount_enable_mfa(session: _FakeSession, **attributes) -> EnableMFA:
     component.error_message = ""
     component.recovery_codes = ()
     component.show_recovery_codes = False
+    component.email_unverified = False
     for key, value in attributes.items():
         setattr(component, key, value)
     return component
@@ -840,5 +843,99 @@ def test_disable_compare_and_swap_preserves_a_newly_changed_factor(
         assert disabled is False
         assert _current_secret(temp_db, user.id) == changed_secret
         assert _recovery_code_hashes(temp_db, user.id) == hashes_before
+
+    asyncio.run(scenario())
+
+
+def test_unverified_email_cannot_enroll_two_factor(temp_db: Persistence):
+    async def scenario() -> None:
+        user = AppUser.create_new_user_with_default_settings(
+            email="unverified-enroll@example.com",
+            password=PASSWORD,
+        )
+        await temp_db._create_user_unchecked(user)
+
+        with pytest.raises(persistence_auth.TwoFactorEmailUnverifiedError):
+            temp_db.enroll_two_factor(user.id, pyotp.random_base32())
+
+        assert _current_secret(temp_db, user.id) is None
+        assert _recovery_code_hashes(temp_db, user.id) == ()
+
+        with pytest.raises(persistence_auth.TwoFactorEmailUnverifiedError):
+            persistence_auth.set_2fa_secret(
+                temp_db,
+                user.id,
+                pyotp.random_base32(),
+            )
+
+        assert _current_secret(temp_db, user.id) is None
+        assert _recovery_code_hashes(temp_db, user.id) == ()
+
+    asyncio.run(scenario())
+
+
+def test_unverified_email_on_populate_shows_gate_without_setup_state(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario() -> None:
+        user = AppUser.create_new_user_with_default_settings(
+            email="unverified-populate@example.com",
+            password=PASSWORD,
+        )
+        await temp_db._create_user_unchecked(user)
+        user = await temp_db.get_user_by_id(user.id)
+        user_session = await temp_db.create_session(user.id)
+        session = _FakeSession(temp_db, user_session, user)
+        page = _mount_enable_mfa(session)
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError(
+                "unverified population must not generate MFA setup data"
+            )
+
+        monkeypatch.setattr(enable_mfa_page.pyotp, "random_base32", fail_if_called)
+        monkeypatch.setattr(enable_mfa_page.qrcode, "make", fail_if_called)
+
+        await EnableMFA.on_populate(page)
+
+        assert page.email_unverified is True
+        assert page.temporary_two_factor_secret == ""
+        assert page.qr_code_image_bytes is None
+        assert session.navigation_target is None
+
+    asyncio.run(scenario())
+
+
+def test_enrollment_submit_blocked_when_verification_revoked_mid_setup(
+    temp_db: Persistence,
+):
+    async def scenario() -> None:
+        user, user_session = await _create_user_with_session(
+            temp_db,
+            "revoked-mid-setup@example.com",
+        )
+        session = _FakeSession(temp_db, user_session, user)
+        page = _mount_enable_mfa(session)
+        await EnableMFA.on_populate(page)
+        secret = page.temporary_two_factor_secret
+        assert secret
+
+        # Verification revoked between page load and submission.
+        temp_db.conn.execute(
+            "UPDATE users SET is_verified = 0 WHERE id = ?",
+            (str(user.id),),
+        )
+        temp_db.conn.commit()
+
+        page.password = PASSWORD
+        page.verification_code = _stable_totp_now(secret)
+        await EnableMFA._on_totp_entered(page)
+
+        assert page.email_unverified is True
+        assert page.show_recovery_codes is False
+        assert page.temporary_two_factor_secret == ""
+        assert _current_secret(temp_db, user.id) is None
+        assert _recovery_code_hashes(temp_db, user.id) == ()
 
     asyncio.run(scenario())

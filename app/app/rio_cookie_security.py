@@ -871,6 +871,29 @@ def _replace_cookie_route(server: Any, security: RioCookieSecurity) -> None:
     )
 
 
+def get_rio_cookie_security(server: Any) -> RioCookieSecurity | None:
+    """Return the hardened cookie-security state installed on a Rio server."""
+    return getattr(server, _SECURITY_STATE_ATTRIBUTE, None)
+
+
+def browser_binding_digest(value: str) -> str:
+    """Return the stable, storage-safe digest for one browser binding."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def read_browser_binding(
+    headers: Headers,
+    security: RioCookieSecurity | None,
+) -> str | None:
+    """Read one self-authenticating browser binding, failing closed otherwise."""
+    if security is None:
+        return None
+    binding = _single_cookie_value(headers, security.browser_binding_cookie_name)
+    if not security.is_valid_browser_binding(binding):
+        return None
+    return binding
+
+
 def install_rio_cookie_security(
     server: Any,
     *,

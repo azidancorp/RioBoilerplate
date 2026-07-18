@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import time
 from dataclasses import dataclass
@@ -15,12 +16,18 @@ from app.navigation import get_registered_app_path
 from app.oauth_clients import get_oauth_client
 from app.persistence import BootstrapRequiredError, Persistence
 from app.persistence_social import OAUTH_DELETE_CHALLENGE_PREFIX
+from app.rio_cookie_security import (
+    browser_binding_digest,
+    get_rio_cookie_security,
+    read_browser_binding,
+)
 from app.validation import SecuritySanitizer
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _OAUTH_DELETE_CHALLENGE_SESSION_KEY = "oauth_delete_account_challenge"
+_OAUTH_LOGIN_BINDING_SESSION_KEY = "oauth_login_browser_binding_digest"
 _OAUTH_LOGIN_RETURN_TO_SESSION_KEY = "oauth_login_return_to"
 
 
@@ -56,7 +63,7 @@ def _settings_delete_redirect(
 def _login_redirect(
     *,
     error: str | None = None,
-    social_login_token: str | None = None,
+    social_login: bool = False,
     return_to: str | None = None,
 ) -> RedirectResponse:
     query = urlencode(
@@ -64,14 +71,14 @@ def _login_redirect(
             key: value
             for key, value in {
                 "oauth_error": error,
-                "social_login_token": social_login_token,
+                "social_login": "1" if social_login else None,
                 "return_to": get_registered_app_path(return_to),
             }.items()
             if value
         }
     )
     suffix = f"?{query}" if query else ""
-    return RedirectResponse(f"/login{suffix}")
+    return RedirectResponse(f"/login{suffix}", status_code=303)
 
 
 def _has_recent_auth_time(value: object) -> bool:
@@ -102,6 +109,17 @@ async def oauth_login(
             )
         raise HTTPException(status_code=404, detail="Provider is not enabled")
 
+    security = get_rio_cookie_security(request.app)
+    browser_binding = read_browser_binding(request.headers, security)
+    if browser_binding is None:
+        return _login_redirect(
+            error="browser_not_verified",
+            return_to=safe_return_to,
+        )
+
+    request.session[_OAUTH_LOGIN_BINDING_SESSION_KEY] = browser_binding_digest(
+        browser_binding
+    )
     if safe_return_to:
         request.session[_OAUTH_LOGIN_RETURN_TO_SESSION_KEY] = safe_return_to
     else:
@@ -210,9 +228,26 @@ async def oauth_callback(
             return _login_redirect(error="provider_not_configured")
         raise HTTPException(status_code=404, detail="Provider is not enabled")
 
+    stored_binding_digest = request.session.pop(
+        _OAUTH_LOGIN_BINDING_SESSION_KEY,
+        "",
+    )
     return_to = get_registered_app_path(
         request.session.pop(_OAUTH_LOGIN_RETURN_TO_SESSION_KEY, "")
     )
+
+    security = get_rio_cookie_security(request.app)
+    browser_binding = read_browser_binding(request.headers, security)
+    if (
+        not isinstance(stored_binding_digest, str)
+        or not stored_binding_digest
+        or browser_binding is None
+        or not hmac.compare_digest(
+            browser_binding_digest(browser_binding),
+            stored_binding_digest,
+        )
+    ):
+        return _login_redirect(error="browser_changed", return_to=return_to)
 
     try:
         token = await client.authorize_access_token(request)
@@ -290,17 +325,18 @@ async def oauth_callback(
             )
 
     try:
-        handoff = await pers.create_oauth_handoff(
+        await pers.create_oauth_pending_login(
+            binding_digest=stored_binding_digest,
             user_id=user.id,
             provider=identity.provider,
         )
-    except ValueError:
+    except (KeyError, ValueError):
         return _login_redirect(
             error="account_inactive",
             return_to=return_to,
         )
 
     return _login_redirect(
-        social_login_token=handoff,
+        social_login=True,
         return_to=return_to,
     )

@@ -572,9 +572,10 @@ server {
 
 **Sensitive URLs, access logs, and redirects:**
 
-Recovery and OAuth links currently transport secrets in URL query strings
-(`reset_token`, `verify_token`, `social_login_token`), and Google's OAuth
-callback always carries `code` and `state`. The `queryless` log format keeps
+Recovery and account-deletion links currently transport secrets in URL query
+strings (`reset_token`, `verify_token`, `deletion_challenge`, and
+`delete_account_oauth_token`), and Google's OAuth callback always carries
+`code` and `state`. The `queryless` log format keeps
 those values out of the access log, and the redirect servers use `$uri`
 instead of `$request_uri` so a secret-bearing request arriving on the wrong
 scheme or hostname is not copied into a logged `Location` header. The cost is

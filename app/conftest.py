@@ -1,10 +1,14 @@
 """Pytest bootstrap for execution from the outer app/ directory."""
 
+import os
 import sqlite3
 import sys
 from pathlib import Path
 
 import pytest
+
+
+os.environ.setdefault("SESSION_SECRET_KEY", "test-session-secret-key")
 
 
 OUTER_APP_DIR = Path(__file__).resolve().parent

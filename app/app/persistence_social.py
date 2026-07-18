@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import secrets
 import sqlite3
 import uuid
@@ -34,6 +35,7 @@ class SocialPersistence(Protocol):
 OAUTH_DELETE_CHALLENGE_PREFIX = "DELETE-START-"
 OAUTH_DELETE_APPROVAL_PREFIX = "DELETE-APPROVE-"
 _OAUTH_DELETE_PROVIDER_MARKER = ":delete-account:"
+_BINDING_DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def _get_connection(persistence: SocialPersistence) -> sqlite3.Connection:
@@ -59,6 +61,15 @@ def _normalize_provider(provider: str) -> str:
     if provider != "google":
         raise KeyError(provider)
     return provider
+
+
+def _require_binding_digest(binding_digest: str) -> str:
+    if (
+        not isinstance(binding_digest, str)
+        or _BINDING_DIGEST_PATTERN.fullmatch(binding_digest) is None
+    ):
+        raise KeyError("Invalid OAuth browser-binding digest.")
+    return binding_digest
 
 
 def _new_handoff_token(*, prefix: str = "") -> str:
@@ -115,38 +126,38 @@ async def get_user_by_provider_identity(
     return _row_to_app_user(row)
 
 
-async def create_oauth_handoff(
+async def create_oauth_pending_login(
     persistence: SocialPersistence,
     *,
+    binding_digest: str,
     user_id: uuid.UUID,
     provider: str,
     ttl_minutes: int | None = None,
-) -> str:
+) -> None:
+    binding_digest = _require_binding_digest(binding_digest)
     provider = _normalize_provider(provider)
-    now = datetime.now(timezone.utc)
     ttl = (
         config.OAUTH_HANDOFF_TTL_MINUTES
         if ttl_minutes is None
         else ttl_minutes
     )
     if ttl <= 0:
-        raise ValueError("OAuth handoff lifetime must be positive.")
-    valid_until = now + timedelta(minutes=ttl)
-    token = _new_handoff_token()
-    token_hash = _hash_one_time_token(token)
+        raise ValueError("OAuth pending-login lifetime must be positive.")
 
     conn = _get_connection(persistence)
-    _require_top_level_transaction(conn, operation="OAuth handoff creation")
+    _require_top_level_transaction(conn, operation="OAuth pending-login creation")
     cursor = persistence._get_cursor()
     try:
         # The writer lock establishes ordering against account deactivation.
-        # Re-read account state only after the lock is owned, then insert
-        # without yielding the transaction to another coroutine.
+        # Sample time and re-read account state only after the lock is owned,
+        # then replace this browser's pending login without yielding.
         conn.execute("BEGIN IMMEDIATE")
+        now = datetime.now(timezone.utc)
+        valid_until = now + timedelta(minutes=ttl)
         cursor.execute(
             """
-            DELETE FROM oauth_login_handoffs
-            WHERE valid_until <= ? OR consumed_at IS NOT NULL
+            DELETE FROM oauth_pending_logins
+            WHERE valid_until <= ?
             """,
             (now.timestamp(),),
         )
@@ -158,17 +169,25 @@ async def create_oauth_handoff(
         if user_row is None:
             raise KeyError(user_id)
         if not bool(user_row[0]):
-            raise ValueError("Cannot create an OAuth handoff for an inactive user.")
+            raise ValueError(
+                "Cannot create an OAuth pending login for an inactive user."
+            )
 
+        # Keep at most one pending login per browser. Two statements inside the
+        # transaction preserve the prior row if insertion subsequently fails.
+        cursor.execute(
+            "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
+            (binding_digest,),
+        )
         cursor.execute(
             """
-            INSERT INTO oauth_login_handoffs (
-                token_hash, user_id, provider, created_at, valid_until, consumed_at
+            INSERT INTO oauth_pending_logins (
+                binding_digest, user_id, provider, created_at, valid_until
             )
-            VALUES (?, ?, ?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
-                token_hash,
+                binding_digest,
                 str(user_id),
                 provider,
                 now.timestamp(),
@@ -180,7 +199,6 @@ async def create_oauth_handoff(
         if conn.in_transaction:
             conn.rollback()
         raise
-    return token
 
 
 async def create_oauth_account_deletion_challenge(
@@ -434,42 +452,39 @@ def consume_oauth_account_deletion_approval_in_transaction(
         raise KeyError("OAuth account-deletion approval was already used.")
 
 
-async def consume_oauth_handoff(
+async def consume_oauth_pending_login(
     persistence: SocialPersistence,
-    token: str,
+    binding_digest: str,
 ) -> AppUser:
-    if token.startswith("DELETE-"):
-        raise KeyError("OAuth handoff has the wrong purpose.")
-    token_hash = _hash_one_time_token(token)
-    now = datetime.now(timezone.utc)
+    binding_digest = _require_binding_digest(binding_digest)
     conn = _get_connection(persistence)
-    _require_top_level_transaction(conn, operation="OAuth handoff consumption")
+    _require_top_level_transaction(conn, operation="OAuth pending-login consumption")
     cursor = persistence._get_cursor()
 
     try:
         conn.execute("BEGIN IMMEDIATE")
+        now = datetime.now(timezone.utc)
         cursor.execute(
             """
-            SELECT user_id, valid_until, consumed_at
-            FROM oauth_login_handoffs
-            WHERE token_hash = ?
+            SELECT user_id, valid_until
+            FROM oauth_pending_logins
+            WHERE binding_digest = ?
             LIMIT 1
             """,
-            (token_hash,),
+            (binding_digest,),
         )
         row = cursor.fetchone()
         if row is None:
-            conn.rollback()
-            raise KeyError("Invalid OAuth handoff token.")
+            raise KeyError("OAuth pending login is invalid or was already used.")
 
-        user_id_str, valid_until_ts, consumed_at = row
-        if consumed_at is not None or datetime.fromtimestamp(valid_until_ts, tz=timezone.utc) <= now:
+        user_id_str, valid_until_ts = row
+        if datetime.fromtimestamp(valid_until_ts, tz=timezone.utc) <= now:
             cursor.execute(
-                "DELETE FROM oauth_login_handoffs WHERE token_hash = ?",
-                (token_hash,),
+                "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
+                (binding_digest,),
             )
             conn.commit()
-            raise KeyError("OAuth handoff token has expired or was already used.")
+            raise KeyError("OAuth pending login has expired.")
 
         cursor.execute(
             "SELECT is_active FROM users WHERE id = ?",
@@ -478,19 +493,18 @@ async def consume_oauth_handoff(
         user_row = cursor.fetchone()
         if user_row is None or not bool(user_row[0]):
             cursor.execute(
-                "DELETE FROM oauth_login_handoffs WHERE token_hash = ?",
-                (token_hash,),
+                "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
+                (binding_digest,),
             )
             conn.commit()
-            raise KeyError("OAuth handoff belongs to an inactive or missing user.")
+            raise KeyError("OAuth pending login belongs to an inactive or missing user.")
 
         cursor.execute(
-            "DELETE FROM oauth_login_handoffs WHERE token_hash = ?",
-            (token_hash,),
+            "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
+            (binding_digest,),
         )
         if cursor.rowcount != 1:
-            conn.rollback()
-            raise KeyError("OAuth handoff token was already used.")
+            raise KeyError("OAuth pending login was already used.")
 
         conn.commit()
     except Exception:

@@ -251,14 +251,33 @@ def test_active_to_active_noop_preserves_live_sessions(temp_db: Persistence):
     asyncio.run(scenario())
 
 
-def test_deactivation_invalidates_pending_oauth_handoffs(temp_db: Persistence):
+def test_deactivation_invalidates_pending_oauth_state(temp_db: Persistence):
     async def scenario() -> None:
         root, target = await _create_root_and_target(temp_db)
         admin_context = await _admin_context(temp_db, root)
-        handoff = await temp_db.create_oauth_handoff(
+        binding_digest = "a" * 64
+        deletion_token_hash = temp_db._hash_one_time_token(
+            "DELETE-START-" + "A" * 64
+        )
+        await temp_db.create_oauth_pending_login(
+            binding_digest=binding_digest,
             user_id=target.id,
             provider="google",
         )
+        temp_db.conn.execute(
+            """
+            INSERT INTO oauth_login_handoffs (
+                token_hash, user_id, provider, created_at, valid_until, consumed_at
+            )
+            VALUES (?, ?, ?, 0, 99999999999, NULL)
+            """,
+            (
+                deletion_token_hash,
+                str(target.id),
+                "google:delete-account:test-session",
+            ),
+        )
+        temp_db.conn.commit()
 
         await temp_db.admin_set_user_active(
             target.id,
@@ -272,7 +291,15 @@ def test_deactivation_invalidates_pending_oauth_handoffs(temp_db: Persistence):
         )
 
         with pytest.raises(KeyError):
-            await temp_db.consume_oauth_handoff(handoff)
+            await temp_db.consume_oauth_pending_login(binding_digest)
+        assert temp_db.conn.execute(
+            "SELECT COUNT(*) FROM oauth_pending_logins WHERE user_id = ?",
+            (str(target.id),),
+        ).fetchone() == (0,)
+        assert temp_db.conn.execute(
+            "SELECT COUNT(*) FROM oauth_login_handoffs WHERE user_id = ?",
+            (str(target.id),),
+        ).fetchone() == (0,)
 
     asyncio.run(scenario())
 

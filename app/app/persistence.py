@@ -958,6 +958,10 @@ class Persistence:
                     (uid,),
                 )
                 cursor.execute(
+                    "DELETE FROM oauth_pending_logins WHERE user_id = ?",
+                    (uid,),
+                )
+                cursor.execute(
                     "DELETE FROM password_reset_tokens WHERE user_id = ?",
                     (uid,),
                 )
@@ -1136,22 +1140,30 @@ class Persistence:
             provider_user_id,
         )
 
-    async def create_oauth_handoff(
+    async def create_oauth_pending_login(
         self,
         *,
+        binding_digest: str,
         user_id: uuid.UUID,
         provider: str,
         ttl_minutes: int | None = None,
-    ) -> str:
-        return await persistence_social.create_oauth_handoff(
+    ) -> None:
+        await persistence_social.create_oauth_pending_login(
             self,
+            binding_digest=binding_digest,
             user_id=user_id,
             provider=provider,
             ttl_minutes=ttl_minutes,
         )
 
-    async def consume_oauth_handoff(self, token: str) -> AppUser:
-        return await persistence_social.consume_oauth_handoff(self, token)
+    async def consume_oauth_pending_login(
+        self,
+        binding_digest: str,
+    ) -> AppUser:
+        return await persistence_social.consume_oauth_pending_login(
+            self,
+            binding_digest,
+        )
 
     async def create_oauth_account_deletion_challenge(
         self,
@@ -1788,6 +1800,7 @@ class Persistence:
             "user_sessions",
             "password_reset_tokens",
             "oauth_login_handoffs",
+            "oauth_pending_logins",
             "two_factor_recovery_codes",
             "profiles",
         ):

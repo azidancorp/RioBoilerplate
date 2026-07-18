@@ -27,6 +27,11 @@ from app.scripts.message_utils import (
     send_password_reset_email,
 )
 from app.request_context import context_from_rio_session
+from app.rio_cookie_security import (
+    browser_binding_digest,
+    get_rio_cookie_security,
+    read_browser_binding,
+)
 from app.rate_limits import (
     first_blocked,
     login_identifier_policy,
@@ -145,6 +150,13 @@ def _oauth_error_message(error_code: str) -> str:
             "then link Google in settings once connected accounts are available."
         ),
         "account_inactive": "This account is inactive. Contact an administrator.",
+        "browser_not_verified": (
+            "Your browser could not be verified. Please sign in with Google again."
+        ),
+        "browser_changed": (
+            "Google sign-in must be completed in the browser where it started. "
+            "Please try again."
+        ),
     }
     return messages.get(error_code, "Google sign-in failed. Please try again.")
 
@@ -1557,32 +1569,42 @@ class LoginPage(rio.Component):
         query = self.session.active_page_url.query
 
         social_token_raw = str(query.get("social_login_token", "")).strip()
+        social_login_raw = str(query.get("social_login", "")).strip()
         oauth_error = str(query.get("oauth_error", "")).strip()
         verify_token_raw = str(query.get("verify_token", "")).strip()
         reset_token_raw = str(query.get("reset_token", "")).strip()
         if social_token_raw:
-            try:
-                social_token = SecuritySanitizer.sanitize_auth_code(
-                    social_token_raw,
-                    max_length=128,
-                )
-            except HTTPException:
-                social_token = None
+            self.current_form = "login"
+            self._set_page_message(
+                "danger",
+                "This Google sign-in link is no longer supported. "
+                "Please sign in with Google again.",
+            )
+            self.force_refresh()
+            return
 
-            if not social_token:
+        if social_login_raw:
+            security = get_rio_cookie_security(self.session._app_server)
+            binding = read_browser_binding(self.session.http_headers, security)
+            if binding is None:
                 self.current_form = "login"
-                self._set_page_message("danger", "Google sign-in link is invalid.")
+                self._set_page_message(
+                    "danger",
+                    _oauth_error_message("browser_not_verified"),
+                )
                 self.force_refresh()
                 return
 
             persistence = self.session[Persistence]
             try:
-                user_info = await persistence.consume_oauth_handoff(social_token)
+                user_info = await persistence.consume_oauth_pending_login(
+                    browser_binding_digest(binding)
+                )
             except KeyError:
                 self.current_form = "login"
                 self._set_page_message(
                     "danger",
-                    "Google sign-in link is invalid or expired. Please try again.",
+                    "Google sign-in expired or was already used. Please try again.",
                 )
                 self.force_refresh()
                 return

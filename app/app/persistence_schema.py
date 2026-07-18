@@ -20,6 +20,7 @@ def initialize_schema(persistence: SchemaPersistence) -> None:
     create_password_reset_tokens_table(persistence)
     create_email_verification_tokens_table(persistence)
     create_oauth_login_handoffs_table(persistence)
+    create_oauth_pending_logins_table(persistence)
     create_profiles_table(persistence)
     create_recovery_codes_table(persistence)
     create_currency_ledger_table(persistence)
@@ -390,7 +391,7 @@ def create_email_verification_tokens_table(persistence: SchemaPersistence) -> No
 
 def create_oauth_login_handoffs_table(persistence: SchemaPersistence) -> None:
     """
-    Create short-lived one-time handoffs from FastAPI OAuth callbacks to Rio.
+    Create short-lived OAuth account-deletion challenges and approvals.
     """
     cursor = persistence._get_cursor()
     conn = _get_connection(persistence)
@@ -412,6 +413,32 @@ def create_oauth_login_handoffs_table(persistence: SchemaPersistence) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_oauth_login_handoffs_user_id
         ON oauth_login_handoffs(user_id)
+        """
+    )
+    conn.commit()
+
+
+def create_oauth_pending_logins_table(persistence: SchemaPersistence) -> None:
+    """Create browser-bound, short-lived OAuth login continuations."""
+    cursor = persistence._get_cursor()
+    conn = _get_connection(persistence)
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS oauth_pending_logins (
+            binding_digest TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            valid_until REAL NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_oauth_pending_logins_user_id
+        ON oauth_pending_logins(user_id)
         """
     )
     conn.commit()

@@ -17,14 +17,23 @@ def is_google_login_configured() -> bool:
     )
 
 
+def _google_registration_kwargs() -> dict[str, object]:
+    return {
+        "name": "google",
+        "client_id": config.GOOGLE_CLIENT_ID,
+        "client_secret": config.GOOGLE_CLIENT_SECRET,
+        "server_metadata_url": (
+            "https://accounts.google.com/.well-known/openid-configuration"
+        ),
+        "client_kwargs": {
+            "scope": "openid profile email",
+            "code_challenge_method": "S256",
+        },
+    }
+
+
 if config.ENABLE_GOOGLE_LOGIN and config.GOOGLE_CLIENT_ID and config.GOOGLE_CLIENT_SECRET:
-    oauth.register(
-        name="google",
-        client_id=config.GOOGLE_CLIENT_ID,
-        client_secret=config.GOOGLE_CLIENT_SECRET,
-        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-        client_kwargs={"scope": "openid profile email"},
-    )
+    oauth.register(**_google_registration_kwargs())
 
 
 def get_oauth_client(provider: str):

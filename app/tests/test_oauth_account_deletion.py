@@ -10,6 +10,7 @@ from app.config import config
 from app.data_models import AppUser, UserSession, UserSettings
 from app.pages.app_page.settings import Settings
 from app.persistence import Persistence
+from app.rio_cookie_security import browser_binding_digest
 
 
 @pytest.fixture
@@ -64,6 +65,15 @@ def _handoff_exists(persistence: Persistence, token: str) -> bool:
     )
 
 
+def _pending_login_exists(persistence: Persistence, binding_digest: str) -> bool:
+    return bool(
+        persistence.conn.execute(
+            "SELECT 1 FROM oauth_pending_logins WHERE binding_digest = ?",
+            (binding_digest,),
+        ).fetchone()
+    )
+
+
 def test_oauth_deletion_proof_is_purpose_user_and_session_bound(
     temp_db: Persistence,
 ):
@@ -80,8 +90,10 @@ def test_oauth_deletion_proof_is_purpose_user_and_session_bound(
             auth_token=bound_session.id,
         )
 
-        with pytest.raises(KeyError, match="wrong purpose"):
-            await temp_db.consume_oauth_handoff(challenge)
+        with pytest.raises(KeyError):
+            await temp_db.consume_oauth_pending_login(
+                browser_binding_digest(challenge)
+            )
         assert _handoff_exists(temp_db, challenge)
 
         with pytest.raises(KeyError):
@@ -100,8 +112,10 @@ def test_oauth_deletion_proof_is_purpose_user_and_session_bound(
         assert not _handoff_exists(temp_db, challenge)
         assert _handoff_exists(temp_db, approval)
 
-        with pytest.raises(KeyError, match="wrong purpose"):
-            await temp_db.consume_oauth_handoff(approval)
+        with pytest.raises(KeyError):
+            await temp_db.consume_oauth_pending_login(
+                browser_binding_digest(approval)
+            )
         assert await temp_db.delete_user(
             user.id,
             password=None,
@@ -110,7 +124,9 @@ def test_oauth_deletion_proof_is_purpose_user_and_session_bound(
         ) is False
         assert _handoff_exists(temp_db, approval)
 
-        login_handoff = await temp_db.create_oauth_handoff(
+        pending_login_digest = "a" * 64
+        await temp_db.create_oauth_pending_login(
+            binding_digest=pending_login_digest,
             user_id=user.id,
             provider="google",
         )
@@ -118,9 +134,9 @@ def test_oauth_deletion_proof_is_purpose_user_and_session_bound(
             user.id,
             password=None,
             auth_token=bound_session.id,
-            oauth_reauth_token=login_handoff,
+            oauth_reauth_token=pending_login_digest,
         ) is False
-        assert _handoff_exists(temp_db, login_handoff)
+        assert _pending_login_exists(temp_db, pending_login_digest)
 
         assert await temp_db.delete_user(
             user.id,

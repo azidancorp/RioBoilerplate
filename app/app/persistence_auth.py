@@ -1626,7 +1626,7 @@ async def get_user_by_reset_token(
 
     row = cursor.fetchone()
     if not row:
-        raise KeyError(f"Invalid reset token: {token}")
+        raise KeyError("Invalid reset token")
 
     # Check if the token is expired
     valid_until = datetime.fromtimestamp(row[1], tz=timezone.utc)
@@ -1636,7 +1636,7 @@ async def get_user_by_reset_token(
             (hashed_token,),
         )
         conn.commit()
-        raise KeyError(f"Reset token has expired: {token}")
+        raise KeyError("Reset token has expired")
 
     # Get and return the associated user
     user = await persistence.get_user_by_id(uuid.UUID(row[0]))
@@ -1646,7 +1646,7 @@ async def get_user_by_reset_token(
             (hashed_token,),
         )
         conn.commit()
-        raise KeyError(f"Reset token belongs to an inactive user: {token}")
+        raise KeyError("Reset token belongs to an inactive user")
     return user
 
 

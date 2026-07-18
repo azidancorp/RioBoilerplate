@@ -2,6 +2,7 @@ from xml.etree import ElementTree
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.responses import RedirectResponse
 
 import app as app_module
 from app.config import config
@@ -104,6 +105,91 @@ def test_known_routes_reject_wrong_methods(client, method, path, allow):
     assert response.headers["allow"] == allow
     assert response.json() == {"detail": "Method Not Allowed"}
     assert "rio-browser-binding" not in response.headers.get("set-cookie", "")
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "expected_status"),
+    (
+        ("GET", "/login", 200),
+        ("GET", "/login?probe=SENTINEL-not-a-real-value", 200),
+        ("GET", "/login/?probe=SENTINEL-not-a-real-value", 404),
+        ("GET", "/app/settings", 200),
+        ("GET", "/app/settings/?probe=SENTINEL-not-a-real-value", 404),
+        ("GET", "/auth/nope", 404),
+        ("POST", "/login", 405),
+    ),
+)
+def test_sensitive_paths_send_no_store_and_no_referrer(
+    client, method, path, expected_status
+):
+    client.cookies.clear()
+    response = client.request(method, path)
+
+    assert response.status_code == expected_status
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def _request_temporary_route(client, route_path, endpoint):
+    routes = app_module.fastapi_app.router.routes
+    original_routes = list(routes)
+
+    try:
+        app_module.fastapi_app.add_api_route(
+            route_path,
+            endpoint,
+            methods=["GET"],
+            include_in_schema=False,
+        )
+        # Rio's SPA catch-all route is already registered, so the test route
+        # must sit in front of it to receive the request.
+        routes.insert(0, routes.pop())
+        return client.get(route_path, follow_redirects=False)
+    finally:
+        routes[:] = original_routes
+
+
+def test_uncaught_errors_on_sensitive_paths_keep_no_store_headers(client):
+    async def boom() -> None:
+        raise RuntimeError("uncaught test error")
+
+    response = _request_temporary_route(
+        client,
+        "/auth/_test_uncaught_error",
+        boom,
+    )
+
+    assert response.status_code == 500
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def test_redirects_from_sensitive_paths_keep_no_store_headers(client):
+    async def redirect_to_login() -> RedirectResponse:
+        return RedirectResponse("/login", status_code=303)
+
+    response = _request_temporary_route(
+        client,
+        "/auth/_test_sensitive_redirect",
+        redirect_to_login,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ("/", "/api/nope", "/login-old?probe=SENTINEL"),
+)
+def test_non_sensitive_paths_keep_default_referrer_policy(client, path):
+    client.cookies.clear()
+    response = client.get(path)
+
+    assert "referrer-policy" not in response.headers
+    assert "cache-control" not in response.headers
 
 
 @pytest.mark.parametrize(

@@ -348,7 +348,7 @@ sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
   --require-email-verification
 sudo -u [APP_USER] -H env PYTHONDONTWRITEBYTECODE=1 \
   XDG_CACHE_HOME=/tmp/[APP_NAME]-cache \
-  ../venv/bin/rio run --port "$APP_PORT" --release
+  ../venv/bin/rio run --port "$APP_PORT" --release --quiet
 
 # Verify it's working from another terminal with the same port value.
 APP_PORT=8000
@@ -410,11 +410,12 @@ WorkingDirectory=/srv/[APP_NAME]/app
 Environment=HOME=/srv/[APP_NAME]
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=XDG_CACHE_HOME=/tmp/[APP_NAME]-cache
-# --release flag provides production optimizations and safety checks
+# --release provides production optimizations and safety checks; --quiet
+# explicitly suppresses HTTP access logs and routine server noise.
 # Required: verify schema, root ownership, secure cookies, external email,
 # and enforced signup email verification
 ExecStartPre=/srv/[APP_NAME]/venv/bin/python -m app.scripts.prestart --strict-bootstrap --require-secure-auth-cookie --require-production-email --require-email-verification
-ExecStart=/srv/[APP_NAME]/venv/bin/rio run --port 8000 --release
+ExecStart=/srv/[APP_NAME]/venv/bin/rio run --port 8000 --release --quiet
 Restart=on-failure
 RestartSec=5s
 UMask=0077
@@ -465,7 +466,7 @@ Created symlink '/etc/systemd/system/multi-user.target.wants/[APP_NAME].service'
      Memory: 20.2M (peak: 20.4M)
         CPU: 278ms
      CGroup: /system.slice/[APP_NAME].service
-             └─19392 /srv/[APP_NAME]/venv/bin/python3 /srv/[APP_NAME]/venv/bin/rio run --port 8000 --release
+             └─19392 /srv/[APP_NAME]/venv/bin/python3 /srv/[APP_NAME]/venv/bin/rio run --port 8000 --release --quiet
 ```
 
 **Common Issues:**
@@ -497,32 +498,56 @@ nano /etc/nginx/sites-available/[DOMAIN_NAME]
 
 **Nginx configuration file content:**
 ```nginx
-# HTTP to HTTPS redirect
+# Queryless access-log format. Password-reset, email-verification, and OAuth
+# flows carry secrets in URL query strings; the default "combined" format
+# would persist them (via $request and $http_referer) in access logs. This
+# format records the path only — never $request, $request_uri, $args,
+# $query_string, or $http_referer.
+log_format queryless '$remote_addr [$time_local] '
+                     '"$request_method $uri $server_protocol" '
+                     '$status $body_bytes_sent $request_time';
+
+# HTTP to HTTPS redirect. Deliberately drops the query string ($uri, not
+# $request_uri) so secret-bearing links arriving over plain HTTP are not
+# copied into a redirect Location that gets logged again.
 server {
     listen 80;
     server_name [DOMAIN_NAME] www.[DOMAIN_NAME];
-    return 301 https://[DOMAIN_NAME]$request_uri;
+
+    add_header Cache-Control "no-store" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    access_log /var/log/nginx/access.log queryless;
+
+    return 301 https://[DOMAIN_NAME]$uri;
 }
 
 # Redirect the alternate HTTPS hostname to the APP_URL origin before Rio sees
 # the request. This keeps Origin-bound authentication cookie writes reliable.
+# Like the HTTP redirect above, this drops the query string on purpose.
 server {
     listen 443 ssl;
     server_name www.[DOMAIN_NAME];
 
     add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header Cache-Control "no-store" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    access_log /var/log/nginx/access.log queryless;
 
     # Temporary SSL certificate (will be replaced by Certbot)
     ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
     ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
 
-    return 301 https://[DOMAIN_NAME]$request_uri;
+    return 301 https://[DOMAIN_NAME]$uri;
 }
 
 # HTTPS reverse proxy with WebSocket support
 server {
     listen 443 ssl;
     server_name [DOMAIN_NAME];
+
+    access_log /var/log/nginx/access.log queryless;
 
     # Keep future visits on HTTPS after the first successful HTTPS response.
     add_header Strict-Transport-Security "max-age=31536000" always;
@@ -545,12 +570,34 @@ server {
 }
 ```
 
+**Sensitive URLs, access logs, and redirects:**
+
+Recovery and OAuth links currently transport secrets in URL query strings
+(`reset_token`, `verify_token`, `social_login_token`), and Google's OAuth
+callback always carries `code` and `state`. The `queryless` log format keeps
+those values out of the access log, and the redirect servers use `$uri`
+instead of `$request_uri` so a secret-bearing request arriving on the wrong
+scheme or hostname is not copied into a logged `Location` header. The cost is
+that redirected deep links lose benign query parameters too; application-
+issued links always point at the canonical HTTPS origin, and HSTS keeps
+returning browsers there, so in practice this affects little beyond first
+visits. Keep the same queryless discipline in any CDN, WAF, or centralized
+log pipeline placed in front of this configuration. This format controls
+Nginx access logs only; validate the separate Nginx error log and every
+upstream logging layer with a non-production sentinel on the deployment host.
+
+The supported service command pins Rio's `--quiet` mode even though the
+installed Rio version currently enables it by default. Do not replace the
+documented command with a direct Uvicorn launch unless Uvicorn access logging
+is disabled or independently configured and tested to omit query strings.
+
 **Client IPs for rate limits:**
 
 The nginx configuration above sends the original client address with
-`X-Real-IP` and `X-Forwarded-For`. The documented `rio run --port 8000 --release`
-path runs on Uvicorn, which trusts proxy headers from `127.0.0.1` by default, so
-Rio/FastAPI sees the real client IP before application rate-limit checks run.
+`X-Real-IP` and `X-Forwarded-For`. The documented
+`rio run --port 8000 --release --quiet` path runs on Uvicorn, which trusts proxy
+headers from `127.0.0.1` by default, so Rio/FastAPI sees the real client IP
+before application rate-limit checks run.
 
 If you run the app under a different ASGI server, disable Uvicorn proxy-header
 handling, or proxy through a non-loopback address, verify that trusted proxy

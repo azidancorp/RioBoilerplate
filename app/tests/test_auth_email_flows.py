@@ -196,6 +196,43 @@ def test_password_reset_token_is_hashed_and_single_use(temp_db: Persistence):
     asyncio.run(scenario())
 
 
+def test_reset_token_lookup_errors_do_not_expose_raw_tokens(temp_db: Persistence):
+    async def scenario():
+        invalid_token = "SENTINEL-invalid-reset-token"
+        with pytest.raises(KeyError) as invalid_error:
+            await temp_db.get_user_by_reset_token(invalid_token)
+        assert invalid_token not in str(invalid_error.value)
+        assert invalid_token not in repr(invalid_error.value)
+
+        expired_user = await _create_user(temp_db, "expired-reset@example.com")
+        expired_token = await temp_db.create_reset_token(expired_user.id)
+        temp_db.conn.execute(
+            "UPDATE password_reset_tokens SET valid_until = 0 WHERE user_id = ?",
+            (str(expired_user.id),),
+        )
+        temp_db.conn.commit()
+
+        with pytest.raises(KeyError) as expired_error:
+            await temp_db.get_user_by_reset_token(expired_token.token)
+        assert expired_token.token not in str(expired_error.value)
+        assert expired_token.token not in repr(expired_error.value)
+
+        inactive_user = await _create_user(temp_db, "inactive-reset@example.com")
+        inactive_token = await temp_db.create_reset_token(inactive_user.id)
+        temp_db.conn.execute(
+            "UPDATE users SET is_active = 0 WHERE id = ?",
+            (str(inactive_user.id),),
+        )
+        temp_db.conn.commit()
+
+        with pytest.raises(KeyError) as inactive_error:
+            await temp_db.get_user_by_reset_token(inactive_token.token)
+        assert inactive_token.token not in str(inactive_error.value)
+        assert inactive_token.token not in repr(inactive_error.value)
+
+    asyncio.run(scenario())
+
+
 def test_expired_verification_token_is_rejected(temp_db: Persistence):
     async def scenario():
         user = await _create_user(temp_db, "expired-token@example.com")

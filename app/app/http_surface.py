@@ -22,6 +22,18 @@ _KNOWN_PAGE_PATHS = frozenset(
 )
 _SITEMAP_NAMESPACE = "http://www.sitemaps.org/schemas/sitemap/0.9"
 
+# Paths whose responses may carry or follow account-recovery, OAuth, or
+# account-deletion capabilities. Their responses (including redirects and
+# errors) must never be cached and must never leak their URL via Referer.
+_SENSITIVE_HEADER_PATH_PREFIXES = ("/login", "/app/settings", "/auth")
+
+
+def _is_sensitive_path(path: str) -> bool:
+    return any(
+        path == prefix or path.startswith(f"{prefix}/")
+        for prefix in _SENSITIVE_HEADER_PATH_PREFIXES
+    )
+
 
 def _documented_routes(routes: Iterable[Any]) -> list[APIRoute]:
     return [
@@ -159,3 +171,34 @@ def install_http_surface(app: FastAPI) -> None:
         if path == "/auth" or path.startswith("/auth/"):
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         return PlainTextResponse("Not Found", status_code=404)
+
+    # Registered last so it wraps every earlier middleware and also decorates
+    # the 404/405 responses produced above.
+    @app.middleware("http")
+    async def sensitive_response_headers(request: Request, call_next):
+        response = await call_next(request)
+        if _is_sensitive_path(request.url.path):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    # Uncaught exceptions bypass the middleware above: Starlette's outermost
+    # error middleware builds the 500 itself, so it must apply the same
+    # sensitive-path headers. Starlette re-raises after sending this response
+    # so the server can still log the exception.
+    async def uncaught_exception_response(
+        request: Request,
+        exc: Exception,
+    ) -> PlainTextResponse:
+        headers = (
+            {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+            if _is_sensitive_path(request.url.path)
+            else None
+        )
+        return PlainTextResponse(
+            "Internal Server Error",
+            status_code=500,
+            headers=headers,
+        )
+
+    app.add_exception_handler(Exception, uncaught_exception_response)

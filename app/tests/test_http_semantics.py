@@ -164,6 +164,77 @@ def test_docs_and_openapi_describe_only_the_application_api_surface(client):
     assert not any(path.startswith("/rio/") for path in schema["paths"])
 
 
+def test_openapi_declares_exact_bearer_security_boundary(client):
+    client.cookies.clear()
+    schema = client.get("/openapi.json").json()
+
+    security_schemes = schema["components"]["securitySchemes"]
+    assert set(security_schemes) == {"SessionBearer"}
+    scheme = security_schemes["SessionBearer"]
+    assert scheme["type"] == "http"
+    assert scheme["scheme"] == "bearer"
+    assert "External API clients are not supported" in scheme["description"]
+    assert "security" not in schema
+
+    http_methods = {
+        "get",
+        "put",
+        "post",
+        "delete",
+        "options",
+        "head",
+        "patch",
+        "trace",
+    }
+    operations = {
+        (method.upper(), path): operation
+        for path, path_item in schema["paths"].items()
+        for method, operation in path_item.items()
+        if method in http_methods
+    }
+    protected = {
+        ("GET", "/api/profiles"),
+        ("POST", "/api/profiles"),
+        ("GET", "/api/profiles/{user_id}"),
+        ("PUT", "/api/profiles/{user_id}"),
+        ("DELETE", "/api/profiles/{user_id}"),
+        ("GET", "/api/currency/balance"),
+        ("GET", "/api/currency/ledger"),
+        ("POST", "/api/currency/adjust"),
+        ("POST", "/api/currency/set"),
+    }
+    without_session_bearer = {
+        ("GET", "/auth/{provider}/login"),
+        ("GET", "/auth/{provider}/delete-account"),
+        ("GET", "/auth/{provider}/delete-account/callback"),
+        ("GET", "/auth/{provider}/callback"),
+        ("GET", "/api/test"),
+        ("POST", "/api/contact"),
+        ("GET", "/api/currency/config"),
+        ("GET", "/api/health"),
+    }
+
+    assert set(operations) == protected | without_session_bearer
+    for key in protected:
+        assert operations[key]["security"] == [{"SessionBearer": []}]
+    for key in without_session_bearer:
+        assert "security" not in operations[key]
+
+    parameter_groups = [
+        path_item.get("parameters", ())
+        for path_item in schema["paths"].values()
+    ] + [
+        operation.get("parameters", ())
+        for operation in operations.values()
+    ]
+    for parameters in parameter_groups:
+        assert not any(
+            parameter.get("in") == "header"
+            and parameter.get("name", "").casefold() == "authorization"
+            for parameter in parameters
+        )
+
+
 def test_robots_points_to_the_canonical_public_sitemap(client):
     response = client.get("/robots.txt")
 

@@ -58,7 +58,9 @@ Do a quick boot check from `app/` (where `rio.toml` lives), e.g. `cd app && time
 ## Auth, Roles, APIs
 - Roles: edit `ROLE_HIERARCHY` in `app/app/permissions.py`; page access is driven by `app/app/navigation.py` (supports wildcard role `"*"`).
 - Routes: add new authenticated pages to `APP_ROUTES` and new public pages to `PUBLIC_NAV_ROUTES` in `app/app/navigation.py` (not `app/app/permissions.py`).
-- FastAPI auth: endpoints expect `Authorization: Bearer <token>`; dependencies live in `app/app/api/auth_dependencies.py`. Token originates from `UserSettings.auth_token` (Rio client storage).
+- FastAPI auth: protected API operations expect `Authorization: Bearer <session token>` through `app/app/api/auth_dependencies.py`. OpenAPI declares the requirement with `Security(HTTPBearer)` as the `SessionBearer` scheme. Not every `/api/*` operation is protected; preserve each route's intended public or authenticated boundary.
+- API consumption model: the stock Rio UI does not depend on the protected HTTP API. `currency_playground.py` invokes route handlers directly only as a manual QA harness. Direct calls bypass FastAPI dependencies and middleware; extract an application-service function when UI and HTTP transports need the same behavior.
+- Credential boundary: Rio's HTTP-only browser cookie and bearer header represent the same interactive session credential through different encodings/transports; protected API operations currently read only the bearer header. There is no supported issuance or cookie-extraction flow. Read `docs/api-client-authentication.md` before adding one, never expose the session token to JavaScript/Swagger, and never accept the session cookie on API endpoints without a complete CSRF/origin policy.
 - Validation: use Pydantic v2 models from `app/app/validation.py` for API payloads; keep sanitization/constraints centralized there.
 
 ## Persistence & Currency Gotchas

@@ -4,7 +4,7 @@ Production-ready Rio web application template featuring session-based authentica
 
 ## Highlights
 - Auth & security: login, password reset, role-based guards, MFA toggles, recovery codes, admin-only operations.
-- API layer: FastAPI routers for profile data, shared validation in `app/app/validation.py`, persistence helpers for SQLite.
+- API layer: FastAPI routers for profile data, shared validation in `app/app/validation.py`, and SQLite persistence helpers. Protected external HTTP clients are not supported until a credential model is designed for a concrete consumer.
 - UI experience: Rio pages for public marketing routes and protected app area, shared layout elements, and Plotly chart support.
 - Built-in primary currency system with configurable naming, precision, admin tooling, and ledger history.
 - Developer ergonomics: Example scripts, bundled Rio documentation, and deployment playbooks for quick onboarding.
@@ -88,6 +88,12 @@ never hand-edit the generated files.
 - FastAPI endpoints (`/api/currency/*`) expose balance, ledger, and privileged adjustment APIs.
 - CLI helper `python app/app/scripts/currency_admin.py` supports `list`, `ledger`, `adjust`, and `set` operations from the terminal.
 
+## HTTP API
+- Protected profile operations and `/api/currency/balance`, `/api/currency/ledger`, `/api/currency/adjust`, and `/api/currency/set` require `Authorization: Bearer <session token>`. `/api/health`, `/api/test`, `/api/contact`, and `/api/currency/config` are public.
+- The bearer requirement is declared in OpenAPI as `SessionBearer`. Interactive Swagger UI lives at `/docs`; reference documentation lives at `/redoc`. The schema describes how to send an existing credential but does not provide or issue one.
+- The stock Rio UI does not depend on protected REST operations over HTTP. `app/app/pages/app_page/currency_playground.py` invokes currency route handlers directly as a manual QA exception, not as the general UI/service sharing pattern.
+- There is intentionally **no supported external token issuance or browser-cookie extraction flow**. Production sessions are created through the web login/OAuth paths; tests create sessions directly with `Persistence.create_session()` only as setup.
+- Before adding a browser, mobile, CLI, or integration client, read [`docs/api-client-authentication.md`](docs/api-client-authentication.md) and design a credential lifecycle for that concrete consumer.
 
 ## Project Layout
 ```text

@@ -18,7 +18,8 @@ In Rio apps, token is stored in UserSettings.auth_token.
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request, status, Header
+from fastapi import Depends, HTTPException, Request, Security, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.data_models import AppUser, UserSession
 from app.persistence import Persistence
@@ -30,6 +31,21 @@ from app.rate_limits import api_auth_ip_policy, rate_limit_key, rate_limited_mes
 # ============================================================================
 # Authentication Dependencies
 # ============================================================================
+
+# Keep FastAPI from short-circuiting so every missing or malformed credential
+# uses this application's error details and database-backed rate limiter.
+_bearer_scheme = HTTPBearer(
+    scheme_name="SessionBearer",
+    description=(
+        "Opaque Rio session credential for protected API operations. External "
+        "API clients are not supported because there is no token issuance "
+        "endpoint. Do not extract browser cookies or paste an interactive "
+        "session credential into Swagger UI. See the repository document "
+        "docs/api-client-authentication.md."
+    ),
+    auto_error=False,
+)
+
 
 def _auth_failure(
     *,
@@ -74,7 +90,9 @@ async def get_persistence() -> AsyncGenerator[Persistence, None]:
 
 async def get_current_session(
     request: Request,
-    authorization: Annotated[str | None, Header()] = None,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Security(_bearer_scheme)
+    ] = None,
     db: Persistence = Depends(get_persistence)
 ) -> UserSession:
     """
@@ -83,24 +101,26 @@ async def get_current_session(
     Raises HTTPException 401 if token is missing, invalid, or expired. Repeated
     authentication failures may raise 429 with a Retry-After header.
     """
-    # Check if Authorization header is present
-    if not authorization:
-        raise _auth_failure(
-            request=request,
-            db=db,
-            detail="Missing authentication credentials",
-        )
-
-    # Extract the Bearer token
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
+    if credentials is None:
+        if not request.headers.get("authorization"):
+            raise _auth_failure(
+                request=request,
+                db=db,
+                detail="Missing authentication credentials",
+            )
         raise _auth_failure(
             request=request,
             db=db,
             detail="Invalid authentication credentials format. Expected: 'Bearer <token>'",
         )
 
-    token = parts[1]
+    token = credentials.credentials
+    if any(character.isspace() for character in token):
+        raise _auth_failure(
+            request=request,
+            db=db,
+            detail="Invalid authentication credentials format. Expected: 'Bearer <token>'",
+        )
 
     # Validate the session token
     try:

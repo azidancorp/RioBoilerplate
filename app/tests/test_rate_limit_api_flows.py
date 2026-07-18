@@ -76,22 +76,84 @@ def test_contact_api_rate_limits_and_returns_retry_after(
     assert len(submissions) == config.RATE_LIMIT_CONTACT_IP_ATTEMPTS
 
 
-def test_invalid_bearer_attempts_are_rate_limited_by_ip(api_test_setup):
+@pytest.mark.parametrize(
+    ("headers", "expected_detail"),
+    (
+        ({}, "Missing authentication credentials"),
+        (
+            {"Authorization": "Basic invalid-token"},
+            "Invalid authentication credentials format. Expected: 'Bearer <token>'",
+        ),
+        (
+            {"Authorization": "Bearer invalid token"},
+            "Invalid authentication credentials format. Expected: 'Bearer <token>'",
+        ),
+        (
+            {"Authorization": "Bearer invalid-token"},
+            "Invalid or expired authentication token",
+        ),
+    ),
+)
+def test_authentication_failures_are_rate_limited_by_ip(
+    api_test_setup,
+    headers,
+    expected_detail,
+):
     client, _ = api_test_setup
 
     for _ in range(config.RATE_LIMIT_API_AUTH_IP_ATTEMPTS):
         response = client.get(
             "/api/currency/balance",
-            headers={"Authorization": "Bearer invalid-token"},
+            headers=headers,
         )
         assert response.status_code == 401
         assert response.headers["WWW-Authenticate"] == "Bearer"
+        assert response.json()["detail"] == expected_detail
 
     blocked = client.get(
         "/api/currency/balance",
-        headers={"Authorization": "Bearer invalid-token"},
+        headers=headers,
     )
 
     assert blocked.status_code == 429
     assert "Retry-After" in blocked.headers
     assert "Too many authentication attempts." in blocked.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("authorization", "expected_detail"),
+    (
+        (None, "Missing authentication credentials"),
+        ("", "Missing authentication credentials"),
+        (
+            "Basic token",
+            "Invalid authentication credentials format. Expected: 'Bearer <token>'",
+        ),
+        (
+            "Bearer",
+            "Invalid authentication credentials format. Expected: 'Bearer <token>'",
+        ),
+        (
+            "Bearer\tinvalid-token",
+            "Invalid authentication credentials format. Expected: 'Bearer <token>'",
+        ),
+        (
+            "Bearer invalid token",
+            "Invalid authentication credentials format. Expected: 'Bearer <token>'",
+        ),
+        ("bearer invalid-token", "Invalid or expired authentication token"),
+    ),
+)
+def test_bearer_header_parsing_keeps_custom_failure_contract(
+    api_test_setup,
+    authorization,
+    expected_detail,
+):
+    client, _ = api_test_setup
+    headers = {} if authorization is None else {"Authorization": authorization}
+
+    response = client.get("/api/currency/balance", headers=headers)
+
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+    assert response.json()["detail"] == expected_detail

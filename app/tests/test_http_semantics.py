@@ -1,13 +1,42 @@
+import re
 from xml.etree import ElementTree
 
 import pytest
 from fastapi.testclient import TestClient
+from rio.assets import BytesAsset
 from starlette.responses import RedirectResponse
 
 import app as app_module
 from app.config import config
 from app.navigation import PUBLIC_NAV_ROUTES
 from app.persistence import Persistence
+
+
+_EXPECTED_RESPONSE_SECURITY_HEADERS = {
+    "content-security-policy": (
+        "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; "
+        "form-action 'self'"
+    ),
+    "x-frame-options": "DENY",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "permissions-policy": (
+        "camera=(), display-capture=(), geolocation=(), microphone=(), "
+        "payment=(), usb=()"
+    ),
+}
+_NO_STORE_CACHE_CONTROL = "no-store"
+_RIO_IMMUTABLE_CACHE_CONTROL = "max-age=31536000, immutable"
+
+
+def _assert_response_security_policy(
+    response,
+    *,
+    cache_control: str = _NO_STORE_CACHE_CONTROL,
+) -> None:
+    for header_name, expected_value in _EXPECTED_RESPONSE_SECURITY_HEADERS.items():
+        assert response.headers[header_name] == expected_value
+    assert response.headers["cache-control"] == cache_control
 
 
 @pytest.fixture(scope="module")
@@ -62,6 +91,14 @@ def test_unknown_browser_and_api_paths_return_real_404_responses(client):
     assert browser_post_response.status_code == 404
     assert browser_post_response.text == "Not Found"
     assert "allow" not in browser_post_response.headers
+    for response in (
+        browser_response,
+        api_response,
+        api_post_response,
+        auth_response,
+        browser_post_response,
+    ):
+        _assert_response_security_policy(response)
 
 
 def test_known_pages_keep_their_normal_semantics(client):
@@ -71,6 +108,16 @@ def test_known_pages_keep_their_normal_semantics(client):
     assert public_page.status_code == 200
     assert public_page.headers["content-type"].startswith("text/html")
     assert protected_page.status_code in {200, 302, 307}
+    _assert_response_security_policy(public_page)
+    _assert_response_security_policy(protected_page)
+
+
+def test_json_api_responses_receive_the_global_policy(client):
+    response = client.get("/api/test")
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "Hello, World!"}
+    _assert_response_security_policy(response)
 
 
 @pytest.mark.parametrize(
@@ -105,12 +152,13 @@ def test_known_routes_reject_wrong_methods(client, method, path, allow):
     assert response.headers["allow"] == allow
     assert response.json() == {"detail": "Method Not Allowed"}
     assert "rio-browser-binding" not in response.headers.get("set-cookie", "")
+    _assert_response_security_policy(response)
 
 
 @pytest.mark.parametrize(
     ("method", "path", "expected_status"),
     (
-        ("GET", "/login", 200),
+        ("GET", "/", 200),
         ("GET", "/login?probe=SENTINEL-not-a-real-value", 200),
         ("GET", "/login/?probe=SENTINEL-not-a-real-value", 404),
         ("GET", "/app/settings", 200),
@@ -119,15 +167,35 @@ def test_known_routes_reject_wrong_methods(client, method, path, allow):
         ("POST", "/login", 405),
     ),
 )
-def test_sensitive_paths_send_no_store_and_no_referrer(
+def test_dynamic_paths_receive_the_global_no_store_policy(
     client, method, path, expected_status
 ):
     client.cookies.clear()
     response = client.request(method, path)
 
     assert response.status_code == expected_status
-    assert response.headers["cache-control"] == "no-store"
-    assert response.headers["referrer-policy"] == "no-referrer"
+    _assert_response_security_policy(response)
+
+
+@pytest.mark.parametrize(
+    ("path", "token_parameter"),
+    (
+        ("/app/enable-mfa", "enable_mfa_oauth_token"),
+        ("/app/disable-mfa", "disable_mfa_oauth_token"),
+        ("/app/recovery-codes", "recovery_codes_oauth_token"),
+    ),
+)
+def test_mfa_approval_token_pages_receive_no_store_and_no_referrer(
+    client,
+    path,
+    token_parameter,
+):
+    response = client.get(
+        f"{path}?{token_parameter}=SENTINEL-not-a-real-approval"
+    )
+
+    assert response.status_code == 200
+    _assert_response_security_policy(response)
 
 
 def _request_temporary_route(client, route_path, endpoint):
@@ -149,47 +217,110 @@ def _request_temporary_route(client, route_path, endpoint):
         routes[:] = original_routes
 
 
-def test_uncaught_errors_on_sensitive_paths_keep_no_store_headers(client):
+def test_uncaught_errors_receive_the_global_policy(client):
     async def boom() -> None:
         raise RuntimeError("uncaught test error")
 
     response = _request_temporary_route(
         client,
-        "/auth/_test_uncaught_error",
+        "/_test_uncaught_error",
         boom,
     )
 
     assert response.status_code == 500
-    assert response.headers["cache-control"] == "no-store"
-    assert response.headers["referrer-policy"] == "no-referrer"
+    _assert_response_security_policy(response)
 
 
-def test_redirects_from_sensitive_paths_keep_no_store_headers(client):
+def test_redirects_receive_the_global_policy(client):
     async def redirect_to_login() -> RedirectResponse:
         return RedirectResponse("/login", status_code=303)
 
     response = _request_temporary_route(
         client,
-        "/auth/_test_sensitive_redirect",
+        "/_test_redirect",
         redirect_to_login,
     )
 
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
-    assert response.headers["cache-control"] == "no-store"
-    assert response.headers["referrer-policy"] == "no-referrer"
+    _assert_response_security_policy(response)
 
 
-@pytest.mark.parametrize(
-    "path",
-    ("/", "/api/nope", "/login-old?probe=SENTINEL"),
-)
-def test_non_sensitive_paths_keep_default_referrer_policy(client, path):
-    client.cookies.clear()
-    response = client.get(path)
+def test_temporary_rio_assets_are_no_store_for_full_and_range_responses(client):
+    asset = BytesAsset(
+        b"temporary-security-bearing-asset",
+        media_type="application/octet-stream",
+    )
+    asset_url = str(app_module.fastapi_app.weakly_host_asset(asset))
+    assert asset_url.startswith("/rio/assets/temp/")
 
-    assert "referrer-policy" not in response.headers
-    assert "cache-control" not in response.headers
+    full_response = client.get(asset_url)
+    range_response = client.get(asset_url, headers={"Range": "bytes=0-3"})
+
+    assert full_response.status_code == 200
+    assert full_response.content == asset.data
+    _assert_response_security_policy(full_response)
+
+    assert range_response.status_code == 206
+    assert range_response.content == asset.data[:4]
+    assert range_response.headers["content-range"] == (
+        f"bytes 0-3/{len(asset.data)}"
+    )
+    _assert_response_security_policy(range_response)
+
+
+def test_fingerprinted_frontend_asset_keeps_rio_immutable_policy(client):
+    index_response = client.get("/")
+    asset_match = re.search(
+        r'(?:src|href)="([^"]*/rio/frontend/assets/[^"]+)"',
+        index_response.text,
+    )
+
+    assert asset_match is not None
+    asset_url = asset_match.group(1)
+    assert re.search(
+        r"/[^/]+-[A-Za-z0-9_-]{6,}\.(?:css|js)$",
+        asset_url,
+    )
+
+    response = client.get(asset_url)
+    range_response = client.get(
+        asset_url,
+        headers={"Range": "bytes=0-3"},
+    )
+
+    assert response.status_code == 200
+    _assert_response_security_policy(
+        response,
+        cache_control=_RIO_IMMUTABLE_CACHE_CONTROL,
+    )
+    assert response.headers.get_list("cache-control") == [
+        _RIO_IMMUTABLE_CACHE_CONTROL
+    ]
+    assert range_response.status_code == 206
+    assert range_response.headers["content-range"].startswith("bytes 0-3/")
+    _assert_response_security_policy(
+        range_response,
+        cache_control=_RIO_IMMUTABLE_CACHE_CONTROL,
+    )
+    assert range_response.headers.get_list("cache-control") == [
+        _RIO_IMMUTABLE_CACHE_CONTROL
+    ]
+
+
+def test_missing_allowlisted_asset_is_no_store(client):
+    response = client.get("/rio/assets/special/not-a-real-asset.js")
+
+    assert response.status_code == 404
+    _assert_response_security_policy(response)
+
+
+def test_unversioned_favicon_is_no_store(client):
+    response = client.get("/rio/favicon.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    _assert_response_security_policy(response)
 
 
 @pytest.mark.parametrize(
@@ -201,6 +332,7 @@ def test_crawler_files_answer_head_requests(client, path):
     response = client.head(path)
 
     assert response.status_code == 200
+    _assert_response_security_policy(response)
 
 
 @pytest.mark.parametrize(
@@ -221,6 +353,8 @@ def test_cookie_write_wrong_methods_keep_hardened_response(client, method, path)
     assert response.headers["cache-control"] == "no-store"
     assert response.content == b""
     assert response.headers.get_list("set-cookie") == []
+    assert response.headers.get_list("cache-control") == ["no-store"]
+    _assert_response_security_policy(response)
 
 
 def test_docs_and_openapi_describe_only_the_application_api_surface(client):
@@ -238,6 +372,8 @@ def test_docs_and_openapi_describe_only_the_application_api_surface(client):
     assert openapi.status_code == 200
     assert openapi.headers["content-type"].startswith("application/json")
     assert "rio-browser-binding" not in openapi.headers.get("set-cookie", "")
+    for response in (docs, redoc, openapi):
+        _assert_response_security_policy(response)
 
     schema = openapi.json()
     assert schema["openapi"]
@@ -332,6 +468,7 @@ def test_robots_points_to_the_canonical_public_sitemap(client):
     assert "/robots.txt/rio/sitemap.xml" not in response.text
     for private_prefix in ("/app/", "/api/", "/auth/", "/rio/", "/login"):
         assert f"Disallow: {private_prefix}" in response.text
+    _assert_response_security_policy(response)
 
 
 def test_sitemap_contains_only_public_marketing_pages(client):
@@ -342,6 +479,8 @@ def test_sitemap_contains_only_public_marketing_pages(client):
     assert public_sitemap.headers["content-type"].startswith("application/xml")
     assert legacy_sitemap.status_code == 200
     assert legacy_sitemap.text == public_sitemap.text
+    _assert_response_security_policy(public_sitemap)
+    _assert_response_security_policy(legacy_sitemap)
 
     root = ElementTree.fromstring(public_sitemap.text)
     namespace = {"sitemap": "http://www.sitemaps.org/schemas/sitemap/0.9"}

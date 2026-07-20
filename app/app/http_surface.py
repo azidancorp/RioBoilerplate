@@ -7,7 +7,7 @@ from xml.etree import ElementTree
 from fastapi import FastAPI, Request
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.routing import APIRoute
 from starlette.routing import Match
 
@@ -21,18 +21,49 @@ _KNOWN_PAGE_PATHS = frozenset(
     route.path for route in (*PUBLIC_NAV_ROUTES, *APP_ROUTES)
 )
 _SITEMAP_NAMESPACE = "http://www.sitemaps.org/schemas/sitemap/0.9"
+_NO_STORE_CACHE_CONTROL = "no-store"
+_RIO_IMMUTABLE_CACHE_CONTROL = "max-age=31536000, immutable"
+_RIO_IMMUTABLE_ASSET_PATH_PREFIXES = (
+    "/rio/frontend/assets/",
+    "/rio/assets/special/",
+    "/rio/assets/hosted/",
+    "/rio/assets/user/",
+    "/rio/icon/",
+)
+_RESPONSE_SECURITY_HEADERS = (
+    (
+        "Content-Security-Policy",
+        "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; "
+        "form-action 'self'",
+    ),
+    ("X-Frame-Options", "DENY"),
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "no-referrer"),
+    (
+        "Permissions-Policy",
+        "camera=(), display-capture=(), geolocation=(), microphone=(), "
+        "payment=(), usb=()",
+    ),
+)
 
-# Paths whose responses may carry or follow account-recovery, OAuth, or
-# account-deletion capabilities. Their responses (including redirects and
-# errors) must never be cached and must never leak their URL via Referer.
-_SENSITIVE_HEADER_PATH_PREFIXES = ("/login", "/app/settings", "/auth")
 
+def _apply_response_security_policy(
+    request: Request,
+    response: Response,
+) -> Response:
+    for header_name, header_value in _RESPONSE_SECURITY_HEADERS:
+        response.headers[header_name] = header_value
 
-def _is_sensitive_path(path: str) -> bool:
-    return any(
-        path == prefix or path.startswith(f"{prefix}/")
-        for prefix in _SENSITIVE_HEADER_PATH_PREFIXES
+    keeps_immutable_cache_policy = (
+        response.status_code in {200, 206}
+        and response.headers.getlist("Cache-Control")
+        == [_RIO_IMMUTABLE_CACHE_CONTROL]
+        and request.url.path.startswith(_RIO_IMMUTABLE_ASSET_PATH_PREFIXES)
     )
+    if not keeps_immutable_cache_policy:
+        response.headers["Cache-Control"] = _NO_STORE_CACHE_CONTROL
+
+    return response
 
 
 def _documented_routes(routes: Iterable[Any]) -> list[APIRoute]:
@@ -175,30 +206,22 @@ def install_http_surface(app: FastAPI) -> None:
     # Registered last so it wraps every earlier middleware and also decorates
     # the 404/405 responses produced above.
     @app.middleware("http")
-    async def sensitive_response_headers(request: Request, call_next):
+    async def response_security_policy(request: Request, call_next):
         response = await call_next(request)
-        if _is_sensitive_path(request.url.path):
-            response.headers["Cache-Control"] = "no-store"
-            response.headers["Referrer-Policy"] = "no-referrer"
-        return response
+        return _apply_response_security_policy(request, response)
 
     # Uncaught exceptions bypass the middleware above: Starlette's outermost
-    # error middleware builds the 500 itself, so it must apply the same
-    # sensitive-path headers. Starlette re-raises after sending this response
-    # so the server can still log the exception.
+    # error middleware builds the 500 itself, so the exception handler must
+    # apply the same response policy. Starlette re-raises after sending this
+    # response so the server can still log the exception.
     async def uncaught_exception_response(
         request: Request,
         exc: Exception,
-    ) -> PlainTextResponse:
-        headers = (
-            {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
-            if _is_sensitive_path(request.url.path)
-            else None
-        )
-        return PlainTextResponse(
+    ) -> Response:
+        response = PlainTextResponse(
             "Internal Server Error",
             status_code=500,
-            headers=headers,
         )
+        return _apply_response_security_policy(request, response)
 
     app.add_exception_handler(Exception, uncaught_exception_response)

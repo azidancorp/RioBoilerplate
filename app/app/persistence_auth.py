@@ -183,30 +183,16 @@ def generate_recovery_codes(
     that was verified by the caller.
     """
     conn = _get_connection(persistence)
-    cursor = persistence._get_cursor()
     _require_top_level_transaction(conn)
 
     try:
         conn.execute("BEGIN IMMEDIATE")
-
-        cursor.execute(
-            "SELECT two_factor_secret FROM users WHERE id = ?",
-            (str(user_id),),
+        new_codes = generate_recovery_codes_in_transaction(
+            persistence,
+            user_id,
+            count=count,
+            expected_secret=expected_secret,
         )
-        row = cursor.fetchone()
-        if row is None:
-            raise KeyError(user_id)
-
-        current_secret = t.cast(str | None, row[0])
-        if not current_secret:
-            raise TwoFactorStateConflict("Two-factor authentication is not enabled.")
-        if expected_secret is not None and current_secret != expected_secret:
-            raise TwoFactorStateConflict(
-                "Two-factor authentication changed before recovery codes were generated."
-            )
-
-        new_codes = _replace_recovery_codes(cursor, user_id, count)
-
         conn.commit()
     except Exception:
         if conn.in_transaction:
@@ -215,6 +201,38 @@ def generate_recovery_codes(
 
     # TODO: Send notification email once email infrastructure supports recovery code events.
     return new_codes
+
+
+def generate_recovery_codes_in_transaction(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+    count: int = 10,
+    *,
+    expected_secret: str | None = None,
+) -> list[str]:
+    """Generate fresh recovery codes using the caller's open transaction."""
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("Recovery-code generation requires an open transaction.")
+
+    cursor = persistence._get_cursor()
+    cursor.execute(
+        "SELECT two_factor_secret FROM users WHERE id = ?",
+        (str(user_id),),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise KeyError(user_id)
+
+    current_secret = t.cast(str | None, row[0])
+    if not current_secret:
+        raise TwoFactorStateConflict("Two-factor authentication is not enabled.")
+    if expected_secret is not None and current_secret != expected_secret:
+        raise TwoFactorStateConflict(
+            "Two-factor authentication changed before recovery codes were generated."
+        )
+
+    return _replace_recovery_codes(cursor, user_id, count)
 
 
 def _require_verified_email_for_enrollment(cursor, user_id: uuid.UUID) -> None:
@@ -244,28 +262,16 @@ def enroll_two_factor(
         raise ValueError("Two-factor secret must not be empty.")
 
     conn = _get_connection(persistence)
-    cursor = persistence._get_cursor()
     _require_top_level_transaction(conn)
 
     try:
         conn.execute("BEGIN IMMEDIATE")
-        _require_verified_email_for_enrollment(cursor, user_id)
-        cursor.execute(
-            """
-            UPDATE users
-            SET two_factor_secret = ?
-            WHERE id = ?
-              AND (two_factor_secret IS NULL OR two_factor_secret = '')
-            """,
-            (normalized_secret, str(user_id)),
+        recovery_codes = enroll_two_factor_in_transaction(
+            persistence,
+            user_id,
+            normalized_secret,
+            count=count,
         )
-        if cursor.rowcount != 1:
-            cursor.execute("SELECT 1 FROM users WHERE id = ?", (str(user_id),))
-            if cursor.fetchone() is None:
-                raise KeyError(user_id)
-            raise TwoFactorStateConflict("Two-factor authentication is already enabled.")
-
-        recovery_codes = _replace_recovery_codes(cursor, user_id, count)
         conn.commit()
     except Exception:
         if conn.in_transaction:
@@ -274,6 +280,82 @@ def enroll_two_factor(
 
     # TODO: Send notification email once email infrastructure supports recovery code events.
     return recovery_codes
+
+
+def enroll_two_factor_in_transaction(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+    secret: str,
+    count: int = 10,
+) -> list[str]:
+    """Atomically enable MFA and create recovery codes in the caller's transaction."""
+    normalized_secret = secret.strip()
+    if not normalized_secret:
+        raise ValueError("Two-factor secret must not be empty.")
+
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("MFA enrollment requires an open transaction.")
+
+    cursor = persistence._get_cursor()
+    _require_verified_email_for_enrollment(cursor, user_id)
+    cursor.execute(
+        """
+        UPDATE users
+        SET two_factor_secret = ?
+        WHERE id = ?
+          AND (two_factor_secret IS NULL OR two_factor_secret = '')
+        """,
+        (normalized_secret, str(user_id)),
+    )
+    if cursor.rowcount != 1:
+        cursor.execute("SELECT 1 FROM users WHERE id = ?", (str(user_id),))
+        if cursor.fetchone() is None:
+            raise KeyError(user_id)
+        raise TwoFactorStateConflict("Two-factor authentication is already enabled.")
+
+    return _replace_recovery_codes(cursor, user_id, count)
+
+
+def verify_two_factor_candidate(
+    secret: str,
+    code: str | None,
+) -> TwoFactorChallengeResult:
+    """Verify a candidate enrollment secret before it is persisted."""
+    normalized_secret = secret.strip()
+    if not normalized_secret:
+        return TwoFactorChallengeResult(
+            ok=False,
+            failure=TwoFactorFailure.INVALID_CODE,
+            failure_detail="Two-factor setup has expired.",
+        )
+
+    try:
+        sanitized_code = SecuritySanitizer.sanitize_auth_code(code)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None)
+        return TwoFactorChallengeResult(
+            ok=False,
+            failure=TwoFactorFailure.INVALID_FORMAT,
+            failure_detail=str(detail) if detail else "Invalid authentication code.",
+        )
+
+    if not sanitized_code:
+        return TwoFactorChallengeResult(
+            ok=False,
+            failure=TwoFactorFailure.MISSING_CODE,
+            failure_detail="Two-factor authentication code is required.",
+        )
+
+    normalized_code = sanitized_code.replace("-", "")
+    if normalized_code.isdigit() and pyotp.TOTP(normalized_secret).verify(normalized_code):
+        return TwoFactorChallengeResult(ok=True, method=TwoFactorMethod.TOTP)
+
+    return TwoFactorChallengeResult(
+        ok=False,
+        failure=TwoFactorFailure.INVALID_CODE,
+        failure_detail="Invalid verification code.",
+    )
 
 
 def invalidate_recovery_codes(
@@ -983,36 +1065,56 @@ def disable_two_factor(
 ) -> bool:
     """Atomically disable the exact MFA factor verified by the caller."""
     conn = _get_connection(persistence)
-    cursor = persistence._get_cursor()
     _require_top_level_transaction(conn)
 
     try:
         conn.execute("BEGIN IMMEDIATE")
-        cursor.execute(
-            """
-            UPDATE users
-            SET two_factor_secret = NULL
-            WHERE id = ? AND two_factor_secret = ?
-            """,
-            (str(user_id), expected_secret),
-        )
-        if cursor.rowcount != 1:
-            cursor.execute("SELECT 1 FROM users WHERE id = ?", (str(user_id),))
-            if cursor.fetchone() is None:
-                raise KeyError(user_id)
+        if not disable_two_factor_in_transaction(
+            persistence,
+            user_id,
+            expected_secret=expected_secret,
+        ):
             conn.rollback()
             return False
-
-        cursor.execute(
-            "DELETE FROM two_factor_recovery_codes WHERE user_id = ?",
-            (str(user_id),),
-        )
         conn.commit()
         return True
     except Exception:
         if conn.in_transaction:
             conn.rollback()
         raise
+
+
+def disable_two_factor_in_transaction(
+    persistence: AuthPersistence,
+    user_id: uuid.UUID,
+    *,
+    expected_secret: str,
+) -> bool:
+    """Disable the exact MFA factor using the caller's open transaction."""
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("MFA disable requires an open transaction.")
+
+    cursor = persistence._get_cursor()
+    cursor.execute(
+        """
+        UPDATE users
+        SET two_factor_secret = NULL
+        WHERE id = ? AND two_factor_secret = ?
+        """,
+        (str(user_id), expected_secret),
+    )
+    if cursor.rowcount != 1:
+        cursor.execute("SELECT 1 FROM users WHERE id = ?", (str(user_id),))
+        if cursor.fetchone() is None:
+            raise KeyError(user_id)
+        return False
+
+    cursor.execute(
+        "DELETE FROM two_factor_recovery_codes WHERE user_id = ?",
+        (str(user_id),),
+    )
+    return True
 
 
 async def invalidate_all_sessions(

@@ -6,14 +6,24 @@ import qrcode
 import pyotp
 import rio
 
+from app.config import config
 from app.persistence import Persistence
-from app.persistence_auth import TwoFactorEmailUnverifiedError, TwoFactorStateConflict
+from app.persistence_auth import (
+    TwoFactorEmailUnverifiedError,
+    TwoFactorFailure,
+    TwoFactorStateConflict,
+    verify_two_factor_candidate,
+)
+from app.persistence_social import OAUTH_MFA_ENABLE_PURPOSE
 from app.request_context import context_from_rio_session
 from app.rate_limits import rate_limit_key, rate_limited_message, sensitive_action_policy
-from app.session_validation import require_fresh_user_session
+from app.session_validation import reject_stale_user_session, require_fresh_user_session
 from app.components.center_component import CenterComponent
 from app.components.responsive import ResponsiveComponent, WIDTH_COMFORTABLE
-from app.validation import SecuritySanitizer
+from app.mfa_oauth import (
+    navigate_to_google_mfa_reauth,
+    read_oauth_mfa_callback,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -35,6 +45,9 @@ class EnableMFA(ResponsiveComponent):
     recovery_codes: tuple[str, ...] = ()
     show_recovery_codes: bool = False
     email_unverified: bool = False
+    auth_provider: str = "password"
+    oauth_approval_token: str = ""
+    oauth_status: str = ""
 
     def _scrub_setup_state(self) -> None:
         self.password = ""
@@ -46,27 +59,85 @@ class EnableMFA(ResponsiveComponent):
         self.show_recovery_codes = False
 
     @rio.event.on_populate
-    async def on_populate(self):
+    def on_populate(self):
         fresh_session = require_fresh_user_session(self.session)
         if fresh_session is None:
             return
-        _, user = fresh_session
+        user_session, user = fresh_session
+        persistence = self.session[Persistence]
+        self.auth_provider = user.auth_provider
 
         # If the user already has a 2FA secret, redirect them
         if user.two_factor_secret:
             self._scrub_setup_state()
+            self.oauth_approval_token = ""
+            self.oauth_status = ""
             self.session.navigate_to("/app/settings", replace=True)
             return
+
+        # Capture and scrub callback values before any other gate so an
+        # approval token never stays in the URL. An error callback must not
+        # erase an approval that is already held. Rio does not re-run a
+        # synchronous population after same-route replace navigation, so this
+        # pass must fall through and finish initialization itself.
+        if user.auth_provider == "google":
+            callback = read_oauth_mfa_callback(
+                self.session,
+                purpose=OAUTH_MFA_ENABLE_PURPOSE,
+                token_parameter="enable_mfa_oauth_token",
+                error_parameter="enable_mfa_oauth_error",
+            )
+            if callback.should_scrub_url:
+                self.session.navigate_to("/app/enable-mfa", replace=True)
+                if callback.token:
+                    try:
+                        persistence.validate_oauth_reauth_approval(
+                            approval_token=callback.token,
+                            user_id=user.id,
+                            provider=user.auth_provider,
+                            purpose=OAUTH_MFA_ENABLE_PURPOSE,
+                            auth_token=user_session.id,
+                        )
+                    except (KeyError, ValueError):
+                        if not self.oauth_approval_token:
+                            self._scrub_setup_state()
+                            self.oauth_status = ""
+                        self.error_message = (
+                            "Google verification expired or your session changed. "
+                            "Verify with Google again."
+                        )
+                    else:
+                        self._scrub_setup_state()
+                        self.oauth_approval_token = callback.token
+                        self.oauth_status = (
+                            "Google identity confirmed. This approval expires in "
+                            f"{config.MFA_LIFECYCLE_APPROVAL_TTL_MINUTES} minutes."
+                        )
+                        self.error_message = ""
+                else:
+                    self.error_message = callback.error_message
+        else:
+            self.oauth_approval_token = ""
+            self.oauth_status = ""
 
         # Unverified accounts must not arm TOTP; persistence enforces the same
         # rule, this just explains it before showing a QR code.
         if not user.is_verified:
             self._scrub_setup_state()
+            self.oauth_approval_token = ""
+            self.oauth_status = ""
             self.email_unverified = True
             return
         self.email_unverified = False
 
-        # create a new 2FA secret
+        if user.auth_provider == "google" and not self.oauth_approval_token:
+            self._scrub_setup_state()
+            return
+
+        if self.temporary_two_factor_secret:
+            return
+
+        # Create a new 2FA secret only after Google reauthentication, when used.
         self._scrub_setup_state()
         self.temporary_two_factor_secret = pyotp.random_base32()
         self.error_message = ""
@@ -83,10 +154,58 @@ class EnableMFA(ResponsiveComponent):
         img.save(buffer, format="PNG")
         self.qr_code_image_bytes = buffer.getvalue()
 
-    def verify_totp(self) -> bool:
-        candidate = self.verification_code.replace("-", "")
-        totp = pyotp.TOTP(self.temporary_two_factor_secret)
-        return candidate.isdigit() and totp.verify(candidate)
+    async def _on_verify_google_pressed(self) -> None:
+        fresh_session = require_fresh_user_session(self.session)
+        if fresh_session is None:
+            return
+        user_session, user = fresh_session
+        if user.auth_provider != "google":
+            self.error_message = "This account does not use Google sign-in."
+            return
+
+        persistence = self.session[Persistence]
+        context = context_from_rio_session(
+            self.session,
+            user_id=user_session.user_id,
+        )
+        limit_key = rate_limit_key(
+            "mfa_enable",
+            context.user_id or context.session_id or context.client_ip,
+        )
+        decision = persistence.check_rate_limit(
+            policy=sensitive_action_policy("mfa_enable"),
+            key=limit_key,
+        )
+        if not decision.allowed:
+            self.error_message = rate_limited_message(
+                "Too many two-factor setup attempts.",
+                decision.retry_after_seconds,
+            )
+            return
+
+        try:
+            challenge = await persistence.create_oauth_reauth_challenge(
+                user_id=user.id,
+                provider=user.auth_provider,
+                purpose=OAUTH_MFA_ENABLE_PURPOSE,
+                auth_token=user_session.id,
+            )
+        except KeyError:
+            reject_stale_user_session(self.session)
+            return
+        except ValueError:
+            self.error_message = "Google verification is unavailable."
+            return
+
+        self._scrub_setup_state()
+        self.oauth_approval_token = ""
+        self.oauth_status = ""
+        self.error_message = ""
+        navigate_to_google_mfa_reauth(
+            self.session,
+            purpose=OAUTH_MFA_ENABLE_PURPOSE,
+            challenge=challenge,
+        )
 
     async def _on_totp_entered(self, _: rio.TextInputConfirmEvent | None = None) -> None:
         """
@@ -113,14 +232,32 @@ class EnableMFA(ResponsiveComponent):
 
         if not self.temporary_two_factor_secret:
             self._scrub_setup_state()
-            self.error_message = "Two-factor setup has expired. Please start again."
-            self.session.navigate_to("/app/settings", replace=True)
+            if user.auth_provider == "google":
+                self.oauth_approval_token = ""
+                self.oauth_status = ""
+                self.error_message = (
+                    "Two-factor setup expired. Verify with Google again."
+                )
+            else:
+                self.error_message = "Two-factor setup has expired. Please start again."
+                self.session.navigate_to("/app/settings", replace=True)
             self.force_refresh()
             return
 
-        # Validate password first
-        if not self.password:
-            self.error_message = "Please enter your password to enable 2FA."
+        if user.auth_provider == "password":
+            if not self.password:
+                self.error_message = "Please enter your password to enable 2FA."
+                self.force_refresh()
+                return
+        elif user.auth_provider == "google":
+            if not self.oauth_approval_token:
+                self._scrub_setup_state()
+                self.error_message = "Verify with Google before enabling 2FA."
+                self.force_refresh()
+                return
+        else:
+            self._scrub_setup_state()
+            self.error_message = "This account's sign-in provider is not supported."
             self.force_refresh()
             return
 
@@ -138,66 +275,90 @@ class EnableMFA(ResponsiveComponent):
             self.force_refresh()
             return
 
-        if not user.verify_password(self.password):
+        if user.auth_provider == "password" and not user.verify_password(self.password):
             self.error_message = "Invalid password. Please try again."
             self.force_refresh()
             return
 
         try:
-            sanitized_code = SecuritySanitizer.sanitize_auth_code(self.verification_code)
-        except Exception:
-            self.error_message = "Invalid verification code format."
-            self.force_refresh()
-            return
-
-        if not sanitized_code:
-            self.error_message = "Please enter your 2FA verification code."
-            self.force_refresh()
-            return
-
-        self.verification_code = sanitized_code
-
-        # Verify TOTP code
-        is_code_matching = self.verify_totp()
-        if is_code_matching:
-            try:
+            if user.auth_provider == "google":
+                recovery_codes = persistence.enroll_two_factor_after_oauth_approval(
+                    user_id=user_session.user_id,
+                    auth_token=user_session.id,
+                    oauth_approval_token=self.oauth_approval_token,
+                    candidate_secret=self.temporary_two_factor_secret,
+                    verification_code=self.verification_code,
+                )
+            else:
+                candidate_result = verify_two_factor_candidate(
+                    self.temporary_two_factor_secret,
+                    self.verification_code,
+                )
+                if not candidate_result.ok:
+                    if candidate_result.failure == TwoFactorFailure.INVALID_FORMAT:
+                        self.error_message = "Invalid verification code format."
+                    elif candidate_result.failure == TwoFactorFailure.MISSING_CODE:
+                        self.error_message = "Please enter your 2FA verification code."
+                    else:
+                        self.error_message = (
+                            "Invalid verification code. Please try again."
+                        )
+                    self.force_refresh()
+                    return
                 recovery_codes = persistence.enroll_two_factor(
                     user_session.user_id,
                     self.temporary_two_factor_secret,
                 )
-            except TwoFactorStateConflict:
-                self._scrub_setup_state()
-                self.error_message = "Two-factor authentication is already enabled."
-                self.session.navigate_to("/app/settings", replace=True)
-                self.force_refresh()
-                return
-            except TwoFactorEmailUnverifiedError:
-                self._scrub_setup_state()
-                self.email_unverified = True
-                self.force_refresh()
-                return
+        except KeyError:
+            self._scrub_setup_state()
+            self.oauth_approval_token = ""
+            self.oauth_status = ""
+            self.error_message = (
+                "Google verification expired or your session changed. "
+                "Verify with Google again."
+            )
+            self.force_refresh()
+            return
+        except ValueError as exc:
+            self.error_message = str(exc) or "Invalid verification code."
+            self.force_refresh()
+            return
+        except TwoFactorStateConflict:
+            self._scrub_setup_state()
+            self.oauth_approval_token = ""
+            self.oauth_status = ""
+            self.error_message = "Two-factor authentication is already enabled."
+            self.session.navigate_to("/app/settings", replace=True)
+            self.force_refresh()
+            return
+        except TwoFactorEmailUnverifiedError:
+            self._scrub_setup_state()
+            self.oauth_approval_token = ""
+            self.oauth_status = ""
+            self.email_unverified = True
+            self.force_refresh()
+            return
 
-            self.recovery_codes = tuple(recovery_codes)
-            self.show_recovery_codes = True
-            self.error_message = ""
-            self.password = ""
-            self.temporary_two_factor_secret = ""
-            self.verification_code = ""
-            self.qr_code_image_bytes = None
-            self.secret = None
-            try:
-                persistence.clear_rate_limit(
-                    scope=sensitive_action_policy("mfa_enable").scope,
-                    key=limit_key,
-                )
-            except Exception:
-                logger.exception(
-                    "MFA enrollment committed but its rate-limit bucket could not be cleared."
-                )
-            self.force_refresh()
-        else:
-            self.error_message = "Invalid verification code. Please try again."
-            self.force_refresh()
+        self.recovery_codes = tuple(recovery_codes)
+        self.show_recovery_codes = True
+        self.error_message = ""
+        self.password = ""
+        self.oauth_approval_token = ""
+        self.oauth_status = ""
+        self.temporary_two_factor_secret = ""
+        self.verification_code = ""
+        self.qr_code_image_bytes = None
+        self.secret = None
+        try:
+            persistence.clear_rate_limit(
+                scope=sensitive_action_policy("mfa_enable").scope,
+                key=limit_key,
+            )
+        except Exception:
+            logger.exception(
+                "MFA enrollment committed but its rate-limit bucket could not be cleared."
+            )
+        self.force_refresh()
 
     def _on_acknowledge_recovery_codes(self, _event=None) -> None:
         """Navigate back to settings after the user confirms they've stored the codes."""
@@ -273,11 +434,68 @@ class EnableMFA(ResponsiveComponent):
                 width_percent=WIDTH_COMFORTABLE,
             )
 
+        if self.auth_provider == "google" and not self.oauth_approval_token:
+            return CenterComponent(
+                rio.Card(
+                    rio.Column(
+                        rio.Text(
+                            "Enable Two-Factor Authentication",
+                            style="heading1",
+                            justify="center",
+                        ),
+                        *(
+                            [
+                                rio.Banner(
+                                    text=self.error_message,
+                                    style="danger",
+                                    margin_top=1,
+                                )
+                            ]
+                            if self.error_message
+                            else []
+                        ),
+                        rio.Text(
+                            "Verify your identity with Google before creating "
+                            "a new authenticator secret. No app password is required."
+                        ),
+                        rio.Button(
+                            "Verify with Google",
+                            on_press=self._on_verify_google_pressed,
+                            shape="rounded",
+                        ),
+                        rio.Button(
+                            "Back to Settings",
+                            on_press=self._on_back_to_settings,
+                            shape="rounded",
+                        ),
+                        spacing=1,
+                        margin=2,
+                    ),
+                    align_y=0,
+                ),
+                width_percent=WIDTH_COMFORTABLE,
+            )
+
         return CenterComponent(
             rio.Card(
                 rio.Column(
                     rio.Text("Enable Two-Factor Authentication", style="heading1", justify="center"),
-                    rio.Banner(text=self.error_message, style="danger", margin_top=1),
+                    *(
+                        [
+                            rio.Banner(
+                                text=self.error_message,
+                                style="danger",
+                                margin_top=1,
+                            )
+                        ]
+                        if self.error_message
+                        else []
+                    ),
+                    *(
+                        [rio.Banner(text=self.oauth_status, style="success")]
+                        if self.oauth_status
+                        else []
+                    ),
                     rio.Text("To enable 2FA, please scan the QR code below."),
                     *(
                         [rio.Image(
@@ -289,11 +507,17 @@ class EnableMFA(ResponsiveComponent):
                     ),
                     rio.Text("Or enter the 2FA secret manually:"),
                     rio.Text(self.temporary_two_factor_secret),
-                    rio.TextInput(
-                        text=self.bind().password,
-                        label="Enter your password",
-                        is_secret=True,
-                        on_confirm=self._on_totp_entered,
+                    *(
+                        [
+                            rio.TextInput(
+                                text=self.bind().password,
+                                label="Enter your password",
+                                is_secret=True,
+                                on_confirm=self._on_totp_entered,
+                            )
+                        ]
+                        if self.auth_provider == "password"
+                        else []
                     ),
                     rio.TextInput(
                         text=self.bind().verification_code,

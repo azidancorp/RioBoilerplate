@@ -293,6 +293,8 @@ def test_openapi_declares_exact_bearer_security_boundary(client):
         ("GET", "/auth/{provider}/login"),
         ("GET", "/auth/{provider}/delete-account"),
         ("GET", "/auth/{provider}/delete-account/callback"),
+        ("GET", "/auth/{provider}/mfa/{purpose}"),
+        ("GET", "/auth/{provider}/mfa/{purpose}/callback"),
         ("GET", "/auth/{provider}/callback"),
         ("GET", "/api/test"),
         ("POST", "/api/contact"),

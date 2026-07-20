@@ -20,10 +20,19 @@ from starlette.responses import RedirectResponse
 import app as app_module
 from app.api import oauth as oauth_module
 from app.api.auth_dependencies import get_persistence
+from app.config import config
 from app.data_models import AppUser, RecoveryCodeUsage, UserSession, UserSettings
 from app.oauth_clients import _google_registration_kwargs
 from app.pages.login import LoginPage, SocialMFAForm
 from app.persistence import Persistence
+from app.persistence_social import (
+    OAUTH_MFA_DISABLE_APPROVAL_PREFIX,
+    OAUTH_MFA_DISABLE_PURPOSE,
+    OAUTH_MFA_ENABLE_APPROVAL_PREFIX,
+    OAUTH_MFA_ENABLE_PURPOSE,
+    OAUTH_RECOVERY_CODES_APPROVAL_PREFIX,
+    OAUTH_RECOVERY_CODES_PURPOSE,
+)
 from app.rio_cookie_security import (
     browser_binding_digest,
     get_rio_cookie_security,
@@ -160,7 +169,32 @@ def _new_login_page(
     page.reset_prefilled_message_style = "success"
     page.reset_prefilled_require_two_factor = False
     page.pending_social_user_id = ""
+    page.pending_social_flow_id = ""
+    page.pending_social_binding_digest = ""
     return page
+
+
+def _new_social_mfa_form(
+    session: _FakeSession,
+    *,
+    user_id,
+    flow_id: str,
+    binding_digest: str,
+    verification_code: str,
+) -> SocialMFAForm:
+    form = object.__new__(SocialMFAForm)
+    form._session_ = session
+    form._properties_assigned_after_creation_ = set()
+    form.force_refresh = lambda: None
+    form.pending_user_id = str(user_id)
+    form.pending_flow_id = flow_id
+    form.pending_binding_digest = binding_digest
+    form.verification_code = verification_code
+    form.error_message = ""
+    form.banner_style = "success"
+    form._is_processing = False
+    form.on_toggle_form = None
+    return form
 
 
 class _FakeOAuthClient:
@@ -1235,6 +1269,9 @@ def test_pending_social_login_does_not_bypass_two_factor(temp_db: Persistence):
 
         assert page.current_form == "social_mfa"
         assert page.pending_social_user_id == str(user.id)
+        assert page.pending_social_flow_id == _TEST_FLOW_ID
+        assert page.pending_social_binding_digest == browser_binding_digest(binding)
+        assert _pending_rows(temp_db)
         assert page.session[UserSettings].auth_token == ""
         assert page.session.navigated_to is None
 
@@ -1243,6 +1280,8 @@ def test_pending_social_login_does_not_bypass_two_factor(temp_db: Persistence):
         form._properties_assigned_after_creation_ = set()
         form.force_refresh = lambda: None
         form.pending_user_id = str(user.id)
+        form.pending_flow_id = page.pending_social_flow_id
+        form.pending_binding_digest = page.pending_social_binding_digest
         form.verification_code = pyotp.TOTP(secret).now()
         form.error_message = ""
         form.banner_style = "success"
@@ -1253,20 +1292,37 @@ def test_pending_social_login_does_not_bypass_two_factor(temp_db: Persistence):
 
         assert page.session[UserSettings].auth_token
         assert page.session.navigated_to == "/app/dashboard"
+        assert _pending_rows(temp_db) == []
 
     asyncio.run(scenario())
 
 
 def test_social_mfa_records_recovery_code_usage(temp_db: Persistence):
     async def scenario():
+        security = get_rio_cookie_security(app_module.fastapi_app)
+        assert security is not None
         user = await _create_social_user(temp_db, "social-recovery@example.com")
         temp_db.set_2fa_secret(user.id, pyotp.random_base32())
         code = temp_db.generate_recovery_codes(user.id, count=1)[0]
+        binding = security.new_browser_binding()
+        binding_digest = browser_binding_digest(binding)
+        await temp_db.create_oauth_pending_login(
+            binding_digest=binding_digest,
+            flow_id=_TEST_FLOW_ID,
+            user_id=user.id,
+            provider="google",
+        )
         form = object.__new__(SocialMFAForm)
-        form._session_ = _FakeSession(temp_db, {})
+        form._session_ = _FakeSession(
+            temp_db,
+            {},
+            http_headers=_browser_binding_headers(binding),
+        )
         form._properties_assigned_after_creation_ = set()
         form.force_refresh = lambda: None
         form.pending_user_id = str(user.id)
+        form.pending_flow_id = _TEST_FLOW_ID
+        form.pending_binding_digest = binding_digest
         form.verification_code = code
         form.error_message = ""
         form.banner_style = "success"
@@ -1279,6 +1335,344 @@ def test_social_mfa_records_recovery_code_usage(temp_db: Persistence):
         assert form.session.navigated_to == "/app/dashboard"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("use_wrong_binding", [False, True])
+def test_social_mfa_rejects_missing_or_wrong_browser_binding(
+    temp_db: Persistence,
+    use_wrong_binding: bool,
+):
+    async def scenario():
+        security = get_rio_cookie_security(app_module.fastapi_app)
+        assert security is not None
+        user = await _create_social_user(temp_db, "social-wrong-browser@example.com")
+        secret = pyotp.random_base32()
+        temp_db.set_2fa_secret(user.id, secret)
+        original_binding = security.new_browser_binding()
+        other_binding = security.new_browser_binding()
+        binding_digest = browser_binding_digest(original_binding)
+        await temp_db.create_oauth_pending_login(
+            binding_digest=binding_digest,
+            flow_id=_TEST_FLOW_ID,
+            user_id=user.id,
+            provider="google",
+        )
+        form = _new_social_mfa_form(
+            _FakeSession(
+                temp_db,
+                {},
+                http_headers=(
+                    _browser_binding_headers(other_binding)
+                    if use_wrong_binding
+                    else Headers()
+                ),
+            ),
+            user_id=user.id,
+            flow_id=_TEST_FLOW_ID,
+            binding_digest=binding_digest,
+            verification_code=pyotp.TOTP(secret).now(),
+        )
+
+        await SocialMFAForm.complete_login(form)
+
+        assert form.error_message == "Google sign-in expired. Please try again."
+        assert form.session[UserSettings].auth_token == ""
+        assert temp_db.conn.execute(
+            "SELECT COUNT(*) FROM oauth_pending_logins WHERE binding_digest = ?",
+            (binding_digest,),
+        ).fetchone()[0] == 1
+        assert temp_db.conn.execute(
+            "SELECT COUNT(*) FROM user_sessions WHERE user_id = ?",
+            (str(user.id),),
+        ).fetchone()[0] == 0
+
+    asyncio.run(scenario())
+
+
+def test_social_mfa_failure_and_refresh_preserve_original_pending_expiry(
+    temp_db: Persistence,
+):
+    async def scenario():
+        security = get_rio_cookie_security(app_module.fastapi_app)
+        assert security is not None
+        user = await _create_social_user(temp_db, "social-mfa-retry@example.com")
+        secret = pyotp.random_base32()
+        temp_db.set_2fa_secret(user.id, secret)
+        binding = security.new_browser_binding()
+        binding_digest = browser_binding_digest(binding)
+        await temp_db.create_oauth_pending_login(
+            binding_digest=binding_digest,
+            flow_id=_TEST_FLOW_ID,
+            user_id=user.id,
+            provider="google",
+        )
+        original_expiry = temp_db.conn.execute(
+            "SELECT valid_until FROM oauth_pending_logins WHERE binding_digest = ?",
+            (binding_digest,),
+        ).fetchone()[0]
+
+        page = _new_login_page(
+            temp_db,
+            {"social_login": _TEST_FLOW_ID},
+            browser_binding=binding,
+        )
+        await LoginPage.on_populate(page)
+        await LoginPage.on_populate(page)
+        assert page.current_form == "social_mfa"
+
+        valid_code = pyotp.TOTP(secret).now()
+        invalid_code = f"{(int(valid_code) + 1) % 1_000_000:06d}"
+        form = _new_social_mfa_form(
+            page.session,
+            user_id=user.id,
+            flow_id=_TEST_FLOW_ID,
+            binding_digest=binding_digest,
+            verification_code=invalid_code,
+        )
+        await SocialMFAForm.complete_login(form)
+
+        retained_expiry = temp_db.conn.execute(
+            "SELECT valid_until FROM oauth_pending_logins WHERE binding_digest = ?",
+            (binding_digest,),
+        ).fetchone()[0]
+        assert retained_expiry == original_expiry
+        assert page.session[UserSettings].auth_token == ""
+
+        form.verification_code = valid_code
+        await SocialMFAForm.complete_login(form)
+        assert page.session[UserSettings].auth_token
+        assert temp_db.conn.execute(
+            "SELECT COUNT(*) FROM oauth_pending_logins WHERE binding_digest = ?",
+            (binding_digest,),
+        ).fetchone()[0] == 0
+        session_count = temp_db.conn.execute(
+            "SELECT COUNT(*) FROM user_sessions WHERE user_id = ?",
+            (str(user.id),),
+        ).fetchone()[0]
+        assert session_count == 1
+
+        await SocialMFAForm.complete_login(form)
+        assert temp_db.conn.execute(
+            "SELECT COUNT(*) FROM user_sessions WHERE user_id = ?",
+            (str(user.id),),
+        ).fetchone()[0] == 1
+
+    asyncio.run(scenario())
+
+
+def test_social_mfa_rate_limit_blocks_later_valid_code(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario():
+        monkeypatch.setattr(config, "RATE_LIMIT_MFA_ATTEMPTS", 2)
+        security = get_rio_cookie_security(app_module.fastapi_app)
+        assert security is not None
+        user = await _create_social_user(temp_db, "social-mfa-limit@example.com")
+        secret = pyotp.random_base32()
+        temp_db.set_2fa_secret(user.id, secret)
+        binding = security.new_browser_binding()
+        binding_digest = browser_binding_digest(binding)
+        await temp_db.create_oauth_pending_login(
+            binding_digest=binding_digest,
+            flow_id=_TEST_FLOW_ID,
+            user_id=user.id,
+            provider="google",
+        )
+        valid_code = pyotp.TOTP(secret).now()
+        invalid_code = f"{(int(valid_code) + 1) % 1_000_000:06d}"
+        form = _new_social_mfa_form(
+            _FakeSession(
+                temp_db,
+                {},
+                http_headers=_browser_binding_headers(binding),
+            ),
+            user_id=user.id,
+            flow_id=_TEST_FLOW_ID,
+            binding_digest=binding_digest,
+            verification_code=invalid_code,
+        )
+
+        await SocialMFAForm.complete_login(form)
+        await SocialMFAForm.complete_login(form)
+        form.verification_code = valid_code
+        await SocialMFAForm.complete_login(form)
+
+        assert "Too many two-factor attempts" in form.error_message
+        assert form.session[UserSettings].auth_token == ""
+        assert temp_db.conn.execute(
+            "SELECT COUNT(*) FROM oauth_pending_logins WHERE binding_digest = ?",
+            (binding_digest,),
+        ).fetchone()[0] == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("purpose", "page_path", "token_parameter", "approval_prefix"),
+    [
+        (
+            OAUTH_MFA_ENABLE_PURPOSE,
+            "/app/enable-mfa",
+            "enable_mfa_oauth_token",
+            OAUTH_MFA_ENABLE_APPROVAL_PREFIX,
+        ),
+        (
+            OAUTH_MFA_DISABLE_PURPOSE,
+            "/app/disable-mfa",
+            "disable_mfa_oauth_token",
+            OAUTH_MFA_DISABLE_APPROVAL_PREFIX,
+        ),
+        (
+            OAUTH_RECOVERY_CODES_PURPOSE,
+            "/app/recovery-codes",
+            "recovery_codes_oauth_token",
+            OAUTH_RECOVERY_CODES_APPROVAL_PREFIX,
+        ),
+    ],
+)
+def test_google_mfa_reauth_is_recent_and_returns_to_fixed_page(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_db: Persistence,
+    purpose: str,
+    page_path: str,
+    token_parameter: str,
+    approval_prefix: str,
+):
+    provider_user_id = f"{purpose}-sub"
+
+    async def setup():
+        user = await _create_social_user(
+            temp_db,
+            f"{purpose}@example.com",
+            provider_user_id=provider_user_id,
+        )
+        user_session = await temp_db.create_session(user.id)
+        challenge = await temp_db.create_oauth_reauth_challenge(
+            user_id=user.id,
+            provider="google",
+            purpose=purpose,
+            auth_token=user_session.id,
+        )
+        return challenge
+
+    challenge = asyncio.run(setup())
+    fake_client = _FakeOAuthClient(
+        {
+            "sub": provider_user_id,
+            "auth_time": time.time(),
+        }
+    )
+    monkeypatch.setattr(oauth_module, "get_oauth_client", lambda provider: fake_client)
+    _patch_app_persistence(monkeypatch, temp_db)
+
+    with TestClient(app_module.fastapi_app, raise_server_exceptions=False) as client:
+        start = client.get(
+            f"/auth/google/mfa/{purpose}",
+            params={"mfa_challenge": challenge},
+            follow_redirects=False,
+        )
+        callback = client.get(
+            f"/auth/google/mfa/{purpose}/callback",
+            follow_redirects=False,
+        )
+
+    assert start.status_code == 302
+    assert fake_client.redirect_kwargs["prompt"] == "select_account"
+    assert fake_client.redirect_kwargs["max_age"] == 0
+    assert json.loads(fake_client.redirect_kwargs["claims"])["id_token"][
+        "auth_time"
+    ]["essential"] is True
+    assert str(fake_client.redirect_uri).endswith(
+        f"/auth/google/mfa/{purpose}/callback"
+    )
+
+    parsed = urlparse(callback.headers["location"])
+    assert parsed.path == page_path
+    query = parse_qs(parsed.query)
+    approval = query[token_parameter][0]
+    assert approval.startswith(approval_prefix)
+    created_at, valid_until = temp_db.conn.execute(
+        """
+        SELECT created_at, valid_until
+        FROM oauth_login_handoffs
+        WHERE token_hash = ?
+        """,
+        (temp_db._hash_one_time_token(approval),),
+    ).fetchone()
+    assert valid_until - created_at == pytest.approx(
+        config.MFA_LIFECYCLE_APPROVAL_TTL_MINUTES * 60,
+        abs=1,
+    )
+
+
+def test_google_mfa_reauth_rejects_stale_or_wrong_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_db: Persistence,
+):
+    async def setup():
+        user = await _create_social_user(
+            temp_db,
+            "reject-mfa-google@example.com",
+            provider_user_id="expected-mfa-sub",
+        )
+        user_session = await temp_db.create_session(user.id)
+        challenge = await temp_db.create_oauth_reauth_challenge(
+            user_id=user.id,
+            provider="google",
+            purpose=OAUTH_MFA_ENABLE_PURPOSE,
+            auth_token=user_session.id,
+        )
+        return challenge
+
+    challenge = asyncio.run(setup())
+    fake_client = _FakeOAuthClient(
+        {
+            "sub": "expected-mfa-sub",
+            "auth_time": time.time() - 3600,
+        }
+    )
+    monkeypatch.setattr(oauth_module, "get_oauth_client", lambda provider: fake_client)
+    _patch_app_persistence(monkeypatch, temp_db)
+    path = f"/auth/google/mfa/{OAUTH_MFA_ENABLE_PURPOSE}"
+
+    with TestClient(app_module.fastapi_app, raise_server_exceptions=False) as client:
+        missing_start = client.get(f"{path}/callback", follow_redirects=False)
+        client.get(
+            path,
+            params={"mfa_challenge": challenge},
+            follow_redirects=False,
+        )
+        stale = client.get(f"{path}/callback", follow_redirects=False)
+
+        fake_client.userinfo = {
+            "sub": "different-mfa-sub",
+            "auth_time": time.time(),
+        }
+        client.get(
+            path,
+            params={"mfa_challenge": challenge},
+            follow_redirects=False,
+        )
+        wrong_identity = client.get(f"{path}/callback", follow_redirects=False)
+        unsupported = client.get(
+            "/auth/google/mfa/not-allowed",
+            params={"mfa_challenge": challenge},
+            follow_redirects=False,
+        )
+
+    assert _redirect_query(missing_start)["enable_mfa_oauth_error"] == [
+        "invalid_challenge"
+    ]
+    assert _redirect_query(stale)["enable_mfa_oauth_error"] == ["reauth_stale"]
+    assert _redirect_query(wrong_identity)["enable_mfa_oauth_error"] == [
+        "identity_mismatch"
+    ]
+    assert unsupported.status_code == 404
+    assert temp_db.conn.execute(
+        "SELECT COUNT(*) FROM oauth_login_handoffs WHERE token_hash = ?",
+        (temp_db._hash_one_time_token(challenge),),
+    ).fetchone()[0] == 1
 
 
 def test_google_account_deletion_reauth_is_recent_and_session_bound(

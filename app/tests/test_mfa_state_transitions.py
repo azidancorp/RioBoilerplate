@@ -16,6 +16,12 @@ from app.pages.app_page.disable_mfa import DisableMFA
 from app.pages.app_page.enable_mfa import EnableMFA
 from app.pages.app_page.recovery_codes import ManageRecoveryCodes
 from app.persistence import Persistence, TwoFactorStateConflict
+from app.persistence_social import (
+    OAUTH_MFA_DISABLE_PURPOSE,
+    OAUTH_MFA_ENABLE_PURPOSE,
+    OAUTH_RECOVERY_CODES_PURPOSE,
+    oauth_reauth_approval_prefix,
+)
 
 
 PASSWORD = "VeryStrongPass!9"
@@ -35,12 +41,19 @@ class _FakeEvent:
         pass
 
 
+class _FakeUrl:
+    def __init__(self, query: dict[str, str] | None = None) -> None:
+        self.query = query or {}
+
+
 class _FakeSession:
     def __init__(
         self,
         persistence: Persistence,
         user_session: UserSession,
         user: AppUser,
+        *,
+        query: dict[str, str] | None = None,
     ) -> None:
         self._attachments = {
             Persistence: persistence,
@@ -52,6 +65,7 @@ class _FakeSession:
         self.user_agent = "pytest"
         self.http_headers: dict[str, str] = {}
         self.running_as_website = True
+        self.active_page_url = _FakeUrl(query)
         self.navigation_target: str | None = None
         self.navigation_replace = False
         self._changed_attributes = defaultdict(set)
@@ -100,6 +114,41 @@ async def _create_user_with_session(
     return user, user_session
 
 
+async def _create_google_user_with_session(
+    persistence: Persistence,
+    email: str,
+) -> tuple[AppUser, UserSession]:
+    user = AppUser.create_social_user(
+        email=email,
+        provider="google",
+        provider_user_id=f"sub-{email}",
+        is_verified=True,
+    )
+    await persistence._create_user_unchecked(user)
+    user = await persistence.get_user_by_id(user.id)
+    return user, await persistence.create_session(user.id)
+
+
+async def _create_google_approval(
+    persistence: Persistence,
+    user: AppUser,
+    user_session: UserSession,
+    purpose: str,
+) -> str:
+    challenge = await persistence.create_oauth_reauth_challenge(
+        user_id=user.id,
+        provider="google",
+        purpose=purpose,
+        auth_token=user_session.id,
+    )
+    return await persistence.exchange_oauth_reauth_challenge(
+        challenge_token=challenge,
+        provider="google",
+        purpose=purpose,
+        provider_user_id=str(user.auth_provider_id),
+    )
+
+
 def _mount_enable_mfa(session: _FakeSession, **attributes) -> EnableMFA:
     component = object.__new__(EnableMFA)
     component._session_ = session
@@ -114,6 +163,9 @@ def _mount_enable_mfa(session: _FakeSession, **attributes) -> EnableMFA:
     component.recovery_codes = ()
     component.show_recovery_codes = False
     component.email_unverified = False
+    component.auth_provider = "password"
+    component.oauth_approval_token = ""
+    component.oauth_status = ""
     for key, value in attributes.items():
         setattr(component, key, value)
     return component
@@ -136,6 +188,9 @@ def _mount_recovery_codes(
     component.recovery_codes_total = 0
     component.recovery_codes_remaining = 0
     component.last_generated_label = "Never generated"
+    component.auth_provider = "password"
+    component.oauth_approval_token = ""
+    component.oauth_status = ""
     for key, value in attributes.items():
         setattr(component, key, value)
     return component
@@ -150,6 +205,9 @@ def _mount_disable_mfa(session: _FakeSession, **attributes) -> DisableMFA:
     component.verification_code = ""
     component.error_message = ""
     component.two_factor_enabled = True
+    component.auth_provider = "password"
+    component.oauth_approval_token = ""
+    component.oauth_status = ""
     for key, value in attributes.items():
         setattr(component, key, value)
     return component
@@ -196,6 +254,226 @@ def _stable_totp_now(secret: str, *, min_seconds_remaining: float = 2.0) -> str:
         time.sleep(remaining + 0.05)
 
 
+def test_google_enrollment_reauths_before_generating_secret_and_completes(
+    temp_db: Persistence,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def scenario() -> None:
+        user, user_session = await _create_google_user_with_session(
+            temp_db,
+            "google-page-enroll@example.com",
+        )
+        session = _FakeSession(temp_db, user_session, user)
+        page = _mount_enable_mfa(session)
+
+        EnableMFA.on_populate(page)
+        assert page.auth_provider == "google"
+        assert page.temporary_two_factor_secret == ""
+
+        captured: dict[str, str] = {}
+
+        def capture_reauth(_session, *, purpose: str, challenge: str) -> None:
+            captured["purpose"] = purpose
+            captured["challenge"] = challenge
+
+        monkeypatch.setattr(
+            enable_mfa_page,
+            "navigate_to_google_mfa_reauth",
+            capture_reauth,
+        )
+        await EnableMFA._on_verify_google_pressed(page)
+        assert captured["purpose"] == OAUTH_MFA_ENABLE_PURPOSE
+        assert page.temporary_two_factor_secret == ""
+
+        approval = await temp_db.exchange_oauth_reauth_challenge(
+            challenge_token=captured["challenge"],
+            provider="google",
+            purpose=OAUTH_MFA_ENABLE_PURPOSE,
+            provider_user_id=str(user.auth_provider_id),
+        )
+        session.active_page_url.query = {
+            "enable_mfa_oauth_token": approval,
+        }
+        EnableMFA.on_populate(page)
+        assert session.navigation_target == "/app/enable-mfa"
+        assert session.navigation_replace is True
+        assert page.oauth_approval_token == approval
+        # Rio does not re-run a synchronous population after the same-route
+        # scrub, so the same pass must already have generated the candidate
+        # secret and QR code.
+        assert page.temporary_two_factor_secret
+        assert page.qr_code_image_bytes
+        page.verification_code = _stable_totp_now(
+            page.temporary_two_factor_secret,
+        )
+        await EnableMFA._on_totp_entered(page)
+
+        assert page.password == ""
+        assert page.show_recovery_codes is True
+        assert len(page.recovery_codes) == 10
+        assert (await temp_db.get_user_by_id(user.id)).two_factor_enabled
+
+    asyncio.run(scenario())
+
+
+def test_expired_google_enrollment_approval_clears_candidate_state(
+    temp_db: Persistence,
+):
+    async def scenario() -> None:
+        user, user_session = await _create_google_user_with_session(
+            temp_db,
+            "google-page-expired@example.com",
+        )
+        approval = await _create_google_approval(
+            temp_db,
+            user,
+            user_session,
+            OAUTH_MFA_ENABLE_PURPOSE,
+        )
+        session = _FakeSession(
+            temp_db,
+            user_session,
+            user,
+            query={"enable_mfa_oauth_token": approval},
+        )
+        page = _mount_enable_mfa(session)
+        EnableMFA.on_populate(page)
+        page.verification_code = _stable_totp_now(
+            page.temporary_two_factor_secret,
+        )
+        temp_db.conn.execute(
+            "UPDATE oauth_login_handoffs SET valid_until = 0 WHERE token_hash = ?",
+            (temp_db._hash_one_time_token(approval),),
+        )
+        temp_db.conn.commit()
+
+        await EnableMFA._on_totp_entered(page)
+
+        assert page.oauth_approval_token == ""
+        assert page.temporary_two_factor_secret == ""
+        assert page.qr_code_image_bytes is None
+        assert page.verification_code == ""
+        assert "Verify with Google again" in page.error_message
+        assert not (await temp_db.get_user_by_id(user.id)).two_factor_enabled
+
+    asyncio.run(scenario())
+
+
+def test_google_pages_disable_mfa_and_regenerate_recovery_codes_without_password(
+    temp_db: Persistence,
+):
+    async def scenario() -> None:
+        user, user_session = await _create_google_user_with_session(
+            temp_db,
+            "google-page-manage@example.com",
+        )
+        secret = pyotp.random_base32()
+        old_codes = temp_db.enroll_two_factor(user.id, secret, count=1)
+
+        recovery_approval = await _create_google_approval(
+            temp_db,
+            user,
+            user_session,
+            OAUTH_RECOVERY_CODES_PURPOSE,
+        )
+        recovery_session = _FakeSession(
+            temp_db,
+            user_session,
+            await temp_db.get_user_by_id(user.id),
+            query={"recovery_codes_oauth_token": recovery_approval},
+        )
+        recovery_page = _mount_recovery_codes(recovery_session)
+        ManageRecoveryCodes.on_populate(recovery_page)
+        assert recovery_page.recovery_codes_total == 1
+        recovery_page.verification_code = _stable_totp_now(secret)
+        await ManageRecoveryCodes._on_generate_pressed(recovery_page)
+
+        assert recovery_page.password == ""
+        assert recovery_page.show_recovery_codes is True
+        assert len(recovery_page.recovery_codes) == 10
+        assert old_codes[0] not in recovery_page.recovery_codes
+
+        disable_approval = await _create_google_approval(
+            temp_db,
+            user,
+            user_session,
+            OAUTH_MFA_DISABLE_PURPOSE,
+        )
+        disable_session = _FakeSession(
+            temp_db,
+            user_session,
+            await temp_db.get_user_by_id(user.id),
+            query={"disable_mfa_oauth_token": disable_approval},
+        )
+        disable_page = _mount_disable_mfa(disable_session)
+        DisableMFA.on_populate(disable_page)
+        disable_page.verification_code = _stable_totp_now(secret)
+        await DisableMFA._on_totp_entered(disable_page)
+
+        assert disable_page.password == ""
+        assert disable_session.navigation_target == "/app/settings"
+        assert not (await temp_db.get_user_by_id(user.id)).two_factor_enabled
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("page_kind", "purpose", "query_parameter", "clean_path"),
+    [
+        (
+            "disable",
+            OAUTH_MFA_DISABLE_PURPOSE,
+            "disable_mfa_oauth_token",
+            "/app/disable-mfa",
+        ),
+        (
+            "recovery",
+            OAUTH_RECOVERY_CODES_PURPOSE,
+            "recovery_codes_oauth_token",
+            "/app/recovery-codes",
+        ),
+    ],
+)
+def test_google_management_pages_reject_forged_approval_callbacks(
+    temp_db: Persistence,
+    page_kind: str,
+    purpose: str,
+    query_parameter: str,
+    clean_path: str,
+):
+    async def scenario() -> None:
+        user, user_session = await _create_google_user_with_session(
+            temp_db,
+            f"google-forged-{page_kind}@example.com",
+        )
+        temp_db.enroll_two_factor(user.id, pyotp.random_base32(), count=1)
+        user = await temp_db.get_user_by_id(user.id)
+        forged = oauth_reauth_approval_prefix(purpose) + "A" * 64
+        session = _FakeSession(
+            temp_db,
+            user_session,
+            user,
+            query={query_parameter: forged},
+        )
+
+        if page_kind == "disable":
+            page = _mount_disable_mfa(session)
+            DisableMFA.on_populate(page)
+        else:
+            page = _mount_recovery_codes(session)
+            ManageRecoveryCodes.on_populate(page)
+
+        assert session.navigation_target == clean_path
+        assert session.navigation_replace is True
+        assert page.oauth_approval_token == ""
+        assert page.oauth_status == ""
+        assert page.password == ""
+        assert page.verification_code == ""
+        assert "Verify with Google again" in page.error_message
+
+    asyncio.run(scenario())
+
+
 def test_enrolled_on_populate_redirects_without_generating_setup_state(
     temp_db: Persistence,
     monkeypatch: pytest.MonkeyPatch,
@@ -216,7 +494,7 @@ def test_enrolled_on_populate_redirects_without_generating_setup_state(
         monkeypatch.setattr(enable_mfa_page.pyotp, "random_base32", fail_if_called)
         monkeypatch.setattr(enable_mfa_page.qrcode, "make", fail_if_called)
 
-        await EnableMFA.on_populate(page)
+        EnableMFA.on_populate(page)
 
         assert session.navigation_target == "/app/settings"
         assert session.navigation_replace is True
@@ -242,8 +520,8 @@ def test_stale_second_enrollment_is_denied_and_first_factor_remains_intact(
         second_page = _mount_enable_mfa(second_session)
 
         # Both pages are staged while MFA is disabled, just like two browser tabs.
-        await EnableMFA.on_populate(first_page)
-        await EnableMFA.on_populate(second_page)
+        EnableMFA.on_populate(first_page)
+        EnableMFA.on_populate(second_page)
         first_secret = first_page.temporary_two_factor_secret
         second_secret = second_page.temporary_two_factor_secret
         assert first_secret
@@ -292,7 +570,7 @@ def test_duplicate_enrollment_submission_preserves_displayed_recovery_codes(
         )
         session = _FakeSession(temp_db, user_session, user)
         page = _mount_enable_mfa(session)
-        await EnableMFA.on_populate(page)
+        EnableMFA.on_populate(page)
 
         secret = page.temporary_two_factor_secret
         page.password = PASSWORD
@@ -897,7 +1175,7 @@ def test_unverified_email_on_populate_shows_gate_without_setup_state(
         monkeypatch.setattr(enable_mfa_page.pyotp, "random_base32", fail_if_called)
         monkeypatch.setattr(enable_mfa_page.qrcode, "make", fail_if_called)
 
-        await EnableMFA.on_populate(page)
+        EnableMFA.on_populate(page)
 
         assert page.email_unverified is True
         assert page.temporary_two_factor_secret == ""
@@ -917,7 +1195,7 @@ def test_enrollment_submit_blocked_when_verification_revoked_mid_setup(
         )
         session = _FakeSession(temp_db, user_session, user)
         page = _mount_enable_mfa(session)
-        await EnableMFA.on_populate(page)
+        EnableMFA.on_populate(page)
         secret = page.temporary_two_factor_secret
         assert secret
 

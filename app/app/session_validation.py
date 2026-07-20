@@ -99,7 +99,7 @@ async def verify_step_up_credentials(
         # No password leg available and no 2FA to fall back on.
         return StepUpResult(
             ok=False,
-            error_message="Set up a password or 2FA to perform this action.",
+            error_message="Set up 2FA to perform this action.",
         )
 
     used_recovery_code = False

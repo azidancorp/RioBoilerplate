@@ -35,9 +35,36 @@ class SocialPersistence(Protocol):
 
 OAUTH_DELETE_CHALLENGE_PREFIX = "DELETE-START-"
 OAUTH_DELETE_APPROVAL_PREFIX = "DELETE-APPROVE-"
-_OAUTH_DELETE_PROVIDER_MARKER = ":delete-account:"
+OAUTH_MFA_ENABLE_CHALLENGE_PREFIX = "MFA-ENABLE-START-"
+OAUTH_MFA_ENABLE_APPROVAL_PREFIX = "MFA-ENABLE-APPROVE-"
+OAUTH_MFA_DISABLE_CHALLENGE_PREFIX = "MFA-DISABLE-START-"
+OAUTH_MFA_DISABLE_APPROVAL_PREFIX = "MFA-DISABLE-APPROVE-"
+OAUTH_RECOVERY_CODES_CHALLENGE_PREFIX = "RECOVERY-CODES-START-"
+OAUTH_RECOVERY_CODES_APPROVAL_PREFIX = "RECOVERY-CODES-APPROVE-"
+OAUTH_ACCOUNT_DELETE_PURPOSE = "delete-account"
+OAUTH_MFA_ENABLE_PURPOSE = "mfa-enable"
+OAUTH_MFA_DISABLE_PURPOSE = "mfa-disable"
+OAUTH_RECOVERY_CODES_PURPOSE = "recovery-codes-regenerate"
 _BINDING_DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _FLOW_ID_PATTERN = re.compile(r"[0-9a-f]{32}\Z")
+_OAUTH_REAUTH_TOKEN_PREFIXES = {
+    OAUTH_ACCOUNT_DELETE_PURPOSE: (
+        OAUTH_DELETE_CHALLENGE_PREFIX,
+        OAUTH_DELETE_APPROVAL_PREFIX,
+    ),
+    OAUTH_MFA_ENABLE_PURPOSE: (
+        OAUTH_MFA_ENABLE_CHALLENGE_PREFIX,
+        OAUTH_MFA_ENABLE_APPROVAL_PREFIX,
+    ),
+    OAUTH_MFA_DISABLE_PURPOSE: (
+        OAUTH_MFA_DISABLE_CHALLENGE_PREFIX,
+        OAUTH_MFA_DISABLE_APPROVAL_PREFIX,
+    ),
+    OAUTH_RECOVERY_CODES_PURPOSE: (
+        OAUTH_RECOVERY_CODES_CHALLENGE_PREFIX,
+        OAUTH_RECOVERY_CODES_APPROVAL_PREFIX,
+    ),
+}
 
 
 def _get_connection(persistence: SocialPersistence) -> sqlite3.Connection:
@@ -87,15 +114,38 @@ def _new_handoff_token(*, prefix: str = "") -> str:
     return f"{prefix}{secrets.token_hex(32).upper()}"
 
 
-def _oauth_deletion_provider_value(provider: str, auth_token: str) -> str:
+def _require_oauth_reauth_purpose(purpose: str) -> str:
+    purpose = str(purpose).strip()
+    if purpose not in _OAUTH_REAUTH_TOKEN_PREFIXES:
+        raise KeyError("Unsupported OAuth reauthentication purpose.")
+    return purpose
+
+
+def oauth_reauth_challenge_prefix(purpose: str) -> str:
+    purpose = _require_oauth_reauth_purpose(purpose)
+    return _OAUTH_REAUTH_TOKEN_PREFIXES[purpose][0]
+
+
+def oauth_reauth_approval_prefix(purpose: str) -> str:
+    purpose = _require_oauth_reauth_purpose(purpose)
+    return _OAUTH_REAUTH_TOKEN_PREFIXES[purpose][1]
+
+
+def _oauth_reauth_provider_value(provider: str, purpose: str, auth_token: str) -> str:
+    purpose = _require_oauth_reauth_purpose(purpose)
     return (
-        f"{provider}{_OAUTH_DELETE_PROVIDER_MARKER}"
+        f"{provider}:{purpose}:"
         f"{_hash_one_time_token(auth_token)}"
     )
 
 
-def _oauth_deletion_session_hash(stored_provider: str, provider: str) -> str:
-    prefix = f"{provider}{_OAUTH_DELETE_PROVIDER_MARKER}"
+def _oauth_reauth_session_hash(
+    stored_provider: str,
+    provider: str,
+    purpose: str,
+) -> str:
+    purpose = _require_oauth_reauth_purpose(purpose)
+    prefix = f"{provider}:{purpose}:"
     if not stored_provider.startswith(prefix):
         raise KeyError("OAuth handoff has the wrong purpose.")
     session_hash = stored_provider[len(prefix):]
@@ -215,16 +265,18 @@ async def create_oauth_pending_login(
         raise
 
 
-async def create_oauth_account_deletion_challenge(
+async def create_oauth_reauth_challenge(
     persistence: SocialPersistence,
     *,
     user_id: uuid.UUID,
     provider: str,
+    purpose: str,
     auth_token: str,
     ttl_minutes: int | None = None,
 ) -> str:
     """Create a one-time, session-bound challenge before provider reauth."""
     provider = _normalize_provider(provider)
+    purpose = _require_oauth_reauth_purpose(purpose)
     if not auth_token:
         raise KeyError("A live session is required.")
 
@@ -237,12 +289,13 @@ async def create_oauth_account_deletion_challenge(
     if ttl <= 0:
         raise ValueError("OAuth handoff lifetime must be positive.")
 
-    token = _new_handoff_token(prefix=OAUTH_DELETE_CHALLENGE_PREFIX)
-    stored_provider = _oauth_deletion_provider_value(provider, auth_token)
+    challenge_prefix, _ = _OAUTH_REAUTH_TOKEN_PREFIXES[purpose]
+    token = _new_handoff_token(prefix=challenge_prefix)
+    stored_provider = _oauth_reauth_provider_value(provider, purpose, auth_token)
     conn = _get_connection(persistence)
     _require_top_level_transaction(
         conn,
-        operation="OAuth account-deletion challenge creation",
+        operation="OAuth reauthentication challenge creation",
     )
     cursor = persistence._get_cursor()
 
@@ -285,36 +338,62 @@ async def create_oauth_account_deletion_challenge(
     return token
 
 
-async def exchange_oauth_account_deletion_challenge(
+async def create_oauth_account_deletion_challenge(
+    persistence: SocialPersistence,
+    *,
+    user_id: uuid.UUID,
+    provider: str,
+    auth_token: str,
+    ttl_minutes: int | None = None,
+) -> str:
+    return await create_oauth_reauth_challenge(
+        persistence,
+        user_id=user_id,
+        provider=provider,
+        purpose=OAUTH_ACCOUNT_DELETE_PURPOSE,
+        auth_token=auth_token,
+        ttl_minutes=ttl_minutes,
+    )
+
+
+async def exchange_oauth_reauth_challenge(
     persistence: SocialPersistence,
     *,
     challenge_token: str,
     provider: str,
+    purpose: str,
     provider_user_id: str,
     ttl_minutes: int | None = None,
 ) -> str:
-    """Exchange fresh matching provider auth for a deletion-only approval."""
+    """Exchange fresh matching provider auth for a purpose-bound approval."""
     provider = _normalize_provider(provider)
+    purpose = _require_oauth_reauth_purpose(purpose)
     provider_user_id = str(provider_user_id).strip()
-    if not challenge_token.startswith(OAUTH_DELETE_CHALLENGE_PREFIX):
-        raise KeyError("OAuth account-deletion challenge is invalid.")
+    challenge_prefix, approval_prefix = _OAUTH_REAUTH_TOKEN_PREFIXES[purpose]
+    if not challenge_token.startswith(challenge_prefix):
+        raise KeyError("OAuth reauthentication challenge is invalid.")
     if not provider_user_id:
         raise KeyError("Provider identity is missing.")
 
     now = datetime.now(timezone.utc)
-    ttl = (
+    default_ttl = (
         config.OAUTH_HANDOFF_TTL_MINUTES
+        if purpose == OAUTH_ACCOUNT_DELETE_PURPOSE
+        else config.MFA_LIFECYCLE_APPROVAL_TTL_MINUTES
+    )
+    ttl = (
+        default_ttl
         if ttl_minutes is None
         else ttl_minutes
     )
     if ttl <= 0:
         raise ValueError("OAuth handoff lifetime must be positive.")
 
-    approval_token = _new_handoff_token(prefix=OAUTH_DELETE_APPROVAL_PREFIX)
+    approval_token = _new_handoff_token(prefix=approval_prefix)
     conn = _get_connection(persistence)
     _require_top_level_transaction(
         conn,
-        operation="OAuth account-deletion challenge exchange",
+        operation="OAuth reauthentication challenge exchange",
     )
     cursor = persistence._get_cursor()
 
@@ -331,16 +410,16 @@ async def exchange_oauth_account_deletion_challenge(
         )
         row = cursor.fetchone()
         if row is None:
-            raise KeyError("OAuth account-deletion challenge is invalid.")
+            raise KeyError("OAuth reauthentication challenge is invalid.")
 
         user_id, stored_provider, valid_until_ts, consumed_at = row
         if (
             consumed_at is not None
             or datetime.fromtimestamp(valid_until_ts, tz=timezone.utc) <= now
         ):
-            raise KeyError("OAuth account-deletion challenge has expired.")
+            raise KeyError("OAuth reauthentication challenge has expired.")
 
-        session_hash = _oauth_deletion_session_hash(stored_provider, provider)
+        session_hash = _oauth_reauth_session_hash(stored_provider, provider, purpose)
         cursor.execute(
             """
             SELECT
@@ -389,7 +468,7 @@ async def exchange_oauth_account_deletion_challenge(
             (_hash_one_time_token(challenge_token),),
         )
         if cursor.rowcount != 1:
-            raise KeyError("OAuth account-deletion challenge was already used.")
+            raise KeyError("OAuth reauthentication challenge was already used.")
         cursor.execute(
             """
             INSERT INTO oauth_login_handoffs (
@@ -414,26 +493,48 @@ async def exchange_oauth_account_deletion_challenge(
     return approval_token
 
 
-def consume_oauth_account_deletion_approval_in_transaction(
+async def exchange_oauth_account_deletion_challenge(
+    persistence: SocialPersistence,
+    *,
+    challenge_token: str,
+    provider: str,
+    provider_user_id: str,
+    ttl_minutes: int | None = None,
+) -> str:
+    return await exchange_oauth_reauth_challenge(
+        persistence,
+        challenge_token=challenge_token,
+        provider=provider,
+        purpose=OAUTH_ACCOUNT_DELETE_PURPOSE,
+        provider_user_id=provider_user_id,
+        ttl_minutes=ttl_minutes,
+    )
+
+
+def _require_oauth_reauth_approval_in_transaction(
     persistence: SocialPersistence,
     *,
     approval_token: str,
     user_id: uuid.UUID,
     provider: str,
+    purpose: str,
     auth_token: str,
-) -> None:
-    """Consume a purpose- and session-bound approval without committing."""
+) -> str:
+    """Validate a purpose- and session-bound approval in an open transaction."""
     provider = _normalize_provider(provider)
-    if not approval_token.startswith(OAUTH_DELETE_APPROVAL_PREFIX):
-        raise KeyError("OAuth account-deletion approval is invalid.")
+    purpose = _require_oauth_reauth_purpose(purpose)
+    _, approval_prefix = _OAUTH_REAUTH_TOKEN_PREFIXES[purpose]
+    if not approval_token.startswith(approval_prefix):
+        raise KeyError("OAuth reauthentication approval is invalid.")
 
     conn = _get_connection(persistence)
     if not conn.in_transaction:
         raise RuntimeError(
-            "OAuth account-deletion approval consumption requires an open "
+            "OAuth reauthentication approval validation requires an open "
             "transaction."
         )
 
+    token_hash = _hash_one_time_token(approval_token)
     cursor = persistence._get_cursor()
     cursor.execute(
         """
@@ -442,34 +543,119 @@ def consume_oauth_account_deletion_approval_in_transaction(
         WHERE token_hash = ?
         LIMIT 1
         """,
-        (_hash_one_time_token(approval_token),),
+        (token_hash,),
     )
     row = cursor.fetchone()
     if row is None:
-        raise KeyError("OAuth account-deletion approval is invalid.")
+        raise KeyError("OAuth reauthentication approval is invalid.")
 
     stored_user_id, stored_provider, valid_until_ts, consumed_at = row
     if (
         stored_user_id != str(user_id)
-        or stored_provider != _oauth_deletion_provider_value(provider, auth_token)
+        or stored_provider != _oauth_reauth_provider_value(provider, purpose, auth_token)
         or consumed_at is not None
         or datetime.fromtimestamp(valid_until_ts, tz=timezone.utc)
         <= datetime.now(timezone.utc)
     ):
-        raise KeyError("OAuth account-deletion approval does not match.")
+        raise KeyError("OAuth reauthentication approval does not match.")
 
+    return token_hash
+
+
+def validate_oauth_reauth_approval(
+    persistence: SocialPersistence,
+    *,
+    approval_token: str,
+    user_id: uuid.UUID,
+    provider: str,
+    purpose: str,
+    auth_token: str,
+) -> None:
+    """Validate an approval and its live session without consuming it."""
+    provider = _normalize_provider(provider)
+    purpose = _require_oauth_reauth_purpose(purpose)
+    if not auth_token:
+        raise KeyError("A live session is required.")
+
+    conn = _get_connection(persistence)
+    _require_top_level_transaction(
+        conn,
+        operation="OAuth reauthentication approval validation",
+    )
+    try:
+        conn.execute("BEGIN")
+        user_session, user = persistence.get_valid_session_by_auth_token(auth_token)
+        if user_session.user_id != user_id or user.id != user_id:
+            raise KeyError("The session does not belong to this user.")
+        if user.auth_provider != provider or not user.auth_provider_id:
+            raise KeyError("This account does not use the requested provider.")
+        _require_oauth_reauth_approval_in_transaction(
+            persistence,
+            approval_token=approval_token,
+            user_id=user_id,
+            provider=provider,
+            purpose=purpose,
+            auth_token=auth_token,
+        )
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+
+def consume_oauth_reauth_approval_in_transaction(
+    persistence: SocialPersistence,
+    *,
+    approval_token: str,
+    user_id: uuid.UUID,
+    provider: str,
+    purpose: str,
+    auth_token: str,
+) -> None:
+    """Consume a purpose- and session-bound approval without committing."""
+    token_hash = _require_oauth_reauth_approval_in_transaction(
+        persistence,
+        approval_token=approval_token,
+        user_id=user_id,
+        provider=provider,
+        purpose=purpose,
+        auth_token=auth_token,
+    )
+
+    cursor = persistence._get_cursor()
     cursor.execute(
         "DELETE FROM oauth_login_handoffs WHERE token_hash = ?",
-        (_hash_one_time_token(approval_token),),
+        (token_hash,),
     )
     if cursor.rowcount != 1:
-        raise KeyError("OAuth account-deletion approval was already used.")
+        raise KeyError("OAuth reauthentication approval was already used.")
+
+
+def consume_oauth_account_deletion_approval_in_transaction(
+    persistence: SocialPersistence,
+    *,
+    approval_token: str,
+    user_id: uuid.UUID,
+    provider: str,
+    auth_token: str,
+) -> None:
+    consume_oauth_reauth_approval_in_transaction(
+        persistence,
+        approval_token=approval_token,
+        user_id=user_id,
+        provider=provider,
+        purpose=OAUTH_ACCOUNT_DELETE_PURPOSE,
+        auth_token=auth_token,
+    )
 
 
 async def consume_oauth_pending_login(
     persistence: SocialPersistence,
     binding_digest: str,
     flow_id: str,
+    *,
+    provider: str = "google",
 ) -> AppUser:
     binding_digest = _require_binding_digest(binding_digest)
     flow_id = _require_flow_id(flow_id)
@@ -482,7 +668,7 @@ async def consume_oauth_pending_login(
         now = datetime.now(timezone.utc)
         cursor.execute(
             """
-            SELECT user_id, flow_id, valid_until
+            SELECT user_id, flow_id, valid_until, provider
             FROM oauth_pending_logins
             WHERE binding_digest = ?
             LIMIT 1
@@ -493,7 +679,7 @@ async def consume_oauth_pending_login(
         if row is None:
             raise KeyError("OAuth pending login is invalid or was already used.")
 
-        user_id_str, row_flow_id, valid_until_ts = row
+        user_id_str, row_flow_id, valid_until_ts, row_provider = row
         if datetime.fromtimestamp(valid_until_ts, tz=timezone.utc) <= now:
             cursor.execute(
                 "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
@@ -507,6 +693,11 @@ async def consume_oauth_pending_login(
         if not hmac.compare_digest(str(row_flow_id), flow_id):
             raise KeyError(
                 "OAuth pending login does not match this sign-in attempt."
+            )
+
+        if row_provider != provider:
+            raise KeyError(
+                "OAuth pending login was issued for a different provider."
             )
 
         cursor.execute(
@@ -536,3 +727,137 @@ async def consume_oauth_pending_login(
         raise
 
     return await persistence.get_user_by_id(uuid.UUID(user_id_str))
+
+
+async def validate_oauth_pending_login(
+    persistence: SocialPersistence,
+    binding_digest: str,
+    flow_id: str,
+    *,
+    provider: str = "google",
+) -> AppUser:
+    """Validate a pending login without consuming it."""
+    binding_digest = _require_binding_digest(binding_digest)
+    flow_id = _require_flow_id(flow_id)
+    conn = _get_connection(persistence)
+    _require_top_level_transaction(conn, operation="OAuth pending-login validation")
+    cursor = persistence._get_cursor()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        now = datetime.now(timezone.utc)
+        cursor.execute(
+            """
+            SELECT user_id, flow_id, valid_until, provider
+            FROM oauth_pending_logins
+            WHERE binding_digest = ?
+            LIMIT 1
+            """,
+            (binding_digest,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise KeyError("OAuth pending login is invalid or was already used.")
+
+        user_id_str, row_flow_id, valid_until_ts, row_provider = row
+        if datetime.fromtimestamp(valid_until_ts, tz=timezone.utc) <= now:
+            cursor.execute(
+                "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
+                (binding_digest,),
+            )
+            conn.commit()
+            raise KeyError("OAuth pending login has expired.")
+
+        if not hmac.compare_digest(str(row_flow_id), flow_id):
+            raise KeyError(
+                "OAuth pending login does not match this sign-in attempt."
+            )
+
+        if row_provider != provider:
+            raise KeyError(
+                "OAuth pending login was issued for a different provider."
+            )
+
+        cursor.execute(
+            "SELECT is_active FROM users WHERE id = ?",
+            (user_id_str,),
+        )
+        user_row = cursor.fetchone()
+        if user_row is None or not bool(user_row[0]):
+            cursor.execute(
+                "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
+                (binding_digest,),
+            )
+            conn.commit()
+            raise KeyError("OAuth pending login belongs to an inactive or missing user.")
+
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+    return await persistence.get_user_by_id(uuid.UUID(user_id_str))
+
+
+def consume_oauth_pending_login_in_transaction(
+    persistence: SocialPersistence,
+    binding_digest: str,
+    flow_id: str,
+    *,
+    provider: str = "google",
+) -> uuid.UUID:
+    """Consume a pending login inside the caller's open transaction."""
+    binding_digest = _require_binding_digest(binding_digest)
+    flow_id = _require_flow_id(flow_id)
+    conn = _get_connection(persistence)
+    if not conn.in_transaction:
+        raise RuntimeError("OAuth pending-login consumption requires an open transaction.")
+    cursor = persistence._get_cursor()
+    now = datetime.now(timezone.utc)
+    cursor.execute(
+        """
+        SELECT user_id, flow_id, valid_until, provider
+        FROM oauth_pending_logins
+        WHERE binding_digest = ?
+        LIMIT 1
+        """,
+        (binding_digest,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise KeyError("OAuth pending login is invalid or was already used.")
+
+    user_id_str, row_flow_id, valid_until_ts, row_provider = row
+    if datetime.fromtimestamp(valid_until_ts, tz=timezone.utc) <= now:
+        cursor.execute(
+            "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
+            (binding_digest,),
+        )
+        raise KeyError("OAuth pending login has expired.")
+
+    if not hmac.compare_digest(str(row_flow_id), flow_id):
+        raise KeyError("OAuth pending login does not match this sign-in attempt.")
+
+    if row_provider != provider:
+        raise KeyError("OAuth pending login was issued for a different provider.")
+
+    cursor.execute(
+        "SELECT is_active FROM users WHERE id = ?",
+        (user_id_str,),
+    )
+    user_row = cursor.fetchone()
+    if user_row is None or not bool(user_row[0]):
+        cursor.execute(
+            "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
+            (binding_digest,),
+        )
+        raise KeyError("OAuth pending login belongs to an inactive or missing user.")
+
+    cursor.execute(
+        "DELETE FROM oauth_pending_logins WHERE binding_digest = ?",
+        (binding_digest,),
+    )
+    if cursor.rowcount != 1:
+        raise KeyError("OAuth pending login was already used.")
+    return uuid.UUID(user_id_str)

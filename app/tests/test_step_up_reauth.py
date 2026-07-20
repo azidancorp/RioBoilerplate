@@ -69,6 +69,26 @@ def test_verify_step_up_credentials_password_only(temp_db: Persistence):
     asyncio.run(scenario())
 
 
+def test_verify_step_up_credentials_tells_oauth_user_to_set_up_2fa(
+    temp_db: Persistence,
+):
+    async def scenario():
+        root, root_session = await _create_oauth_root_session(temp_db)
+
+        result = await verify_step_up_credentials(
+            temp_db,
+            root_session,
+            root,
+            password="",
+            two_factor_code=None,
+        )
+
+        assert result.ok is False
+        assert result.error_message == "Set up 2FA to perform this action."
+
+    asyncio.run(scenario())
+
+
 def test_verify_step_up_credentials_wrong_password(temp_db: Persistence):
     async def scenario():
         root, root_session = await _create_root_session(temp_db)

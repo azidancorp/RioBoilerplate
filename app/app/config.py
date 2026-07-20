@@ -60,6 +60,7 @@ class AppConfig:
     AUTH_TOKEN_COOKIE_SECURE: bool = False
     OAUTH_COOKIE_SECURE: bool = False
     OAUTH_HANDOFF_TTL_MINUTES: int = 5
+    MFA_LIFECYCLE_APPROVAL_TTL_MINUTES: int = 10
 
     # Session Lifetime
     # ----------------

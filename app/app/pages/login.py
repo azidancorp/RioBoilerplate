@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import re
 import typing as t
@@ -10,7 +11,11 @@ from urllib.parse import urlencode
 import rio
 from fastapi import HTTPException
 
-from app.persistence import BootstrapRequiredError, Persistence
+from app.persistence import (
+    BootstrapRequiredError,
+    Persistence,
+    TwoFactorStateConflict,
+)
 from app.data_models import AppUser, UserSettings, RecoveryCodeUsage
 from app.navigation import get_registered_app_path
 from app.permissions import check_access
@@ -897,6 +902,8 @@ class SocialMFAForm(rio.Component):
     """
 
     pending_user_id: str = ""
+    pending_flow_id: str = ""
+    pending_binding_digest: str = ""
     verification_code: str = ""
     error_message: str = ""
     banner_style: str = "success"
@@ -911,20 +918,48 @@ class SocialMFAForm(rio.Component):
         self.force_refresh()
         try:
             pers = self.session[Persistence]
+            security = get_rio_cookie_security(self.session._app_server)
+            browser_binding = read_browser_binding(
+                self.session.http_headers,
+                security,
+            )
+            if (
+                browser_binding is None
+                or not hmac.compare_digest(
+                    browser_binding_digest(browser_binding),
+                    self.pending_binding_digest,
+                )
+            ):
+                self.banner_style = "danger"
+                self.error_message = "Google sign-in expired. Please try again."
+                return
+
             try:
-                user_id = uuid.UUID(self.pending_user_id)
-                user_info = await pers.get_user_by_id(user_id)
+                expected_user_id = uuid.UUID(self.pending_user_id)
+                user_info = await pers.validate_oauth_pending_login(
+                    self.pending_binding_digest,
+                    self.pending_flow_id,
+                )
             except (ValueError, KeyError):
                 self.banner_style = "danger"
                 self.error_message = "Google sign-in expired. Please try again."
                 return
 
-            if not user_info.is_active:
+            if user_info.id != expected_user_id or not user_info.is_active:
                 self.banner_style = "danger"
-                self.error_message = "This account is inactive. Contact an administrator."
+                self.error_message = "Google sign-in expired. Please try again."
                 return
 
             if not user_info.two_factor_enabled:
+                try:
+                    user_info = await pers.consume_oauth_pending_login(
+                        self.pending_binding_digest,
+                        self.pending_flow_id,
+                    )
+                except KeyError:
+                    self.banner_style = "danger"
+                    self.error_message = "Google sign-in expired. Please try again."
+                    return
                 session_created = await _complete_login_session(
                     self.session,
                     pers,
@@ -948,10 +983,25 @@ class SocialMFAForm(rio.Component):
                 )
                 return
 
-            result = pers.verify_two_factor_challenge(user_info.id, self.verification_code)
-            if not result.ok:
+            try:
+                user_info, recovery_code_used = (
+                    pers.complete_oauth_pending_login_with_mfa(
+                        binding_digest=self.pending_binding_digest,
+                        flow_id=self.pending_flow_id,
+                        two_factor_code=self.verification_code,
+                    )
+                )
+            except KeyError:
                 self.banner_style = "danger"
-                self.error_message = result.get_error_message()
+                self.error_message = "Google sign-in expired. Please try again."
+                return
+            except ValueError as exc:
+                self.banner_style = "danger"
+                self.error_message = str(exc) or "Invalid verification code."
+                return
+            except TwoFactorStateConflict:
+                self.banner_style = "danger"
+                self.error_message = _account_changed_during_login_message()
                 return
 
             pers.clear_rate_limit(scope=login_mfa_policy().scope, key=mfa_key)
@@ -959,7 +1009,7 @@ class SocialMFAForm(rio.Component):
                 self.session,
                 pers,
                 user_info,
-                recovery_code_used=result.used_recovery_code,
+                recovery_code_used=recovery_code_used,
             )
             if not session_created:
                 self.banner_style = "danger"
@@ -1563,6 +1613,8 @@ class LoginPage(rio.Component):
     reset_prefilled_message_style: str = "success"
     reset_prefilled_require_two_factor: bool = False
     pending_social_user_id: str = ""
+    pending_social_flow_id: str = ""
+    pending_social_binding_digest: str = ""
 
     def _set_page_message(self, style: str, message: str) -> None:
         self.page_message_style = style
@@ -1611,9 +1663,10 @@ class LoginPage(rio.Component):
                 return
 
             persistence = self.session[Persistence]
+            binding_digest = browser_binding_digest(binding)
             try:
-                user_info = await persistence.consume_oauth_pending_login(
-                    browser_binding_digest(binding),
+                user_info = await persistence.validate_oauth_pending_login(
+                    binding_digest,
                     social_login_raw,
                 )
             except KeyError:
@@ -1628,7 +1681,23 @@ class LoginPage(rio.Component):
             if user_info.two_factor_enabled:
                 self.current_form = "social_mfa"
                 self.pending_social_user_id = str(user_info.id)
+                self.pending_social_flow_id = social_login_raw
+                self.pending_social_binding_digest = binding_digest
                 self._set_page_message("", "")
+                self.force_refresh()
+                return
+
+            try:
+                user_info = await persistence.consume_oauth_pending_login(
+                    binding_digest,
+                    social_login_raw,
+                )
+            except KeyError:
+                self.current_form = "login"
+                self._set_page_message(
+                    "danger",
+                    "Google sign-in expired or was already used. Please try again.",
+                )
                 self.force_refresh()
                 return
 
@@ -1733,6 +1802,8 @@ class LoginPage(rio.Component):
             self.reset_prefilled_require_two_factor = False
         if form_name != "social_mfa":
             self.pending_social_user_id = ""
+            self.pending_social_flow_id = ""
+            self.pending_social_binding_digest = ""
         self.force_refresh()
 
     def build(self) -> rio.Component:
@@ -1755,6 +1826,8 @@ class LoginPage(rio.Component):
             form_to_show = SocialMFAForm(
                 on_toggle_form=self.set_form,
                 pending_user_id=self.pending_social_user_id,
+                pending_flow_id=self.pending_social_flow_id,
+                pending_binding_digest=self.pending_social_binding_digest,
             )
         else:
             # Fallback to login if something weird happens

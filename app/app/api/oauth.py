@@ -16,7 +16,13 @@ from app.data_models import AppUser
 from app.navigation import get_registered_app_path
 from app.oauth_clients import get_oauth_client
 from app.persistence import BootstrapRequiredError, Persistence
-from app.persistence_social import OAUTH_DELETE_CHALLENGE_PREFIX
+from app.persistence_social import (
+    OAUTH_DELETE_CHALLENGE_PREFIX,
+    OAUTH_MFA_DISABLE_PURPOSE,
+    OAUTH_MFA_ENABLE_PURPOSE,
+    OAUTH_RECOVERY_CODES_PURPOSE,
+    oauth_reauth_challenge_prefix,
+)
 from app.rio_cookie_security import (
     browser_binding_digest,
     get_rio_cookie_security,
@@ -28,8 +34,26 @@ from app.validation import SecuritySanitizer
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _OAUTH_DELETE_CHALLENGE_SESSION_KEY = "oauth_delete_account_challenge"
+_OAUTH_MFA_REAUTH_SESSION_KEY = "oauth_mfa_reauth"
 _OAUTH_LOGIN_BINDING_SESSION_KEY = "oauth_login_browser_binding_digest"
 _OAUTH_LOGIN_RETURN_TO_SESSION_KEY = "oauth_login_return_to"
+_OAUTH_MFA_REDIRECTS = {
+    OAUTH_MFA_ENABLE_PURPOSE: (
+        "/app/enable-mfa",
+        "enable_mfa_oauth_token",
+        "enable_mfa_oauth_error",
+    ),
+    OAUTH_MFA_DISABLE_PURPOSE: (
+        "/app/disable-mfa",
+        "disable_mfa_oauth_token",
+        "disable_mfa_oauth_error",
+    ),
+    OAUTH_RECOVERY_CODES_PURPOSE: (
+        "/app/recovery-codes",
+        "recovery_codes_oauth_token",
+        "recovery_codes_oauth_error",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -59,6 +83,31 @@ def _settings_delete_redirect(
     )
     suffix = f"?{query}" if query else ""
     return RedirectResponse(f"/app/settings{suffix}")
+
+
+def _mfa_reauth_redirect(
+    purpose: str,
+    *,
+    token: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    try:
+        page_path, token_parameter, error_parameter = _OAUTH_MFA_REDIRECTS[purpose]
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unsupported MFA action") from None
+
+    query = urlencode(
+        {
+            key: value
+            for key, value in {
+                token_parameter: token,
+                error_parameter: error,
+            }.items()
+            if value
+        }
+    )
+    suffix = f"?{query}" if query else ""
+    return RedirectResponse(f"{page_path}{suffix}")
 
 
 def _login_redirect(
@@ -215,6 +264,119 @@ async def oauth_delete_account_callback(
         return _settings_delete_redirect(error="identity_mismatch")
 
     return _settings_delete_redirect(token=approval)
+
+
+@router.get("/{provider}/mfa/{purpose}", name="oauth_mfa_reauth")
+async def oauth_mfa_reauth(
+    provider: str,
+    purpose: str,
+    request: Request,
+    mfa_challenge: str = "",
+):
+    if purpose not in _OAUTH_MFA_REDIRECTS:
+        raise HTTPException(status_code=404, detail="Unsupported MFA action")
+
+    client = get_oauth_client(provider)
+    if client is None:
+        if provider == "google":
+            return _mfa_reauth_redirect(
+                purpose,
+                error="provider_not_configured",
+            )
+        raise HTTPException(status_code=404, detail="Provider is not enabled")
+    if provider != "google":
+        return _mfa_reauth_redirect(purpose, error="unsupported_provider")
+
+    try:
+        challenge = SecuritySanitizer.sanitize_auth_code(
+            mfa_challenge,
+            max_length=128,
+        )
+    except HTTPException:
+        challenge = None
+    if not challenge or not challenge.startswith(
+        oauth_reauth_challenge_prefix(purpose)
+    ):
+        return _mfa_reauth_redirect(purpose, error="invalid_challenge")
+
+    request.session[_OAUTH_MFA_REAUTH_SESSION_KEY] = {
+        "purpose": purpose,
+        "challenge": challenge,
+    }
+    redirect_uri = request.url_for(
+        "oauth_mfa_reauth_callback",
+        provider=provider,
+        purpose=purpose,
+    )
+    return await client.authorize_redirect(
+        request,
+        redirect_uri,
+        prompt="select_account",
+        max_age=0,
+        claims=json.dumps(
+            {"id_token": {"auth_time": {"essential": True}}},
+            separators=(",", ":"),
+        ),
+    )
+
+
+@router.get(
+    "/{provider}/mfa/{purpose}/callback",
+    name="oauth_mfa_reauth_callback",
+)
+async def oauth_mfa_reauth_callback(
+    provider: str,
+    purpose: str,
+    request: Request,
+    pers: Persistence = Depends(get_persistence),
+):
+    if purpose not in _OAUTH_MFA_REDIRECTS:
+        raise HTTPException(status_code=404, detail="Unsupported MFA action")
+
+    client = get_oauth_client(provider)
+    if client is None:
+        if provider == "google":
+            return _mfa_reauth_redirect(
+                purpose,
+                error="provider_not_configured",
+            )
+        raise HTTPException(status_code=404, detail="Provider is not enabled")
+    if provider != "google":
+        return _mfa_reauth_redirect(purpose, error="unsupported_provider")
+
+    stored = request.session.pop(_OAUTH_MFA_REAUTH_SESSION_KEY, None)
+    if (
+        not isinstance(stored, dict)
+        or stored.get("purpose") != purpose
+        or not isinstance(stored.get("challenge"), str)
+    ):
+        return _mfa_reauth_redirect(purpose, error="invalid_challenge")
+    challenge = stored["challenge"]
+
+    try:
+        token = await client.authorize_access_token(request)
+    except Exception:
+        return _mfa_reauth_redirect(purpose, error="provider_failed")
+
+    userinfo = token.get("userinfo") or {}
+    provider_user_id = str(userinfo.get("sub") or "").strip()
+    if not provider_user_id:
+        return _mfa_reauth_redirect(purpose, error="identity_mismatch")
+    if not _has_recent_auth_time(userinfo.get("auth_time")):
+        return _mfa_reauth_redirect(purpose, error="reauth_stale")
+
+    try:
+        approval = await pers.exchange_oauth_reauth_challenge(
+            challenge_token=challenge,
+            provider=provider,
+            purpose=purpose,
+            provider_user_id=provider_user_id,
+            ttl_minutes=config.MFA_LIFECYCLE_APPROVAL_TTL_MINUTES,
+        )
+    except (KeyError, ValueError):
+        return _mfa_reauth_redirect(purpose, error="identity_mismatch")
+
+    return _mfa_reauth_redirect(purpose, token=approval)
 
 
 @router.get("/{provider}/callback", name="oauth_callback")

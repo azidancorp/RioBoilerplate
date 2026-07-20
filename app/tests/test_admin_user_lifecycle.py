@@ -1192,7 +1192,7 @@ def test_oauth_admin_without_step_up_path_gets_actionable_errors(
             admin_context=_admin_context(root_session),
         )
         session = _FakeSession(temp_db, root_session, root)
-        expected = "Set up a password or 2FA to perform this action."
+        expected = "Set up 2FA to perform this action."
 
         create_page = _mount_admin(
             session,

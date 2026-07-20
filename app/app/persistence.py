@@ -1162,11 +1162,28 @@ class Persistence:
         self,
         binding_digest: str,
         flow_id: str,
+        *,
+        provider: str = "google",
     ) -> AppUser:
         return await persistence_social.consume_oauth_pending_login(
             self,
             binding_digest,
             flow_id,
+            provider=provider,
+        )
+
+    async def validate_oauth_pending_login(
+        self,
+        binding_digest: str,
+        flow_id: str,
+        *,
+        provider: str = "google",
+    ) -> AppUser:
+        return await persistence_social.validate_oauth_pending_login(
+            self,
+            binding_digest,
+            flow_id,
+            provider=provider,
         )
 
     async def create_oauth_account_deletion_challenge(
@@ -1185,6 +1202,24 @@ class Persistence:
             ttl_minutes=ttl_minutes,
         )
 
+    async def create_oauth_reauth_challenge(
+        self,
+        *,
+        user_id: uuid.UUID,
+        provider: str,
+        purpose: str,
+        auth_token: str,
+        ttl_minutes: int | None = None,
+    ) -> str:
+        return await persistence_social.create_oauth_reauth_challenge(
+            self,
+            user_id=user_id,
+            provider=provider,
+            purpose=purpose,
+            auth_token=auth_token,
+            ttl_minutes=ttl_minutes,
+        )
+
     async def exchange_oauth_account_deletion_challenge(
         self,
         *,
@@ -1199,6 +1234,42 @@ class Persistence:
             provider=provider,
             provider_user_id=provider_user_id,
             ttl_minutes=ttl_minutes,
+        )
+
+    async def exchange_oauth_reauth_challenge(
+        self,
+        *,
+        challenge_token: str,
+        provider: str,
+        purpose: str,
+        provider_user_id: str,
+        ttl_minutes: int | None = None,
+    ) -> str:
+        return await persistence_social.exchange_oauth_reauth_challenge(
+            self,
+            challenge_token=challenge_token,
+            provider=provider,
+            purpose=purpose,
+            provider_user_id=provider_user_id,
+            ttl_minutes=ttl_minutes,
+        )
+
+    def validate_oauth_reauth_approval(
+        self,
+        *,
+        approval_token: str,
+        user_id: uuid.UUID,
+        provider: str,
+        purpose: str,
+        auth_token: str,
+    ) -> None:
+        persistence_social.validate_oauth_reauth_approval(
+            self,
+            approval_token=approval_token,
+            user_id=user_id,
+            provider=provider,
+            purpose=purpose,
+            auth_token=auth_token,
         )
 
     async def list_users(
@@ -1574,6 +1645,228 @@ class Persistence:
 
     def disable_two_factor(self, user_id: uuid.UUID, expected_secret: str) -> bool:
         return persistence_auth.disable_two_factor(self, user_id, expected_secret)
+
+    def enroll_two_factor_after_oauth_approval(
+        self,
+        *,
+        user_id: uuid.UUID,
+        auth_token: str,
+        oauth_approval_token: str,
+        candidate_secret: str,
+        verification_code: str | None,
+    ) -> list[str]:
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="OAuth MFA enrollment")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            user_session, user = self.get_valid_session_by_auth_token(auth_token)
+            if user_session.user_id != user_id or user.id != user_id:
+                conn.rollback()
+                raise KeyError("The session does not belong to this user.")
+            if (
+                user.auth_provider != "google"
+                or not user.auth_provider_id
+                or user.two_factor_secret
+            ):
+                conn.rollback()
+                raise ValueError("Google MFA enrollment is not available.")
+            persistence_social.consume_oauth_reauth_approval_in_transaction(
+                self,
+                approval_token=oauth_approval_token,
+                user_id=user_id,
+                provider=user.auth_provider,
+                purpose=persistence_social.OAUTH_MFA_ENABLE_PURPOSE,
+                auth_token=auth_token,
+            )
+            result = persistence_auth.verify_two_factor_candidate(
+                candidate_secret,
+                verification_code,
+            )
+            if not result.ok:
+                conn.rollback()
+                raise ValueError(result.get_error_message())
+            recovery_codes = persistence_auth.enroll_two_factor_in_transaction(
+                self,
+                user_id,
+                candidate_secret,
+            )
+            conn.commit()
+            return recovery_codes
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+    def disable_two_factor_after_oauth_approval(
+        self,
+        *,
+        user_id: uuid.UUID,
+        auth_token: str,
+        oauth_approval_token: str,
+        two_factor_code: str | None,
+        expected_secret: str,
+    ) -> bool:
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="OAuth MFA disable")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            user_session, user = self.get_valid_session_by_auth_token(auth_token)
+            if user_session.user_id != user_id or user.id != user_id:
+                conn.rollback()
+                raise KeyError("The session does not belong to this user.")
+            if user.auth_provider != "google" or not user.auth_provider_id:
+                conn.rollback()
+                raise ValueError("Google MFA disable is not available.")
+            persistence_social.consume_oauth_reauth_approval_in_transaction(
+                self,
+                approval_token=oauth_approval_token,
+                user_id=user_id,
+                provider=user.auth_provider,
+                purpose=persistence_social.OAUTH_MFA_DISABLE_PURPOSE,
+                auth_token=auth_token,
+            )
+            result = persistence_auth.verify_two_factor_challenge_in_transaction(
+                self,
+                user_id,
+                two_factor_code,
+            )
+            if result.method == persistence_auth.TwoFactorMethod.NOT_REQUIRED:
+                conn.rollback()
+                raise persistence_auth.TwoFactorStateConflict(
+                    "Two-factor authentication is already disabled."
+                )
+            if not result.ok:
+                conn.rollback()
+                raise ValueError(result.get_error_message())
+            disabled = persistence_auth.disable_two_factor_in_transaction(
+                self,
+                user_id,
+                expected_secret=expected_secret,
+            )
+            if not disabled:
+                conn.rollback()
+                return False
+            conn.commit()
+            return True
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+    def generate_recovery_codes_after_oauth_approval(
+        self,
+        *,
+        user_id: uuid.UUID,
+        auth_token: str,
+        oauth_approval_token: str,
+        two_factor_code: str | None,
+        expected_secret: str,
+    ) -> list[str]:
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="OAuth recovery-code regeneration")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            user_session, user = self.get_valid_session_by_auth_token(auth_token)
+            if user_session.user_id != user_id or user.id != user_id:
+                conn.rollback()
+                raise KeyError("The session does not belong to this user.")
+            if user.auth_provider != "google" or not user.auth_provider_id:
+                conn.rollback()
+                raise ValueError("Google recovery-code regeneration is not available.")
+            persistence_social.consume_oauth_reauth_approval_in_transaction(
+                self,
+                approval_token=oauth_approval_token,
+                user_id=user_id,
+                provider=user.auth_provider,
+                purpose=persistence_social.OAUTH_RECOVERY_CODES_PURPOSE,
+                auth_token=auth_token,
+            )
+            result = persistence_auth.verify_two_factor_challenge_in_transaction(
+                self,
+                user_id,
+                two_factor_code,
+            )
+            if result.method == persistence_auth.TwoFactorMethod.NOT_REQUIRED:
+                conn.rollback()
+                raise persistence_auth.TwoFactorStateConflict(
+                    "Two-factor authentication is not enabled."
+                )
+            if not result.ok:
+                conn.rollback()
+                raise ValueError(result.get_error_message())
+            codes = persistence_auth.generate_recovery_codes_in_transaction(
+                self,
+                user_id,
+                expected_secret=expected_secret,
+            )
+            conn.commit()
+            return codes
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+    def complete_oauth_pending_login_with_mfa(
+        self,
+        *,
+        binding_digest: str,
+        flow_id: str,
+        two_factor_code: str | None,
+    ) -> tuple[AppUser, bool]:
+        self._ensure_connection()
+        if self.conn is None:
+            raise RuntimeError("Database connection is not initialized")
+        conn = self.conn
+        self._require_top_level_transaction(conn, action="OAuth pending-login MFA")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            user_id = persistence_social.consume_oauth_pending_login_in_transaction(
+                self,
+                binding_digest,
+                flow_id,
+            )
+            result = persistence_auth.verify_two_factor_challenge_in_transaction(
+                self,
+                user_id,
+                two_factor_code,
+            )
+            if result.method == persistence_auth.TwoFactorMethod.NOT_REQUIRED:
+                conn.rollback()
+                raise persistence_auth.TwoFactorStateConflict(
+                    "Two-factor authentication changed."
+                )
+            if not result.ok:
+                conn.rollback()
+                raise ValueError(result.get_error_message())
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT {persistence_users.USER_SELECT_COLUMNS}
+                FROM users
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (str(user_id),),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise KeyError(user_id)
+            user = persistence_users._row_to_app_user(row)
+            conn.commit()
+            return user, result.used_recovery_code
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
 
     async def invalidate_all_sessions(self, user_id: uuid.UUID) -> None:
         await persistence_auth.invalidate_all_sessions(self, user_id)

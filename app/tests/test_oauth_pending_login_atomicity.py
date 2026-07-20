@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Barrier, Event
 
+import pyotp
 import pytest
 
 from app import persistence_social
@@ -440,6 +441,42 @@ def test_flow_id_mismatch_rolls_back_without_deleting_row(temp_db: Persistence):
     asyncio.run(scenario())
 
 
+def test_tampered_provider_fails_validation_and_consumption(temp_db: Persistence):
+    async def scenario():
+        user = await _create_user(
+            temp_db,
+            email="oauth-provider-tamper@example.com",
+            social=True,
+        )
+        binding_digest = _binding_digest("provider-tamper")
+        await temp_db.create_oauth_pending_login(
+            binding_digest=binding_digest,
+            flow_id=FLOW_ID,
+            user_id=user.id,
+            provider="google",
+        )
+        temp_db.conn.execute(
+            """
+            UPDATE oauth_pending_logins
+            SET provider = 'github'
+            WHERE binding_digest = ?
+            """,
+            (binding_digest,),
+        )
+        temp_db.conn.commit()
+
+        with pytest.raises(KeyError, match="different provider"):
+            await temp_db.validate_oauth_pending_login(binding_digest, FLOW_ID)
+        assert temp_db.conn.in_transaction is False
+
+        with pytest.raises(KeyError, match="different provider"):
+            await temp_db.consume_oauth_pending_login(binding_digest, FLOW_ID)
+        assert temp_db.conn.in_transaction is False
+        assert _pending_count(temp_db, user.id) == 1
+
+    asyncio.run(scenario())
+
+
 def test_pre_flow_id_pending_logins_table_is_reset_in_place(tmp_path: Path):
     db_path = tmp_path / "pre-flow-id.db"
     setup = Persistence(db_path=db_path)
@@ -553,6 +590,58 @@ def test_concurrent_pending_login_consumption_is_exactly_once(
         user.id
     ]
     assert _pending_count(temp_db, user.id) == 0
+
+
+def test_concurrent_pending_mfa_completion_creates_one_session(
+    temp_db: Persistence,
+):
+    async def setup():
+        user = await _create_user(
+            temp_db,
+            email="oauth-concurrent-mfa@example.com",
+            social=True,
+        )
+        secret = pyotp.random_base32()
+        temp_db.set_2fa_secret(user.id, secret)
+        binding_digest = _binding_digest("concurrent-mfa")
+        await temp_db.create_oauth_pending_login(
+            binding_digest=binding_digest,
+            flow_id=FLOW_ID,
+            user_id=user.id,
+            provider="google",
+        )
+        return user, binding_digest, pyotp.TOTP(secret).now()
+
+    user, binding_digest, code = asyncio.run(setup())
+    barrier = Barrier(2)
+
+    def complete_in_worker():
+        worker = Persistence(db_path=temp_db.db_path)
+        try:
+            barrier.wait(timeout=10)
+            try:
+                completed_user, _ = worker.complete_oauth_pending_login_with_mfa(
+                    binding_digest=binding_digest,
+                    flow_id=FLOW_ID,
+                    two_factor_code=code,
+                )
+            except KeyError:
+                return "key_error", None
+            created_session = asyncio.run(worker.create_session(completed_user.id))
+            return "success", created_session.id
+        finally:
+            worker.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(complete_in_worker) for _ in range(2)]
+        outcomes = [future.result(timeout=20) for future in futures]
+
+    assert sorted(outcome[0] for outcome in outcomes) == ["key_error", "success"]
+    assert _pending_count(temp_db, user.id) == 0
+    assert temp_db.conn.execute(
+        "SELECT COUNT(*) FROM user_sessions WHERE user_id = ?",
+        (str(user.id),),
+    ).fetchone()[0] == 1
 
 
 def test_consume_samples_expiry_after_acquiring_writer_lock(

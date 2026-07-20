@@ -314,7 +314,7 @@ class AdminPage(ResponsiveComponent):
             and self.current_user.auth_provider != "password"
             and not self.current_user.two_factor_enabled
         ):
-            return "Set up a password or 2FA to perform this action."
+            return "Set up 2FA to perform this action."
         return None
 
     async def _verify_actor_step_up(
